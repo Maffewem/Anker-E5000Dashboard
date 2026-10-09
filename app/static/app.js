@@ -1,7 +1,7 @@
 "use strict";
 
 const LIVE_MS = 5000;
-const HISTORY_MS = 60000;
+const HISTORY_MS = 30000;
 let hours = 24;
 try { hours = Number(localStorage.getItem("hours")) || 24; } catch (_) {}
 
@@ -35,22 +35,29 @@ async function refreshLive() {
   const { status, data, meter } = body;
   renderMeter(meter);
   const stale = status.last_update && Date.now() / 1000 - status.last_update > status.poll_seconds * 4;
+  const meterOn = Boolean(meter && meter.status.configured);
+  // Each device works on its own; the pill follows the Solarbank when there is one.
+  const shown = status.configured || !meterOn ? status : meter.status;
+  const name = shown === status ? "Solarbank" : "Smart Meter";
 
-  if (!status.configured) setStatus("offline", "Not set up");
-  else if (status.connected && !stale) setStatus("live", `Live · ${timeAgo(status.last_update)}`);
-  else if (status.last_update) setStatus("offline", `Offline · last data ${timeAgo(status.last_update)}`);
-  else setStatus("offline", status.last_error ? "Can't reach battery" : "Connecting");
-  $("status").title = status.last_error || "";
+  if (!status.configured && !meterOn) setStatus("offline", "Not set up");
+  else if (shown.connected && !(shown === status && stale)) setStatus("live", `Live · ${timeAgo(shown.last_update)}`);
+  else if (shown.last_update) setStatus("offline", `Offline · last data ${timeAgo(shown.last_update)}`);
+  else setStatus("offline", shown.last_error ? `Can't reach ${name}` : "Connecting");
+  $("status").title = shown.last_error || "";
   showBanner(status, stale, meter);
-  if (!status.configured && !setupShownOnce) { setupShownOnce = true; openSetup(); }
+  if (!status.configured && !meterOn && !setupShownOnce) { setupShownOnce = true; openSetup(); }
+  $("solarbank-card").hidden = !status.configured;
 
   if (!data || !Object.keys(data).length) {
     // Nothing read yet from the current address: don't leave old numbers up.
-    for (const id of ["solar", "home", "soc", "grid"]) $(id).textContent = "–";
-    for (const id of ["solar-detail", "home-detail", "battery-detail", "grid-detail"]) $(id).textContent = "\u00a0";
+    for (const id of ["solar", "home", "soc"]) $(id).textContent = "–";
+    for (const id of ["solar-detail", "home-detail", "battery-detail"]) $(id).textContent = "\u00a0";
     $("soc-bar").style.width = "0";
-    $("device-name").textContent = status.configured ? `Waiting for ${status.host}` : "Not set up yet";
+    $("device-name").textContent = status.configured ? `Waiting for ${status.host}`
+      : meterOn ? "Smart Meter only · no Solarbank set up" : "Not set up yet";
     $("facts").replaceChildren();
+    renderGrid(null, meter);
     return;
   }
 
@@ -69,14 +76,17 @@ async function refreshLive() {
   $("battery-detail").textContent =
     b == null ? "\u00a0" : b < -5 ? `Charging ${watts(b)}` : b > 5 ? `Discharging ${watts(b)}` : "Idle";
 
+  renderGrid(data, meter);
+  renderFacts(data, status);
+}
+
+function renderGrid(data, meter) {
   // Prefer the Smart Meter's reading of the grid connection when it's live.
   const meterLive = meter && meter.status.connected && meter.data && meter.data.grid_w != null;
-  const g = meterLive ? meter.data.grid_w : data.grid_w;
+  const g = meterLive ? meter.data.grid_w : data ? data.grid_w : null;
   $("grid").textContent = watts(g);
   const dir = g == null ? null : g > 5 ? "Importing" : g < -5 ? "Exporting" : "Balanced";
   $("grid-detail").textContent = dir == null ? "\u00a0" : meterLive ? `${dir} · Smart Meter` : dir;
-
-  renderFacts(data, status);
 }
 
 function showBanner(status, stale, meter) {
@@ -376,10 +386,14 @@ async function openSetup(device = "battery") {
   try {
     savedSettings = await (await fetch("/api/settings", { cache: "no-store" })).json();
   } catch (_) {}
-  // The dialog can't be dismissed until the battery has an address.
-  $("setup-cancel").hidden = !(savedSettings.battery && savedSettings.battery.host);
+  // The dialog can't be dismissed until at least one device has an address.
+  const hasHost = (d) => Boolean(savedSettings[d] && savedSettings[d].host);
+  $("setup-cancel").hidden = !(hasHost("battery") || hasHost("meter"));
   $("setup-cancel").textContent = "Cancel";
   showDevice(device);
+  if (!hasHost("battery") && !hasHost("meter")) {
+    setupMessage("", "Only have a Smart Meter? Choose Smart Meter above to set it up on its own.");
+  }
   const dlg = $("setup");
   if (!dlg.open) dlg.showModal();
   if (!$("setup-host").disabled) $("setup-host").focus();
@@ -499,3 +513,8 @@ refreshHistory();
 refreshEnergy();
 setInterval(refreshLive, LIVE_MS);
 setInterval(() => { refreshHistory(); refreshEnergy(); }, HISTORY_MS);
+// Browsers slow timers down in background tabs, so catch up as soon as the
+// page is looked at again rather than showing old numbers.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") { refreshLive(); refreshHistory(); refreshEnergy(); }
+});
