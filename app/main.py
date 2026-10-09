@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from .collector import DEVICE_NAMES, Collector
 from .registers import BATTERY, METER
 from .config import Connection, ConnectionStore, Settings
+from .octopus import Octopus, OctopusError, validate as validate_octopus
 from .storage import Storage
 from .tariff import Tariff, payback
 
@@ -51,6 +52,29 @@ INDEX_HTML = (STATIC / "index.html").read_text().replace("{{version}}", _asset_v
 
 
 DEVICES = {"battery": BATTERY, "meter": METER}
+OCTOPUS_SYNC_SECONDS = 30 * 60
+OCTOPUS_DISPATCH_SECONDS = 5 * 60  # Intelligent Go slots change through the evening
+
+
+def _make_octopus(store: ConnectionStore, storage: Storage, api_key: str | None = None,
+                  account: str | None = None) -> Octopus:
+    if api_key is None:
+        api_key, account = store.load_octopus()
+
+    def offpeak() -> set[int]:
+        rates = Tariff.from_dict(store.load_tariff()).slot_rates()
+        return {i for i, r in enumerate(rates) if r == min(rates)} if len(set(rates)) > 1 else set(range(1, 15))
+
+    return Octopus(storage, api_key or "", account or "", offpeak=offpeak)
+
+
+async def _octopus_loop(app: FastAPI) -> None:
+    while True:
+        octopus: Octopus = app.state.octopus
+        if octopus.configured:
+            await asyncio.to_thread(octopus.sync)
+        intelligent = (octopus.info.get("import") or {}).get("kind") == "intelligent_go"
+        await asyncio.sleep(OCTOPUS_DISPATCH_SECONDS if intelligent or octopus.last_error else OCTOPUS_SYNC_SECONDS)
 ENV_NAMES = {"battery": "SOLARBANK_HOST", "meter": "METER_HOST"}
 
 
@@ -68,7 +92,9 @@ async def lifespan(app: FastAPI):
     app.state.collector = collectors["battery"]
     app.state.connection_store = store
     app.state.storage = storage
+    app.state.octopus = _make_octopus(store, storage)
     tasks = [asyncio.create_task(c.run()) for c in collectors.values()]
+    tasks.append(asyncio.create_task(_octopus_loop(app)))
     try:
         yield
     finally:
@@ -117,8 +143,17 @@ class TariffIn(BaseModel):
 def get_payback() -> dict:
     store: ConnectionStore = app.state.connection_store
     storage: Storage = app.state.storage
+    octopus: Octopus = app.state.octopus
     tariff = Tariff.from_dict(store.load_tariff())
-    return payback(tariff, storage.battery_slots(), datetime.now(storage.tz).date())
+    profile = octopus.profile() if octopus.configured else None
+    if profile:
+        # Octopus prices stand in for the typed ones; only the battery cost is kept.
+        tariff = Tariff.from_dict({**{k: v for k, v in profile.items() if v is not None}, "battery_cost": tariff.battery_cost})
+    prices = storage.rates() if octopus.configured else None
+    out = payback(tariff, storage.battery_slots(), datetime.now(storage.tz).date(), prices)
+    out["source"] = "octopus" if profile else "manual"
+    out["tariff_name"] = (octopus.info.get("import") or {}).get("name") if profile else None
+    return out
 
 
 @app.post("/api/tariff")
@@ -129,6 +164,45 @@ def save_tariff(body: TariffIn) -> dict:
         raise HTTPException(status_code=422, detail=str(err)) from err
     app.state.connection_store.save_tariff(asdict(tariff))
     return get_payback()
+
+
+class OctopusIn(BaseModel):
+    api_key: str = ""
+    account: str = ""
+
+
+@app.get("/api/octopus")
+def get_octopus() -> dict:
+    octopus: Octopus = app.state.octopus
+    out = octopus.status(app.state.collectors["battery"].snapshot)
+    out["locked"] = app.state.connection_store.octopus_from_env()
+    return out
+
+
+@app.post("/api/octopus")
+async def save_octopus(body: OctopusIn) -> dict:
+    store: ConnectionStore = app.state.connection_store
+    storage: Storage = app.state.storage
+    if store.octopus_from_env():
+        raise HTTPException(status_code=409, detail="Octopus is set by OCTOPUS_API_KEY in the container settings.")
+    if not body.api_key.strip():
+        store.save_octopus("", "")
+        storage.clear_rates()
+        app.state.octopus = _make_octopus(store, storage, "", "")
+        log.info("Disconnected Octopus")
+        return get_octopus()
+    try:
+        api_key, account = validate_octopus(body.api_key, body.account)
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+    octopus = _make_octopus(store, storage, api_key, account)
+    await asyncio.to_thread(octopus.sync)
+    if octopus.last_error:
+        raise HTTPException(status_code=422, detail=octopus.last_error)
+    store.save_octopus(api_key, account)
+    app.state.octopus = octopus
+    log.info("Connected Octopus account %s (%s)", account, octopus.info["import"]["name"])
+    return get_octopus()
 
 
 @app.get("/api/energy")

@@ -36,9 +36,18 @@ You don't need to edit the compose file. Set any of these as **Environment varia
 | `RETENTION_DAYS` | `365` | Days of history to keep (`0` keeps everything) |
 | `POLL_SECONDS` | `5` | How often to read the devices |
 | `SOLARBANK_HOST`, `METER_HOST` | – | Set an address here instead of on the setup screen. The setup screen then shows it read-only |
+| `OCTOPUS_API_KEY`, `OCTOPUS_ACCOUNT` | – | Your Octopus Energy API key and account number, instead of entering them with **Connect Octopus** on the dashboard |
 | `PORT` | `8080` | Port inside the container. Only needed with `docker-compose.host.yml` |
 
 `SOLARBANK_PORT`, `SOLARBANK_UNIT_ID`, `METER_PORT`, `METER_UNIT_ID` and `LOG_LEVEL` also exist, but you'll rarely need them.
+
+## Octopus Energy
+
+**Connect Octopus** on the dashboard (or the variables above) reads your tariff from your account: Agile, Go, Intelligent Go, Cosy, Flux, Tracker and fixed tariffs, plus your export tariff. It's read-only and never changes your account or the battery.
+
+- The battery payback then uses the price of each half hour you actually paid, including Agile's changing prices and Intelligent Go's extra smart-charge slots, so you only need to enter what the battery cost.
+- **Electricity prices** shows the upcoming prices and suggests when charging the battery from the grid is worth it, when to run the house from the battery, and the best export times.
+- Find your API key on octopus.energy under **Account > Personal details > API access**. It's stored in the data volume (`settings.json`), readable only inside the container.
 
 ## More
 

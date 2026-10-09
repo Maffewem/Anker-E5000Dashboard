@@ -163,3 +163,11 @@ dialog input:focus-visible { outline: 2px solid var(--solar); outline-offset: 1p
 .muted { color: var(--text-muted); font-weight: 400; }
 .banner p + p { margin-top: 4px; }
 .banner-lines { display: grid; gap: 4px; }
+
+.windows { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 6px; }
+.windows li { display: flex; gap: 10px; align-items: baseline; font-size: 14px; flex-wrap: wrap; }
+.windows .tag { font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-secondary); }
+.windows .tag.charge { color: var(--battery); border-color: var(--battery); }
+.windows .tag.avoid { color: var(--gridpower); border-color: var(--gridpower); }
+.windows .tag.export { color: var(--export); border-color: var(--export); }
+.windows .why { color: var(--text-muted); font-size: 12px; }
