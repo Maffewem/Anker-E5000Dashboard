@@ -1,7 +1,7 @@
 "use strict";
 
 const LIVE_MS = 5000;
-const HISTORY_MS = 60000;
+const HISTORY_MS = 30000;
 let hours = 24;
 try { hours = Number(localStorage.getItem("hours")) || 24; } catch (_) {}
 
@@ -513,3 +513,8 @@ refreshHistory();
 refreshEnergy();
 setInterval(refreshLive, LIVE_MS);
 setInterval(() => { refreshHistory(); refreshEnergy(); }, HISTORY_MS);
+// Browsers slow timers down in background tabs, so catch up as soon as the
+// page is looked at again rather than showing old numbers.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") { refreshLive(); refreshHistory(); refreshEnergy(); }
+});
