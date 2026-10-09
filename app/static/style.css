@@ -195,3 +195,16 @@ dialog input:focus-visible { outline: 2px solid var(--solar); outline-offset: 1p
 .tips b { display: block; font-size: 14px; }
 .tips span { color: var(--text-secondary); }
 .diag { font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-secondary); margin: 8px 0 0; }
+.compare-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+.compare-actions select { font: inherit; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--page); color: var(--text-primary); }
+#compare-table tr.best td { font-weight: 600; color: var(--battery); }
+#compare-table tr.current td:first-child::after { content: " (now)"; color: var(--text-muted); font-weight: 400; }
+#compare-table td:last-child { color: var(--text-muted); font-size: 12px; min-width: 200px; }
+#compare-table td:nth-child(4), #compare-table td:last-child, #compare-table th:nth-child(4), #compare-table th:last-child { text-align: left; white-space: normal; }
+.control-form input.text, .control-form input[type=time] { width: 100%; font: inherit; font-size: 16px; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--page); color: var(--text-primary); }
+.preset-row { display: flex; gap: 8px; flex-wrap: wrap; }
+#custom-list li { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+dialog .compare { display: flex; margin: 12px 0 0; }
+dialog .compare input { width: auto; padding: 0; }
+dialog input:disabled { opacity: 0.6; }

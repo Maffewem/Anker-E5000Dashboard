@@ -365,6 +365,10 @@ function renderPayback(p) {
   $("payback-source").hidden = p.source !== "octopus";
   $("payback-source").textContent = p.source === "octopus"
     ? `Using your actual ${p.tariff_name || "Octopus"} prices for each half hour since they were fetched, and the prices you typed before that.` : "";
+  if (p.use_manual) {
+    $("payback-source").hidden = false;
+    $("payback-source").textContent = "Using your own prices (set in Edit costs) instead of Octopus.";
+  }
   factList($("payback-facts"), [
     ["Saved so far", p.since ? `${money(p.saved)} over ${p.days} day${p.days === 1 ? "" : "s"}` : money(0)],
     ["Average per day", money(p.per_day)],
@@ -389,21 +393,42 @@ $("open-costs").addEventListener("click", () => {
   $("cost-from").value = t.offpeak_start || "00:30";
   $("cost-to").value = t.offpeak_end || "05:30";
   $("cost-export").value = t.export_rate ?? "";
-  const fromOctopus = Boolean(payback && payback.source === "octopus");
-  $("costs-octopus").hidden = !fromOctopus;
-  $("costs-octopus-wait").hidden = fromOctopus || !(octopus && octopus.configured);
-  for (const id of ["cost-peak", "cost-offpeak", "cost-from", "cost-to", "cost-export"]) $(id).disabled = fromOctopus;
+  const connected = Boolean(payback && payback.octopus_connected);
+  $("costs-manual-row").hidden = !connected;
+  $("cost-manual").checked = Boolean(payback && payback.use_manual);
+  if (payback && payback.use_manual && payback.manual) {
+    // Show the typed prices, not the Octopus ones they override.
+    const m = payback.manual;
+    $("cost-peak").value = m.peak_rate; $("cost-offpeak").value = m.offpeak_rate;
+    $("cost-from").value = m.offpeak_start; $("cost-to").value = m.offpeak_end; $("cost-export").value = m.export_rate;
+  }
+  syncCostInputs();
   $("costs-msg").textContent = "";
   $("costs").showModal();
 });
 $("costs-cancel").addEventListener("click", () => $("costs").close());
+const KEYS = { "cost-battery": "battery_cost", "cost-peak": "peak_rate", "cost-offpeak": "offpeak_rate",
+  "cost-from": "offpeak_start", "cost-to": "offpeak_end", "cost-export": "export_rate" };
+function syncCostInputs() {
+  const connected = Boolean(payback && payback.octopus_connected);
+  const manual = $("cost-manual").checked;
+  const fromOctopus = connected && !manual && payback.source === "octopus";
+  $("costs-octopus").hidden = !fromOctopus;
+  $("costs-octopus-wait").hidden = !(connected && !manual && payback.source !== "octopus");
+  for (const id of ["cost-peak", "cost-offpeak", "cost-from", "cost-to", "cost-export"]) $(id).disabled = fromOctopus;
+}
+$("cost-manual").addEventListener("change", syncCostInputs);
 $("costs-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const num = (id) => Number($(id).value) || 0;
+  const typed = (payback && payback.manual) || {};
+  // While Octopus prices are shown (read-only), keep the typed prices as they were.
+  const num = (id) => ($(id).disabled && typed[KEYS[id]] != null ? typed[KEYS[id]] : Number($(id).value) || 0);
+  const time = (id, fallback) => ($(id).disabled && typed[KEYS[id]] ? typed[KEYS[id]] : $(id).value || fallback);
   try {
     const p = await postSettings("/api/tariff", {
       battery_cost: num("cost-battery"), peak_rate: num("cost-peak"), offpeak_rate: num("cost-offpeak"),
-      offpeak_start: $("cost-from").value || "00:00", offpeak_end: $("cost-to").value || "00:00", export_rate: num("cost-export"),
+      offpeak_start: time("cost-from", "00:00"), offpeak_end: time("cost-to", "00:00"), export_rate: num("cost-export"),
+      use_manual: $("cost-manual").checked,
     });
     renderPayback(p);
     $("costs").close();
@@ -601,6 +626,92 @@ async function refreshCare() {
     return li;
   }));
 }
+
+// ---------- Tariff comparison ----------
+
+let customTariffs = [];
+const pounds = (v) => (v == null ? "–" : `£${Math.round(v).toLocaleString()}`);
+
+function renderCustom(list) {
+  customTariffs = list || [];
+  $("custom-list").replaceChildren(...customTariffs.map((t, i) => {
+    const li = document.createElement("li");
+    const text = document.createElement("span");
+    text.textContent = `${t.name}: ${t.peak_rate}p, ${t.offpeak_rate}p ${t.offpeak_start}–${t.offpeak_end}, export ${t.export_rate}p, standing ${t.standing_p}p`;
+    const del = document.createElement("button"); del.type = "button"; del.className = "link"; del.textContent = "Remove";
+    del.addEventListener("click", () => saveCustom(customTariffs.filter((_, j) => j !== i)));
+    li.append(text, del);
+    return li;
+  }));
+}
+
+async function saveCustom(list) {
+  try {
+    renderCustom((await postSettings("/api/compare/custom", list)).custom);
+    $("compare-msg").className = "setup-msg ok";
+    $("compare-msg").textContent = "Saved. Press Compare to include it.";
+  } catch (err) {
+    $("compare-msg").className = "setup-msg error";
+    $("compare-msg").textContent = err.message;
+  }
+}
+
+$("custom-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const n = (id) => Number($(id).value) || 0;
+  saveCustom([...customTariffs, { name: $("custom-name").value.trim(), peak_rate: n("custom-peak"), offpeak_rate: n("custom-offpeak"),
+    offpeak_start: $("custom-from").value || "00:00", offpeak_end: $("custom-to").value || "00:00",
+    export_rate: n("custom-export"), standing_p: n("custom-standing") }]);
+});
+
+function renderPresets(presets) {
+  $("custom-presets").replaceChildren(...(presets || []).map((p) => {
+    const b = document.createElement("button"); b.type = "button"; b.className = "secondary"; b.textContent = p.name;
+    b.title = `Fills in the off-peak hours (${p.offpeak_start}–${p.offpeak_end}); enter the prices from your bill or quote.`;
+    b.addEventListener("click", () => { $("custom-name").value = p.name; $("custom-from").value = p.offpeak_start; $("custom-to").value = p.offpeak_end; $("custom-peak").focus(); });
+    return b;
+  }));
+}
+
+$("compare-run").addEventListener("click", async () => {
+  $("compare-msg").className = "setup-msg";
+  $("compare-msg").textContent = "Fetching tariffs and replaying your history…";
+  $("compare-run").disabled = true;
+  let r;
+  try {
+    const res = await fetch(`/api/compare?region=${encodeURIComponent($("compare-region").value)}`, { cache: "no-store" });
+    r = await res.json();
+    if (!res.ok) throw new Error(r.detail || `Request failed (${res.status})`);
+  } catch (err) {
+    $("compare-msg").className = "setup-msg error";
+    $("compare-msg").textContent = err.message;
+    return;
+  } finally { $("compare-run").disabled = false; }
+  renderCustom(r.custom);
+  renderPresets(r.presets);
+  $("compare-msg").textContent = r.message || (r.problems && r.problems.length ? `Some tariffs were skipped: ${r.problems.join("; ")}` : "");
+  $("compare-result").hidden = !r.rows.length;
+  $("compare-assumptions").hidden = !r.rows.length;
+  $("compare-table").tBodies[0].replaceChildren(...r.rows.map((row, i) => {
+    const tr = document.createElement("tr");
+    if (i === 0) tr.className = "best";
+    if (row.key === "current") tr.classList.add("current");
+    const vs = row.vs_current == null || row.key === "current" ? "" : `${row.vs_current < 0 ? "−" : "+"}${pounds(Math.abs(row.vs_current))}`;
+    for (const v of [row.name, pounds(row.annual), vs, row.export || "", row.note || ""]) {
+      const td = document.createElement("td"); td.textContent = v; tr.append(td);
+    }
+    return tr;
+  }));
+  const best = r.rows[0];
+  const cur = r.rows.find((x) => x.key === "current");
+  let summary = "";
+  if (best && cur && best.key !== "current" && best.vs_current < 0) summary = `${best.name} looks about ${pounds(-best.vs_current)} a year cheaper than what you pay now. `;
+  else if (best && cur && best.key === "current") summary = "Your current tariff already looks the cheapest. ";
+  if (r.without_battery && cur) summary += `On your tariff the battery saves about ${pounds(r.without_battery.annual - cur.annual)} a year. `;
+  if (r.days) summary += `Based on ${r.days} day${r.days === 1 ? "" : "s"} of history.`;
+  $("compare-summary").textContent = summary;
+  $("compare-assumption-list").replaceChildren(...(r.assumptions || []).map((a) => { const li = document.createElement("li"); li.textContent = a; return li; }));
+});
 
 // ---------- Setup ----------
 
@@ -831,6 +942,7 @@ refreshPayback();
 refreshOctopus();
 refreshControl();
 refreshCare();
+fetch("/api/compare/custom", { cache: "no-store" }).then((r) => r.json()).then((r) => { renderCustom(r.custom); renderPresets(r.presets); }).catch(() => {});
 setInterval(refreshControl, 15000);
 setInterval(refreshCare, 10 * 60 * 1000);
 setInterval(refreshPayback, 5 * 60 * 1000);

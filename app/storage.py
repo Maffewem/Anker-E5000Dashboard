@@ -208,6 +208,27 @@ class Storage:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def usage_slots(self, days: int = 365) -> list[dict]:
+        """Home use and solar per local half hour, for comparing tariffs.
+
+        These don't depend on what the battery did, so they can be replayed
+        against any tariff and battery schedule.
+        """
+        since = int(time.time()) - days * 86400
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT ts, home_wh, solar_wh FROM minutes WHERE ts >= ? ORDER BY ts", (since,)
+            ).fetchall()
+        out: dict[tuple[str, int], dict] = {}
+        for r in rows:
+            local = datetime.fromtimestamp(r["ts"], self.tz)
+            key = (local.date().isoformat(), (local.hour * 60 + local.minute) // 30)
+            slot = out.setdefault(key, {"day": key[0], "slot": key[1], "home_wh": 0.0, "solar_wh": 0.0, "minutes": 0})
+            slot["home_wh"] += r["home_wh"] or 0.0
+            slot["solar_wh"] += r["solar_wh"] or 0.0
+            slot["minutes"] += 1
+        return list(out.values())
+
     def soc_stats(self, days: int = 30) -> dict:
         """Minutes spent nearly full and nearly empty, for battery care tips."""
         since = int(time.time()) - days * 86400

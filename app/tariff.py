@@ -21,6 +21,7 @@ class Tariff:
     offpeak_start: str = "00:30"
     offpeak_end: str = "05:30"
     export_rate: float = 15.0  # p/kWh paid for export; what solar charging gives up
+    use_manual: bool = False  # use these prices even when Octopus is connected
 
     @classmethod
     def from_dict(cls, data: dict | None) -> "Tariff":
@@ -35,8 +36,8 @@ class Tariff:
         for name in ("offpeak_start", "offpeak_end"):
             if not TIME_RE.match(getattr(self, name)):
                 raise ValueError("Off-peak times must look like 00:30")
-        return Tariff(**{**asdict(self), **{n: float(getattr(self, n)) for n in
-                                            ("battery_cost", "peak_rate", "offpeak_rate", "export_rate")}})
+        return Tariff(**{**asdict(self), "use_manual": bool(self.use_manual),
+                         **{n: float(getattr(self, n)) for n in ("battery_cost", "peak_rate", "offpeak_rate", "export_rate")}})
 
     def slot_rates(self) -> list[float]:
         """Price in p/kWh for each half hour of the day (48 slots)."""
