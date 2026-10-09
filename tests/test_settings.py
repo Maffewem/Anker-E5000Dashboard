@@ -125,3 +125,13 @@ def test_export_downloads(client):
     assert client.get("/api/export?data=secrets").status_code == 422
     backup = client.get("/api/export/backup")
     assert backup.status_code == 200 and backup.content.startswith(b"SQLite format 3")
+
+
+def test_event_log_api(client):
+    client.app.state.storage.record_event("control", "Charged to 80%", source="dashboard")
+    assert [e["message"] for e in client.get("/api/events").json()] == ["Charged to 80%"]
+    assert client.get("/api/events?kind=charging").json() == []
+    assert client.get("/api/events?kind=nonsense").status_code == 422
+    r = client.get("/api/export?data=events")
+    assert r.text.splitlines()[0] == "time,ts,device,kind,field,old,new,message,source"
+    assert "Charged to 80%" in r.text

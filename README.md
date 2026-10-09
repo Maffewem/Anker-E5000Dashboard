@@ -74,8 +74,9 @@ To do this it puts the battery in Anker's third-party control mode. Outside chea
 
 ## More
 
+- **Event log:** the dashboard logs when the Solarbank starts or stops charging or discharging (once the new state has lasted a minute), changes mode, charge or discharge limit, backup reserve or firmware, and when either device connects, drops or gets a new address. Changes made while the dashboard was stopped are logged when it starts again.
 - **Export:** the Export data card at the bottom of the dashboard downloads readings as CSV or JSON for any date range, or a full backup of the database. Smart Meter readings are recorded from this version on.
 - **Try it without hardware:** `docker compose -f docker-compose.demo.yml up --build` runs simulated devices.
-- **API:** `/api/live`, `/api/history?hours=24`, `/api/energy?days=14`, `/api/payback`, `/api/export?data=minutes&start=2026-01-01&end=2026-01-31` (also `daily`, `meter`, `slots`; add `&format=json` for JSON), `/api/export/backup` (the whole SQLite database), `/api/raw` (every register, for troubleshooting) and `/healthz`.
+- **API:** `/api/live`, `/api/history?hours=24`, `/api/energy?days=14`, `/api/payback`, `/api/export?data=minutes&start=2026-01-01&end=2026-01-31` (also `daily`, `meter`, `slots`, `events`; add `&format=json` for JSON), `/api/export/backup` (the whole SQLite database), `/api/events?kind=charging,mode` (the event log, newest first), `/api/raw` (every register, for troubleshooting) and `/healthz`.
 - **Development:** `pip install -r requirements-dev.txt && python -m pytest`, then `python -m simulator.sim --meter-port 5021` and `python -m app`.
 - The register maps come from Anker's MIT-licensed [official Home Assistant integration](https://github.com/anker-charging/ha-anker-solix-official). See [NOTICE.md](NOTICE.md).
