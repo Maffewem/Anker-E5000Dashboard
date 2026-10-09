@@ -1,0 +1,15 @@
+# Try the dashboard without a battery: a simulated Solarbank plus the dashboard.
+#   docker compose -f docker-compose.demo.yml up --build
+services:
+  simulator:
+    build: .
+    command: ["python", "-m", "simulator.sim", "--port", "5020"]
+  dashboard:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      SOLARBANK_HOST: simulator
+      SOLARBANK_PORT: "5020"
+    depends_on:
+      - simulator

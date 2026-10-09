@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Solarbank Dashboard</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='4' y='8' width='22' height='16' rx='3' fill='%231baf7a'/><rect x='26' y='13' width='3' height='6' rx='1' fill='%231baf7a'/></svg>">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>Solarbank</h1>
+      <p class="sub" id="device-name">Connecting…</p>
+    </div>
+    <div class="status" id="status" role="status">
+      <span class="dot" aria-hidden="true"></span><span id="status-text">Connecting</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="tiles" aria-label="Live power">
+      <article class="tile">
+        <h2><span class="swatch s-solar" aria-hidden="true"></span>Solar</h2>
+        <p class="value" id="solar">–</p>
+        <p class="detail" id="solar-detail">&nbsp;</p>
+      </article>
+      <article class="tile">
+        <h2><span class="swatch s-home" aria-hidden="true"></span>Home</h2>
+        <p class="value" id="home">–</p>
+        <p class="detail" id="home-detail">&nbsp;</p>
+      </article>
+      <article class="tile">
+        <h2><span class="swatch s-battery" aria-hidden="true"></span>Battery</h2>
+        <p class="value" id="soc">–</p>
+        <div class="meter" aria-hidden="true"><div class="meter-fill" id="soc-bar"></div></div>
+        <p class="detail" id="battery-detail">&nbsp;</p>
+      </article>
+      <article class="tile">
+        <h2><span class="swatch s-grid" aria-hidden="true"></span>Grid</h2>
+        <p class="value" id="grid">–</p>
+        <p class="detail" id="grid-detail">&nbsp;</p>
+      </article>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Power</h2>
+        <div class="range" role="group" aria-label="Time range">
+          <button data-hours="6">6h</button>
+          <button data-hours="24" aria-pressed="true">24h</button>
+          <button data-hours="168">7d</button>
+          <button data-hours="720">30d</button>
+        </div>
+      </div>
+      <p class="note">Battery is positive when discharging, negative when charging. Grid is positive when importing, negative when exporting.</p>
+      <div class="chart-box"><canvas id="power-chart" aria-label="Power over time"></canvas></div>
+      <h3>Battery level</h3>
+      <div class="chart-box short"><canvas id="soc-chart" aria-label="Battery level over time"></canvas></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Daily energy</h2>
+        <p class="today" id="today"></p>
+      </div>
+      <div class="chart-box"><canvas id="energy-chart" aria-label="Energy per day"></canvas></div>
+      <details>
+        <summary>Show as table</summary>
+        <div class="table-wrap">
+          <table id="energy-table">
+            <thead><tr><th>Date</th><th>Solar</th><th>Home</th><th>Grid export</th><th>Grid import</th><th>Charged</th><th>Discharged</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p class="note">kWh, worked out from power readings since this dashboard started recording.</p>
+      </details>
+    </section>
+
+    <section class="card">
+      <h2>Device</h2>
+      <dl class="facts" id="facts"></dl>
+    </section>
+  </main>
+
+  <script src="/static/vendor/chart.umd.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
