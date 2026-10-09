@@ -19,6 +19,7 @@ from .storage import MinuteBucket, Storage
 log = logging.getLogger("solarbank.collector")
 
 DEVICE_NAMES = {"battery": "Solarbank", "meter": "Smart Meter"}
+IDENTITY_KEYS = ("model", "serial", "firmware", "soc", "grid_w")
 
 
 class Collector:
@@ -46,6 +47,9 @@ class Collector:
         self._last_sample: float | None = None
         self._last_prune = 0.0
         self._unavailable_blocks: set[tuple[str, int]] = set()
+        # Held while talking to the device, so the setup test never opens a
+        # second socket alongside the poller: some Anker devices accept only one.
+        self.io_lock = asyncio.Lock()
 
     def status(self) -> dict[str, Any]:
         return {
@@ -66,6 +70,20 @@ class Collector:
         self._unavailable_blocks.clear()
         self._changed.set()
 
+    async def test(self, conn: Connection) -> dict[str, Any]:
+        """Run the setup test for `conn` without a second connection to the device."""
+        if self.connected and self.connection == conn and self.snapshot:
+            log.info("Setup test: %s at %s:%s is already connected; using that connection",
+                     DEVICE_NAMES[self.profile.name], conn.host, conn.port)
+            return {k: self.snapshot.get(k) for k in IDENTITY_KEYS}
+        async with self.io_lock:
+            if self.client is not None:
+                # Free the device's connection slot for the test; the next
+                # poll reconnects.
+                self.client.close()
+                self.client = None
+            return await probe(conn, self.profile)
+
     async def _wait(self, seconds: float | None) -> None:
         """Sleep, but wake early if the connection settings change."""
         try:
@@ -84,7 +102,8 @@ class Collector:
             started = time.monotonic()
             conn = self.connection
             try:
-                await self.poll_once()
+                async with self.io_lock:
+                    await self.poll_once()
                 backoff = self.settings.poll_seconds
             except asyncio.CancelledError:
                 raise
@@ -313,7 +332,7 @@ async def probe(conn: Connection, profile: Profile = BATTERY) -> dict[str, Any]:
                 f"Is this the right device, and is the unit id 1?"
             )
         snap = profile.derive(extract(blocks, profile.registers))
-        found = {k: snap.get(k) for k in ("model", "serial", "firmware", "soc", "grid_w")}
+        found = {k: snap.get(k) for k in IDENTITY_KEYS}
         log.info("Setup test: found %s %s", name, found)
         return found
     except ConnectionError as err:
