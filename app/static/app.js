@@ -353,12 +353,18 @@ function renderPayback(p) {
   payback = p;
   const set = p.tariff.battery_cost > 0;
   $("payback-empty").hidden = set;
+  $("payback-empty").textContent = p.source === "octopus"
+    ? "Enter what you paid for the battery to see how long it takes to pay for itself. Prices come from Octopus."
+    : "Enter what you paid for the battery and your electricity prices to see how long it takes to pay for itself.";
   if (!set) { $("payback-facts").replaceChildren(); return; }
   const date = (iso) => new Date(`${iso}T12:00:00`).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" });
   let eta;
   if (p.payback_days === 0) eta = "Paid back";
   else if (p.payback_days != null) eta = `About ${duration(p.payback_days)} (${date(p.payback_date)})`;
   else eta = p.days ? "Not saving yet" : "Waiting for data";
+  $("payback-source").hidden = p.source !== "octopus";
+  $("payback-source").textContent = p.source === "octopus"
+    ? `Using your actual ${p.tariff_name || "Octopus"} prices for each half hour since they were fetched, and the prices you typed before that.` : "";
   factList($("payback-facts"), [
     ["Saved so far", p.since ? `${money(p.saved)} over ${p.days} day${p.days === 1 ? "" : "s"}` : money(0)],
     ["Average per day", money(p.per_day)],
@@ -383,6 +389,9 @@ $("open-costs").addEventListener("click", () => {
   $("cost-from").value = t.offpeak_start || "00:30";
   $("cost-to").value = t.offpeak_end || "05:30";
   $("cost-export").value = t.export_rate ?? "";
+  const fromOctopus = Boolean(payback && payback.source === "octopus");
+  $("costs-octopus").hidden = !fromOctopus;
+  for (const id of ["cost-peak", "cost-offpeak", "cost-from", "cost-to", "cost-export"]) $(id).disabled = fromOctopus;
   $("costs-msg").textContent = "";
   $("costs").showModal();
 });
@@ -402,6 +411,116 @@ $("costs-form").addEventListener("submit", async (e) => {
     $("costs-msg").textContent = err.message;
   }
 });
+
+// ---------- Octopus prices ----------
+
+let octopus = null;
+let priceChart = null;
+const pence = (v) => (v == null ? null : `${v.toFixed(2)}p`);
+const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+function when(start, end) {
+  const s = new Date(start);
+  const today = new Date();
+  const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1);
+  const day = s.toDateString() === today.toDateString() ? "Today" : s.toDateString() === tomorrow.toDateString() ? "Tomorrow"
+    : s.toLocaleDateString([], { weekday: "short" });
+  return `${day} ${clock(start)}–${clock(end)}`;
+}
+const WINDOW_LABEL = { charge: "Charge", avoid: "Use battery", export: "Export" };
+
+function renderOctopus(o) {
+  octopus = o;
+  $("open-octopus").textContent = o.configured ? "Octopus settings" : "Connect Octopus";
+  $("tariff-empty").hidden = o.configured;
+  $("tariff-error").hidden = !o.last_error;
+  $("tariff-error").textContent = o.last_error ? `Couldn't update from Octopus: ${o.last_error}` : "";
+  const ready = o.configured && o.import;
+  $("tariff-detail").hidden = !ready || !(o.prices && o.prices.length);
+  if (!ready) { $("tariff-facts").replaceChildren(); return; }
+  factList($("tariff-facts"), [
+    ["Tariff", o.import.name],
+    ["Price now", pence(o.current_p)],
+    ["Standing charge", o.import.standing_charge_p != null ? `${pence(o.import.standing_charge_p)} a day` : null],
+    ["Export tariff", o.export ? o.export.name : "None"],
+    ["Export price now", pence(o.current_export_p)],
+    ["Prices known until", o.prices && o.prices.length ? when(o.prices.at(-1).start, new Date(Date.parse(o.prices.at(-1).start) + 1800e3).toISOString()).replace(/–.*/, "") : null],
+  ]);
+
+  const items = [...(o.recommendations || []).map((w) => ({ ...w, label: WINDOW_LABEL[w.kind],
+    why: `${w.note} · ${w.kind === "export" ? "about" : "average"} ${pence(w.avg_p)}` })),
+    ...(o.dispatches || []).map((d) => ({ ...d, kind: "charge", label: "Smart charge", why: "Intelligent Go slot: the whole home pays the off-peak price" }))]
+    .sort((a, b) => a.start.localeCompare(b.start));
+  $("tariff-windows").replaceChildren(...(items.length ? items : [{ none: true }]).map((w) => {
+    const li = document.createElement("li");
+    if (w.none) { li.textContent = "Nothing worth charging from the grid in the prices published so far."; li.className = "note"; return li; }
+    const tag = document.createElement("span"); tag.className = `tag ${w.kind}`; tag.textContent = w.label;
+    const t = document.createElement("span"); t.textContent = when(w.start, w.end);
+    const why = document.createElement("span"); why.className = "why"; why.textContent = w.why;
+    li.append(tag, t, why);
+    return li;
+  }));
+  drawPrices(o);
+}
+
+function drawPrices(o) {
+  if (!o || !o.prices || !o.prices.length || $("tariff-detail").hidden) return;
+  const cheap = (o.recommendations || []).filter((w) => w.kind === "charge");
+  const inCheap = (iso) => cheap.some((w) => iso >= w.start && iso < w.end);
+  const opts = baseOptions();
+  opts.scales.y.ticks.callback = (v) => `${v}p`;
+  opts.scales.x.ticks.maxTicksLimit = window.innerWidth < 600 ? 4 : 8;
+  opts.plugins.tooltip.callbacks = { label: (c) => `${c.dataset.label}: ${c.parsed.y.toFixed(2)}p/kWh` };
+  const sets = [{ type: "bar", label: "Import price", data: o.prices.map((p) => p.import_p),
+    backgroundColor: o.prices.map((p) => (inCheap(p.start) ? css("--battery") : css("--gridpower"))),
+    borderRadius: 2, barPercentage: 1, categoryPercentage: 0.9 }];
+  if (o.prices.some((p) => p.export_p != null)) {
+    sets.push({ type: "line", label: "Export price", data: o.prices.map((p) => p.export_p), borderColor: css("--export"),
+      backgroundColor: css("--export"), pointRadius: 0, borderWidth: 2, stepped: true });
+  }
+  priceChart?.destroy();
+  priceChart = new Chart($("price-chart"), { type: "bar", data: { labels: o.prices.map((p) => clock(p.start)), datasets: sets }, options: opts });
+}
+
+async function refreshOctopus() {
+  try { renderOctopus(await (await fetch("/api/octopus", { cache: "no-store" })).json()); } catch (_) {}
+}
+
+$("open-octopus").addEventListener("click", () => {
+  const o = octopus || {};
+  $("octopus-account").value = o.account || "";
+  $("octopus-key").value = "";
+  $("octopus-key").placeholder = o.configured ? "Saved; enter a new key to change it" : "sk_live_…";
+  $("octopus-locked").hidden = !o.locked;
+  for (const id of ["octopus-account", "octopus-key", "octopus-save"]) $(id).disabled = Boolean(o.locked);
+  $("octopus-remove").hidden = !o.configured || o.locked;
+  $("octopus-msg").textContent = "";
+  $("octopus").showModal();
+});
+$("octopus-cancel").addEventListener("click", () => $("octopus").close());
+async function sendOctopus(body, busyText) {
+  $("octopus-msg").className = "setup-msg";
+  $("octopus-msg").textContent = busyText;
+  $("octopus-save").disabled = true;
+  try {
+    renderOctopus(await postSettings("/api/octopus", body));
+    refreshPayback();
+    $("octopus").close();
+  } catch (err) {
+    $("octopus-msg").className = "setup-msg error";
+    $("octopus-msg").textContent = err.message;
+  } finally { $("octopus-save").disabled = false; }
+}
+$("octopus-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const key = $("octopus-key").value.trim();
+  if (!key) {
+    $("octopus-msg").className = "setup-msg error";
+    $("octopus-msg").textContent = "Enter your API key.";
+    return;
+  }
+  sendOctopus({ api_key: key, account: $("octopus-account").value.trim() }, "Checking with Octopus and fetching prices…");
+});
+$("octopus-remove").addEventListener("click", () => sendOctopus({ api_key: "" }, "Disconnecting…"));
 
 // ---------- Setup ----------
 
@@ -598,16 +717,19 @@ $("theme-toggle").addEventListener("click", () => {
   showTheme();
   refreshHistory();
   refreshEnergy();
+  drawPrices(octopus);
 });
 
-darkQuery.addEventListener("change", () => { showTheme(); refreshHistory(); refreshEnergy(); });
+darkQuery.addEventListener("change", () => { showTheme(); refreshHistory(); refreshEnergy(); drawPrices(octopus); });
 showTheme();
 
 refreshLive();
 refreshHistory();
 refreshEnergy();
 refreshPayback();
+refreshOctopus();
 setInterval(refreshPayback, 5 * 60 * 1000);
+setInterval(refreshOctopus, 5 * 60 * 1000);
 setInterval(refreshLive, LIVE_MS);
 setInterval(() => { refreshHistory(); refreshEnergy(); }, HISTORY_MS);
 // Browsers slow timers down in background tabs, so catch up as soon as the

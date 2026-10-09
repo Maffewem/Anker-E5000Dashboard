@@ -94,6 +94,24 @@ class ConnectionStore:
         data["tariff"] = tariff
         self._write(data)
 
+    def octopus_from_env(self) -> bool:
+        return bool(os.environ.get("OCTOPUS_API_KEY", "").strip())
+
+    def load_octopus(self) -> tuple[str, str]:
+        """(api_key, account number); OCTOPUS_API_KEY and OCTOPUS_ACCOUNT win."""
+        if self.octopus_from_env():
+            return os.environ["OCTOPUS_API_KEY"].strip(), os.environ.get("OCTOPUS_ACCOUNT", "").strip().upper()
+        data = self._read().get("octopus") or {}
+        return str(data.get("api_key", "")), str(data.get("account", ""))
+
+    def save_octopus(self, api_key: str, account: str) -> None:
+        data = self._read()
+        if api_key:
+            data["octopus"] = {"api_key": api_key, "account": account}
+        else:
+            data.pop("octopus", None)
+        self._write(data)
+
     def save(self, conn: Connection, device: str = "battery") -> None:
         data = self._read()
         fields = asdict(conn)
@@ -110,6 +128,7 @@ class ConnectionStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=2))
+        tmp.chmod(0o600)  # it can hold the Octopus API key
         tmp.replace(self.path)
 
 

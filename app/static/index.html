@@ -32,6 +32,7 @@
     <form id="costs-form" method="dialog" novalidate>
       <h2 id="costs-title">Battery costs</h2>
       <p class="dialog-intro">Prices in pence per kWh, as on your bill. For a single-rate tariff, use the same price for peak and off-peak.</p>
+      <p class="locked-note" id="costs-octopus" hidden>Prices come from your Octopus account, so only the battery's price is used from here.</p>
       <label for="cost-battery">What you paid for the battery (£)</label>
       <input id="cost-battery" type="number" min="0" step="1" inputmode="decimal">
       <div class="row">
@@ -49,6 +50,24 @@
         <button type="button" class="secondary" id="costs-cancel">Cancel</button>
         <button type="submit" class="primary">Save</button>
       </div>
+    </form>
+  </dialog>
+
+  <dialog id="octopus" aria-labelledby="octopus-title">
+    <form id="octopus-form" method="dialog" novalidate>
+      <h2 id="octopus-title">Octopus Energy</h2>
+      <p class="dialog-intro">Reads your tariff and prices so you don't have to type them in. On octopus.energy, open <b>Account</b> &gt; <b>Personal details</b> &gt; <b>API access</b> for your key. Nothing is changed on your account.</p>
+      <label for="octopus-account">Account number</label>
+      <input id="octopus-account" autocomplete="off" spellcheck="false" placeholder="A-1234ABCD">
+      <label for="octopus-key">API key</label>
+      <input id="octopus-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk_live_…">
+      <p class="locked-note" id="octopus-locked" hidden>Set by <code>OCTOPUS_API_KEY</code> and <code>OCTOPUS_ACCOUNT</code> in the container settings. Remove them from your stack to change it here.</p>
+      <p class="setup-msg" id="octopus-msg" role="status" aria-live="polite"></p>
+      <div class="dialog-actions">
+        <button type="button" class="secondary" id="octopus-cancel">Cancel</button>
+        <button type="submit" class="primary" id="octopus-save">Connect</button>
+      </div>
+      <button type="button" class="link" id="octopus-remove" hidden>Disconnect Octopus</button>
     </form>
   </dialog>
 
@@ -148,6 +167,22 @@
       </details>
     </section>
 
+    <section class="card" id="tariff-card">
+      <div class="card-head">
+        <h2>Electricity prices</h2>
+        <button type="button" class="secondary" id="open-octopus">Connect Octopus</button>
+      </div>
+      <p class="note" id="tariff-empty">Connect your Octopus account to track your tariff's prices, use them for the battery payback, and see the cheapest times to charge. Agile, Go, Intelligent Go, Cosy, Flux and fixed tariffs all work.</p>
+      <p class="setup-msg error" id="tariff-error" hidden></p>
+      <dl class="facts" id="tariff-facts"></dl>
+      <div id="tariff-detail" hidden>
+        <div class="chart-box short"><canvas id="price-chart" aria-label="Upcoming electricity prices"></canvas></div>
+        <h3>Suggested battery times</h3>
+        <ul class="windows" id="tariff-windows"></ul>
+        <p class="note">Suggestions only: the dashboard doesn't change your battery. Charging from the grid only pays when the cheap price is below the dear one after about 10% round-trip losses.</p>
+      </div>
+    </section>
+
     <section class="card" id="payback-card">
       <div class="card-head">
         <h2>Battery payback</h2>
@@ -155,6 +190,7 @@
       </div>
       <p class="note" id="payback-empty" hidden>Enter what you paid for the battery and your electricity prices to see how long it takes to pay for itself.</p>
       <dl class="facts" id="payback-facts"></dl>
+      <p class="note" id="payback-source" hidden></p>
       <details>
         <summary>How this is worked out</summary>
         <p class="note">Each kWh the battery discharges is valued at the price for that half hour, as grid electricity it saved you buying. Charging costs the price for that half hour when the energy came from the grid, and your export rate when it came from solar you could have sold. Charging while the grid supplies power counts as grid charging. Totals start when this dashboard began recording, and the projection assumes future days save the same as the average so far.</p>

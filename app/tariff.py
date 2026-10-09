@@ -1,7 +1,7 @@
 """Battery cost and electricity prices, and the payback worked out from them.
 
-Prices live in one place (`Tariff`) so a future source, such as fetched
-Octopus rates, can replace the manual ones without touching the maths.
+Prices live in one place (`Tariff`); fetched Octopus prices, when there
+are any, override it half hour by half hour.
 """
 
 from __future__ import annotations
@@ -54,22 +54,29 @@ class Tariff:
         return rates
 
 
-def payback(tariff: Tariff, slots: list[dict], today: date) -> dict:
+def payback(tariff: Tariff, slots: list[dict], today: date,
+            prices: dict[tuple[str, int], tuple] | None = None) -> dict:
     """Savings so far and a projection, from half-hourly battery totals.
 
     Each discharged kWh is valued at the price of the half hour it was used
     in, as grid electricity it replaced. Charging costs the price of the half
     hour for energy taken from the grid, and the export rate for solar energy
     that could otherwise have been sold.
+
+    `prices` holds actual (import, export) p/kWh per (day, slot), such as
+    fetched Octopus prices; half hours it doesn't cover use the tariff.
     """
     rates = tariff.slot_rates()
+    prices = prices or {}
     value = grid_cost = solar_cost = 0.0
     days = set()
     for r in slots:
-        rate = rates[r["slot"]] / 100  # pounds per kWh
+        actual_import, actual_export = prices.get((r["day"], r["slot"]), (None, None))
+        rate = (rates[r["slot"]] if actual_import is None else actual_import) / 100  # pounds per kWh
+        export = (tariff.export_rate if actual_export is None else actual_export) / 100
         value += r["discharge_wh"] / 1000 * rate
         grid_cost += r["grid_charge_wh"] / 1000 * rate
-        solar_cost += r["solar_charge_wh"] / 1000 * tariff.export_rate / 100
+        solar_cost += r["solar_charge_wh"] / 1000 * export
         days.add(r["day"])
 
     saved = value - grid_cost - solar_cost
