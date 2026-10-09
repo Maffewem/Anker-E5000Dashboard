@@ -26,6 +26,8 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 
+log = logging.getLogger("solarbank.web")
+
 STATIC = Path(__file__).parent / "static"
 
 
@@ -147,6 +149,8 @@ async def save_settings(device: str, body: ConnectionIn, skip_test: bool = False
             except Exception as err:
                 raise HTTPException(status_code=422, detail=str(err)) from err
     store.save(conn, device)
+    log.info("Saved %s address %r (port %s, unit id %s)%s", device, conn.host, conn.port, conn.unit_id,
+             " without a test" if skip_test else "")
     app.state.collectors[device].reconfigure(conn)
     return {"ok": True, "device": found}
 
