@@ -4,7 +4,6 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app import control
 from app.battery_care import care
 from app.collector import Collector
 from app.config import Connection, Settings

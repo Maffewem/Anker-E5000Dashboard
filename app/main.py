@@ -26,14 +26,14 @@ from pydantic import BaseModel
 from .collector import DEVICE_NAMES, Collector
 from .registers import BATTERY, METER
 from .battery_care import care
-from .compare import PRESETS, Candidate, Comparer, compare, fixed_profile, profile as price_profile
-from .config import Connection, ConnectionStore, Settings
+from .compare import PRESETS, Candidate, Comparer, compare, profile as price_profile
+from .config import ENV_PREFIX, Connection, ConnectionStore, Settings
 from .control import ControlSettings, Controller, Schedule, cheap_windows, schedule_windows
-from .octopus import Octopus, OctopusError, tariff_parts, validate as validate_octopus
+from .octopus import ECONOMY7_NIGHT, Octopus, tariff_parts, validate as validate_octopus
 from .relay import Relay
-from .runtime import PATTERN_DAYS, estimate, pattern_from_minutes
+from .runtime import PATTERN_DAYS, battery_size, estimate, pattern_from_minutes
 from .storage import EVENT_KINDS, Storage
-from .tariff import Tariff, payback
+from .tariff import Tariff, fixed_profile, payback
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO").upper(),
@@ -82,7 +82,7 @@ def _make_octopus(store: ConnectionStore, storage: Storage, api_key: str | None 
 
     def offpeak() -> set[int]:
         rates = Tariff.from_dict(store.load_tariff()).slot_rates()
-        return {i for i, r in enumerate(rates) if r == min(rates)} if len(set(rates)) > 1 else set(range(1, 15))
+        return {i for i, r in enumerate(rates) if r == min(rates)} if len(set(rates)) > 1 else set(ECONOMY7_NIGHT)
 
     octopus = Octopus(storage, api_key or "", account or "", offpeak=offpeak)
     octopus.config_error = config_error
@@ -115,7 +115,6 @@ async def _octopus_loop(app: FastAPI) -> None:
             await asyncio.to_thread(octopus.sync)
         intelligent = (octopus.info.get("import") or {}).get("kind") == "intelligent_go"
         await asyncio.sleep(OCTOPUS_DISPATCH_SECONDS if intelligent or octopus.last_error else OCTOPUS_SYNC_SECONDS)
-ENV_NAMES = {"battery": "SOLARBANK_HOST", "meter": "METER_HOST"}
 
 
 @asynccontextmanager
@@ -130,7 +129,6 @@ async def lifespan(app: FastAPI):
         "meter": Collector(settings, storage, store.load("meter"), METER),
     }
     app.state.collectors = collectors
-    app.state.collector = collectors["battery"]
     app.state.connection_store = store
     app.state.storage = storage
     app.state.pattern_cache = {}
@@ -226,18 +224,18 @@ def get_payback() -> dict:
     store: ConnectionStore = app.state.connection_store
     storage: Storage = app.state.storage
     octopus: Octopus = app.state.octopus
-    tariff = Tariff.from_dict(store.load_tariff())
-    use_octopus = octopus.configured and not tariff.use_manual
+    typed = Tariff.from_dict(store.load_tariff())
+    tariff = typed
+    use_octopus = octopus.configured and not typed.use_manual
     profile = octopus.profile() if use_octopus else None
     if profile:
         # Octopus prices stand in for the typed ones; only the battery cost is kept.
         tariff = Tariff.from_dict({**{k: v for k, v in profile.items() if v is not None},
-                                   "battery_cost": tariff.battery_cost, "installed": tariff.installed})
+                                   "battery_cost": typed.battery_cost, "installed": typed.installed})
     prices = storage.rates() if use_octopus else None
     out = payback(tariff, storage.battery_slots(), datetime.now(storage.tz).date(), prices, _lifetime())
     out["source"] = "octopus" if profile else "manual"
     out["octopus_connected"] = octopus.configured
-    typed = Tariff.from_dict(store.load_tariff())
     out["use_manual"] = typed.use_manual
     out["manual"] = asdict(typed)  # what was typed, even while Octopus prices are shown
     out["tariff_name"] = (octopus.info.get("import") or {}).get("name") if profile else None
@@ -404,8 +402,7 @@ async def get_compare(region: str = Query("", max_length=1), days: int = Query(3
         raise HTTPException(status_code=422, detail="Unknown region")
     custom = store.load_section("compare").get("custom") or []
     snap = app.state.collectors["battery"].snapshot
-    cap = snap.get("rated_kwh") or 5.0
-    kw = (snap.get("max_charge_w") or 2400) / 1000
+    cap, kw = battery_size(snap)
     usage = storage.usage_slots(days)
     if not usage:
         return {"days": 0, "rows": [], "region": region, "custom": custom, "presets": PRESETS,
@@ -502,7 +499,7 @@ async def save_settings(device: str, body: ConnectionIn, skip_test: bool = False
     if store.from_env(device):
         raise HTTPException(
             status_code=409,
-            detail=f"This address is set by {ENV_NAMES[device]} in the container settings. Remove it there to edit it here.",
+            detail=f"This address is set by {ENV_PREFIX[device]}_HOST in the container settings. Remove it there to edit it here.",
         )
     found = None
     if device == "meter" and not body.host.strip():

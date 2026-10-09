@@ -19,6 +19,11 @@ MIN_PATTERN_HOURS = 24  # less history than this and only the current power is u
 CHARGING_W = 50  # below -this an average half hour counts as charging
 
 
+def battery_size(snap: dict[str, Any]) -> tuple[float, float]:
+    """(capacity kWh, charging power kW), with an E5000's when not read yet."""
+    return snap.get("rated_kwh") or 5.0, (snap.get("max_charge_w") or 2400) / 1000
+
+
 def floor_soc(snap: dict[str, Any]) -> float:
     """The level the battery stops discharging at: its discharge limit or backup reserve."""
     limits = [v for v in (snap.get("discharge_limit_soc"), snap.get("backup_reserve_soc")) if v is not None]

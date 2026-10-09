@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from .octopus import Client, OctopusError, half_hours, local_slot
+from .tariff import fixed_profile, slot_time
 
 log = logging.getLogger("solarbank.compare")
 
@@ -88,19 +89,6 @@ def profile(prices: dict) -> list:
     return [sums[i] / counts[i] if counts[i] else None for i in range(48)]
 
 
-def fixed_profile(peak: float, offpeak: float, start: str, end: str) -> list:
-    def slot(hhmm: str) -> int:
-        h, m = map(int, hhmm.split(":"))
-        return (h * 60 + m) // 30
-
-    out = [peak] * 48
-    i, stop = slot(start), slot(end)
-    while i != stop:
-        out[i] = offpeak
-        i = (i + 1) % 48
-    return out
-
-
 def usage_by_day(slots: list[dict]) -> dict[str, list]:
     """kWh of house use minus solar per half hour, grouped by day.
 
@@ -128,8 +116,7 @@ def _ranges(slots: set[int]) -> str:
         out.append(run)
     if len(out) > 1 and out[0][0] == 0 and out[-1][-1] == 47:  # wraps past midnight
         out[0] = out.pop() + out[0]
-    hhmm = lambda s: f"{s // 2:02d}:{s % 2 * 30:02d}"  # noqa: E731
-    return ", ".join(f"{hhmm(r[0])}-{hhmm((r[-1] + 1) % 48)}" for r in out)
+    return ", ".join(f"{slot_time(r[0])}-{slot_time(r[-1] + 1)}" for r in out)
 
 
 def simulate(c: Candidate, days: dict[str, list], cap_kwh: float, power_kw: float, battery: bool = True) -> dict:

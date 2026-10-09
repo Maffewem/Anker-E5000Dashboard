@@ -24,6 +24,9 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Callable
 
+from .runtime import battery_size
+from .tariff import slot_time
+
 log = logging.getLogger("solarbank.octopus")
 
 # Octopus answers on both; the second is the newer Kraken host.
@@ -335,13 +338,18 @@ def recommend(points: list[tuple[datetime, float]], charge_hours: float, efficie
 # ---------- service ----------
 
 
+# Local half hours of an Economy 7 night (00:30-07:30), when the off-peak
+# hours aren't known.
+ECONOMY7_NIGHT = frozenset(range(1, 15))
+
+
 class Octopus:
     """Keeps prices and dispatch slots in step with the account."""
 
     def __init__(self, storage, api_key: str, account: str, fetch: Fetch | None = None,
-                 offpeak: Callable[[], set[int]] = lambda: set(range(1, 15))) -> None:
+                 offpeak: Callable[[], set[int]] = lambda: set(ECONOMY7_NIGHT)) -> None:
         self.storage = storage
-        self.offpeak = offpeak  # local half hours of an Economy 7 night (default 00:30-07:30)
+        self.offpeak = offpeak  # local half hours of the night rate
         self.client = Client(api_key, account, fetch) if api_key and account else None
         # Shown on the card when the settings themselves are wrong (e.g. OCTOPUS_ACCOUNT missing).
         self.config_error: str | None = None
@@ -521,8 +529,7 @@ class Octopus:
             return out
         imp, exp = self.upcoming(now)
         battery = battery or {}
-        kwh = battery.get("rated_kwh") or 5.0
-        kw = (battery.get("max_charge_w") or 2400) / 1000
+        kwh, kw = battery_size(battery)
         out["prices"] = [{"start": _iso(t), "import_p": p, "export_p": dict(exp).get(t)} for t, p in imp]
         out["current_p"] = imp[0][1] if imp else None
         out["current_export_p"] = exp[0][1] if exp else None
@@ -558,13 +565,12 @@ class Octopus:
                     n += 1
                 best = max(best, (n, s), key=lambda x: x[0])
         n, s = best
-        hhmm = lambda i: f"{i % 48 // 2:02d}:{i % 2 * 30:02d}"  # noqa: E731
         exports = [v[1] for v in day.values() if v[1] is not None]
         return {
             "peak_rate": round(high, 2),
             "offpeak_rate": round(low, 2),
-            "offpeak_start": hhmm(s) if n and n < 48 else "00:00",
-            "offpeak_end": hhmm(s + n) if n and n < 48 else "00:00",
+            "offpeak_start": slot_time(s) if n and n < 48 else "00:00",
+            "offpeak_end": slot_time(s + n) if n and n < 48 else "00:00",
             "export_rate": round(sum(exports) / len(exports), 2) if exports else None,
             "day": max(full),
         }
