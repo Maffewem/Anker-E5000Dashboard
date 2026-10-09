@@ -14,7 +14,7 @@ from pymodbus.exceptions import ModbusException
 
 from .config import Connection, Settings
 from .registers import BATTERY, HOLDING, Profile, extract
-from .storage import MinuteBucket, Storage
+from .storage import MeterBucket, MinuteBucket, Storage
 
 log = logging.getLogger("solarbank.collector")
 
@@ -23,7 +23,7 @@ IDENTITY_KEYS = ("model", "serial", "firmware", "soc", "grid_w")
 
 
 class Collector:
-    """Polls one device. Only the battery collector records history."""
+    """Polls one device and records its readings once a minute."""
 
     def __init__(
         self,
@@ -46,7 +46,7 @@ class Collector:
         self.connected = False
         self.last_update: float | None = None
         self.last_error: str | None = None
-        self._bucket: MinuteBucket | None = None
+        self._bucket: MinuteBucket | MeterBucket | None = None
         self._last_sample: float | None = None
         self._last_prune = 0.0
         self._unavailable_blocks: set[tuple[str, int]] = set()
@@ -182,19 +182,25 @@ class Collector:
 
         minute = int(now // 60 * 60)
         if self._bucket and self._bucket.minute != minute:
-            self.storage.write_minute(self._bucket.row())
+            self._write(self._bucket)
             self._bucket = None
         if self._bucket is None:
-            self._bucket = MinuteBucket(minute)
+            self._bucket = MeterBucket(minute) if self.profile.name == "meter" else MinuteBucket(minute)
         self._bucket.add(self.snapshot, seconds)
 
         if now - self._last_prune > 3600:
             self.storage.prune()
             self._last_prune = now
 
+    def _write(self, bucket: MinuteBucket | MeterBucket) -> None:
+        if isinstance(bucket, MeterBucket):
+            self.storage.write_meter_minute(bucket.row())
+        else:
+            self.storage.write_minute(bucket.row())
+
     def flush(self) -> None:
         if self._bucket and self.storage is not None:
-            self.storage.write_minute(self._bucket.row())
+            self._write(self._bucket)
             self._bucket = None
 
     async def _ensure_client(self) -> AsyncModbusTcpClient:

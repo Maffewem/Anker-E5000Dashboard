@@ -164,6 +164,11 @@ dialog input:focus-visible { outline: 2px solid var(--solar); outline-offset: 1p
 .banner p + p { margin-top: 4px; }
 .banner-lines { display: grid; gap: 4px; }
 
+.export { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin-top: 12px; }
+.export label { display: grid; gap: 4px; font-size: 13px; color: var(--text-secondary); }
+.export input, .export select { font: inherit; font-size: 14px; padding: 6px 8px; min-height: 36px; border-radius: 8px;
+  border: 1px solid var(--axis); background: var(--page); color: var(--text-primary); }
+.note a { color: var(--text-secondary); }
 .windows { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 6px; }
 .windows li { display: flex; gap: 10px; align-items: baseline; font-size: 14px; flex-wrap: wrap; }
 .windows .tag { font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-secondary); }

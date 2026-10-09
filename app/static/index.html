@@ -209,6 +209,30 @@
       <h2>Solarbank</h2>
       <dl class="facts" id="facts"></dl>
     </section>
+
+    <section class="card" id="export-card">
+      <h2>Export data</h2>
+      <form class="export" id="export-form">
+        <label>Data
+          <select id="export-data">
+            <option value="minutes">Solarbank, every minute</option>
+            <option value="daily">Daily totals</option>
+            <option value="meter">Smart Meter, every minute</option>
+            <option value="slots">Battery, every half hour</option>
+          </select>
+        </label>
+        <label>From <input type="date" id="export-start" required></label>
+        <label>To <input type="date" id="export-end" required></label>
+        <label>Format
+          <select id="export-format">
+            <option value="csv">CSV (spreadsheets)</option>
+            <option value="json">JSON</option>
+          </select>
+        </label>
+        <button type="submit" class="secondary">Download</button>
+      </form>
+      <p class="note">Minute readings, and the daily totals worked out from them, go back as far as <code>RETENTION_DAYS</code> (a year by default). Battery half hours are kept for good. <a href="/api/export/backup" download>Download a full backup</a> of everything recorded (SQLite).</p>
+    </section>
   </main>
 
   <script src="/static/vendor/chart.umd.js?v={{version}}"></script>

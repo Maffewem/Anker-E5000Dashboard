@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import csv
 import hashlib
+import io
 import logging
 import os
+import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, JSONResponse
+from starlette.background import BackgroundTask
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from pydantic import BaseModel
@@ -86,8 +90,8 @@ async def lifespan(app: FastAPI):
     store = ConnectionStore(settings.settings_path)
     collectors = {
         "battery": Collector(settings, storage, store.load("battery"), BATTERY),
-        # The Smart Meter is optional and shown live only; history comes from the battery.
-        "meter": Collector(settings, None, store.load("meter"), METER),
+        # The Smart Meter is optional; its readings are kept for export only.
+        "meter": Collector(settings, storage, store.load("meter"), METER),
     }
     app.state.collectors = collectors
     app.state.collector = collectors["battery"]
@@ -303,6 +307,50 @@ def _validated(body: ConnectionIn) -> Connection:
         return Connection(body.host, body.port, body.unit_id).validate()
     except ValueError as err:
         raise HTTPException(status_code=422, detail=str(err)) from err
+
+
+@app.get("/api/export")
+def export(
+    data: str = Query("minutes", pattern="^(minutes|daily|meter|slots)$"),
+    start: date | None = None,
+    end: date | None = None,
+    format: str = Query("csv", pattern="^(csv|json)$"),
+):
+    """Recorded data for local dates `start` to `end` (default: the last 7 days).
+
+    minutes: Solarbank power and energy per minute. daily: daily kWh totals.
+    meter: Smart Meter readings per minute. slots: battery energy per half hour.
+    """
+    storage: Storage = app.state.storage
+    today = datetime.now(storage.tz).date()
+    end = end or today
+    start = start or end - timedelta(days=6)
+    if start > end:
+        raise HTTPException(status_code=422, detail="The start date is after the end date")
+    if (end - start).days > 3660:
+        raise HTTPException(status_code=422, detail="Choose a range of ten years or less")
+    columns, rows = storage.export_rows(data, start, end)
+    name = f"solarbank-{data}-{start}-to-{end}.{format}"
+    headers = {"Content-Disposition": f'attachment; filename="{name}"'}
+    if format == "json":
+        return JSONResponse(rows, headers=headers)
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=columns, extrasaction="ignore", lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(rows)
+    return Response(out.getvalue(), media_type="text/csv", headers=headers)
+
+
+@app.get("/api/export/backup")
+def export_backup() -> FileResponse:
+    """The whole database as a SQLite file, everything recorded so far."""
+    storage: Storage = app.state.storage
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    storage.backup(path)
+    name = f"solarbank-backup-{datetime.now(storage.tz).date()}.db"
+    return FileResponse(path, media_type="application/vnd.sqlite3", filename=name,
+                        background=BackgroundTask(os.remove, path))
 
 
 @app.get("/api/raw")

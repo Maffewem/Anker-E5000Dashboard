@@ -6,7 +6,7 @@ import sqlite3
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -35,6 +35,14 @@ CREATE TABLE IF NOT EXISTS slots (
     solar_charge_wh REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (day, slot)
 );
+-- Smart Meter readings per minute: average power and voltage, plus the
+-- meter's own lifetime import/export counters at the end of the minute.
+CREATE TABLE IF NOT EXISTS meter_minutes (
+    ts INTEGER PRIMARY KEY,
+    grid_w REAL,
+    voltage REAL,
+    import_total_kwh REAL,
+    export_total_kwh REAL
 -- Prices per local half hour in p/kWh, from Octopus when it is connected.
 CREATE TABLE IF NOT EXISTS rates (
     day TEXT NOT NULL,
@@ -44,6 +52,8 @@ CREATE TABLE IF NOT EXISTS rates (
     PRIMARY KEY (day, slot)
 );
 """
+
+METER_FIELDS = ("grid_w", "voltage", "import_total_kwh", "export_total_kwh")
 
 
 @dataclass
@@ -92,6 +102,42 @@ class MinuteBucket:
         return row
 
 
+@dataclass
+class MeterBucket:
+    """One minute of Smart Meter samples."""
+
+    minute: int
+    sums: dict[str, float] = field(default_factory=dict)
+    counts: dict[str, int] = field(default_factory=dict)
+    last: dict[str, float] = field(default_factory=dict)
+
+    def add(self, snapshot: dict, seconds: float) -> None:
+        phases = snapshot.get("phases") or [{}]
+        averaged = {"grid_w": snapshot.get("grid_w"), "voltage": phases[0].get("voltage")}
+        for key, v in averaged.items():
+            if v is not None:
+                self.sums[key] = self.sums.get(key, 0.0) + v
+                self.counts[key] = self.counts.get(key, 0) + 1
+        for key in ("import_total_kwh", "export_total_kwh"):
+            if snapshot.get(key) is not None:
+                self.last[key] = snapshot[key]
+
+    def row(self) -> dict:
+        row = {"ts": self.minute, **self.last}
+        for key in ("grid_w", "voltage"):
+            n = self.counts.get(key)
+            row[key] = self.sums[key] / n if n else None
+        return row
+
+
+# What each export contains: (table, time column, columns), oldest first.
+EXPORTS = {
+    "minutes": ("minutes", "ts", ("ts", *POWER_FIELDS, *ENERGY_FIELDS)),
+    "meter": ("meter_minutes", "ts", ("ts", *METER_FIELDS)),
+    "slots": ("slots", "day", ("day", "slot", "discharge_wh", "grid_charge_wh", "solar_charge_wh")),
+}
+
+
 class Storage:
     def __init__(self, path: str, retention_days: int, timezone: str = "UTC") -> None:
         if path != ":memory:":
@@ -117,6 +163,15 @@ class Storage:
                 [row.get(c) for c in cols],
             )
             self._add_slot(row)
+            self._db.commit()
+
+    def write_meter_minute(self, row: dict) -> None:
+        cols = ["ts", *METER_FIELDS]
+        with self._lock:
+            self._db.execute(
+                f"INSERT OR REPLACE INTO meter_minutes ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
+                [row.get(c) for c in cols],
+            )
             self._db.commit()
 
     def _add_slot(self, row: dict) -> None:
@@ -188,6 +243,7 @@ class Storage:
         cutoff = int(time.time()) - self.retention_days * 86400
         with self._lock:
             self._db.execute("DELETE FROM minutes WHERE ts < ?", (cutoff,))
+            self._db.execute("DELETE FROM meter_minutes WHERE ts < ?", (cutoff,))
             self._db.commit()
 
     def history(self, hours: int, max_points: int = 720, offset_hours: int = 0) -> dict:
@@ -211,12 +267,18 @@ class Storage:
     def daily_energy(self, days: int) -> list[dict]:
         """kWh per local calendar day for the last `days` days (today included)."""
         today = datetime.now(self.tz).date()
-        first = today - timedelta(days=days - 1)
-        start = int(datetime.combine(first, datetime.min.time(), self.tz).timestamp())
+        return self.daily_range(today - timedelta(days=days - 1), today)
+
+    def _day_start(self, day: date) -> int:
+        return int(datetime.combine(day, datetime.min.time(), self.tz).timestamp())
+
+    def daily_range(self, first: date, last: date) -> list[dict]:
+        """kWh per local calendar day from `first` to `last`, both included."""
+        days = (last - first).days + 1
         with self._lock:
             rows = self._db.execute(
-                f"SELECT ts, {', '.join(ENERGY_FIELDS)} FROM minutes WHERE ts >= ?",
-                (start,),
+                f"SELECT ts, {', '.join(ENERGY_FIELDS)} FROM minutes WHERE ts >= ? AND ts < ?",
+                (self._day_start(first), self._day_start(last + timedelta(days=1))),
             ).fetchall()
 
         totals: dict[str, dict[str, float]] = {}
@@ -233,6 +295,38 @@ class Storage:
             {"date": day, **{f.replace("_wh", "_kwh"): round(v[f] / 1000, 3) for f in ENERGY_FIELDS}}
             for day, v in totals.items()
         ]
+
+    def export_rows(self, kind: str, first: date, last: date) -> tuple[tuple[str, ...], list[dict]]:
+        """Rows of one export for local dates `first` to `last`, with a local time column."""
+        if kind == "daily":
+            rows = self.daily_range(first, last)
+            return tuple(rows[0]) if rows else ("date",), rows
+        table, key, cols = EXPORTS[kind]
+        if key == "day":
+            bounds: tuple = (first.isoformat(), last.isoformat())
+            where = "day >= ? AND day <= ?"
+        else:
+            bounds = (self._day_start(first), self._day_start(last + timedelta(days=1)))
+            where = "ts >= ? AND ts < ?"
+        with self._lock:
+            rows = [dict(r) for r in self._db.execute(
+                f"SELECT {', '.join(cols)} FROM {table} WHERE {where} ORDER BY {', '.join(cols[:2] if key == 'day' else cols[:1])}",
+                bounds,
+            ).fetchall()]
+        if key == "day":
+            return cols, rows
+        for r in rows:
+            r["time"] = datetime.fromtimestamp(r["ts"], self.tz).isoformat()
+        return ("time", *cols), rows
+
+    def backup(self, path: str) -> None:
+        """A consistent copy of the whole database, safe while recording continues."""
+        target = sqlite3.connect(path)
+        try:
+            with self._lock:
+                self._db.backup(target)
+        finally:
+            target.close()
 
     def close(self) -> None:
         with self._lock:
