@@ -28,7 +28,7 @@ from .registers import BATTERY, METER
 from .battery_care import care
 from .compare import PRESETS, Candidate, Comparer, compare, fixed_profile, profile as price_profile
 from .config import Connection, ConnectionStore, Settings
-from .control import ControlSettings, Controller, cheap_windows
+from .control import ControlSettings, Controller, Schedule, cheap_windows, schedule_windows
 from .octopus import Octopus, OctopusError, tariff_parts, validate as validate_octopus
 from .relay import Relay
 from .runtime import PATTERN_DAYS, estimate, pattern_from_minutes
@@ -96,7 +96,8 @@ def _make_controller(app: FastAPI, store: ConnectionStore, storage: Storage) -> 
         status = (octopus.status(battery.snapshot, now)
                   if octopus.configured and octopus.info and not t.use_manual else None)
         offpeak = (t.offpeak_start, t.offpeak_end) if t.peak_rate != t.offpeak_rate else None
-        return cheap_windows(status, offpeak, storage.tz, now)
+        mine = schedule_windows(app.state.controller.settings.schedules, storage.tz, now)
+        return mine + cheap_windows(status, offpeak, storage.tz, now)
 
     return Controller(
         app.state.collectors["battery"],
@@ -301,12 +302,27 @@ async def save_octopus(body: OctopusIn) -> dict:
     return get_octopus()
 
 
+class ScheduleIn(BaseModel):
+    action: str = "charge"
+    start: str = "00:30"
+    end: str = "05:30"
+    days: list[int] = [0, 1, 2, 3, 4, 5, 6]
+    power_w: int = 1500
+    target_soc: int = 90
+    enabled: bool = True
+
+
 class ControlIn(BaseModel):
     enabled: bool = False
     hold_cheap: bool = True
     grid_charge: bool = False
     charge_power_w: int = 1500
     charge_target_soc: int = 90
+    schedules: list[ScheduleIn] = []
+
+
+class ModeIn(BaseModel):
+    mode: int
 
 
 @app.get("/api/control")
@@ -317,13 +333,31 @@ def get_control() -> dict:
 @app.post("/api/control")
 async def save_control(body: ControlIn) -> dict:
     try:
-        settings = ControlSettings(**body.model_dump()).validate()
+        data = body.model_dump()
+        data["schedules"] = tuple(Schedule.from_dict(x) for x in data["schedules"])
+        settings = ControlSettings(**data).validate()
     except ValueError as err:
         raise HTTPException(status_code=422, detail=str(err)) from err
     app.state.connection_store.save_section("control", asdict(settings))
     controller: Controller = app.state.controller
     controller.update_settings(settings)
     await controller.tick()
+    return controller.status()
+
+
+@app.post("/api/control/mode")
+async def set_battery_mode(body: ModeIn) -> dict:
+    """Switch the battery to one of the Anker app's modes now."""
+    controller: Controller = app.state.controller
+    battery = app.state.collectors["battery"]
+    if not battery.connected:
+        raise HTTPException(status_code=409, detail="The battery isn't connected")
+    try:
+        await controller.set_mode(body.mode)
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+    except Exception as err:
+        raise HTTPException(status_code=502, detail=f"The battery didn't accept the change: {err}") from err
     return controller.status()
 
 
