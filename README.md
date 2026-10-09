@@ -43,6 +43,6 @@ You don't need to edit the compose file. Set any of these as **Environment varia
 ## More
 
 - **Try it without hardware:** `docker compose -f docker-compose.demo.yml up --build` runs simulated devices.
-- **API:** `/api/live`, `/api/history?hours=24`, `/api/energy?days=14`, `/api/raw` (every register, for troubleshooting) and `/healthz`.
+- **API:** `/api/live`, `/api/history?hours=24`, `/api/energy?days=14`, `/api/payback`, `/api/raw` (every register, for troubleshooting) and `/healthz`.
 - **Development:** `pip install -r requirements-dev.txt && python -m pytest`, then `python -m simulator.sim --meter-port 5021` and `python -m app`.
 - The register maps come from Anker's MIT-licensed [official Home Assistant integration](https://github.com/anker-charging/ha-anker-solix-official). See [NOTICE.md](NOTICE.md).

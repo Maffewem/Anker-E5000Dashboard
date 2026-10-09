@@ -336,6 +336,73 @@ async function refreshEnergy() {
   }));
 }
 
+// ---------- Battery payback ----------
+
+let payback = null;
+const money = (v) => (v == null ? null : `${v < 0 ? "−" : ""}£${Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+
+function duration(days) {
+  if (days < 60) return `${days} days`;
+  const months = Math.round(days / 30.44);
+  if (months < 24) return `${months} months`;
+  const y = Math.floor(months / 12), m = months % 12;
+  return m ? `${y} years ${m} months` : `${y} years`;
+}
+
+function renderPayback(p) {
+  payback = p;
+  const set = p.tariff.battery_cost > 0;
+  $("payback-empty").hidden = set;
+  if (!set) { $("payback-facts").replaceChildren(); return; }
+  const date = (iso) => new Date(`${iso}T12:00:00`).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" });
+  let eta;
+  if (p.payback_days === 0) eta = "Paid back";
+  else if (p.payback_days != null) eta = `About ${duration(p.payback_days)} (${date(p.payback_date)})`;
+  else eta = p.days ? "Not saving yet" : "Waiting for data";
+  factList($("payback-facts"), [
+    ["Saved so far", p.since ? `${money(p.saved)} over ${p.days} day${p.days === 1 ? "" : "s"}` : money(0)],
+    ["Average per day", money(p.per_day)],
+    ["Battery cost", money(p.tariff.battery_cost)],
+    ["Left to pay back", money(p.remaining)],
+    ["Payback", eta],
+    ["Discharge worth", money(p.discharge_value)],
+    ["Grid charging cost", money(p.grid_charge_cost)],
+    ["Solar export given up", money(p.solar_charge_cost)],
+  ]);
+}
+
+async function refreshPayback() {
+  try { renderPayback(await (await fetch("/api/payback", { cache: "no-store" })).json()); } catch (_) {}
+}
+
+$("open-costs").addEventListener("click", () => {
+  const t = (payback && payback.tariff) || {};
+  $("cost-battery").value = t.battery_cost || "";
+  $("cost-peak").value = t.peak_rate ?? "";
+  $("cost-offpeak").value = t.offpeak_rate ?? "";
+  $("cost-from").value = t.offpeak_start || "00:30";
+  $("cost-to").value = t.offpeak_end || "05:30";
+  $("cost-export").value = t.export_rate ?? "";
+  $("costs-msg").textContent = "";
+  $("costs").showModal();
+});
+$("costs-cancel").addEventListener("click", () => $("costs").close());
+$("costs-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const num = (id) => Number($(id).value) || 0;
+  try {
+    const p = await postSettings("/api/tariff", {
+      battery_cost: num("cost-battery"), peak_rate: num("cost-peak"), offpeak_rate: num("cost-offpeak"),
+      offpeak_start: $("cost-from").value || "00:00", offpeak_end: $("cost-to").value || "00:00", export_rate: num("cost-export"),
+    });
+    renderPayback(p);
+    $("costs").close();
+  } catch (err) {
+    $("costs-msg").className = "setup-msg error";
+    $("costs-msg").textContent = err.message;
+  }
+});
+
 // ---------- Setup ----------
 
 let setupShownOnce = false;
@@ -539,6 +606,8 @@ showTheme();
 refreshLive();
 refreshHistory();
 refreshEnergy();
+refreshPayback();
+setInterval(refreshPayback, 5 * 60 * 1000);
 setInterval(refreshLive, LIVE_MS);
 setInterval(() => { refreshHistory(); refreshEnergy(); }, HISTORY_MS);
 // Browsers slow timers down in background tabs, so catch up as soon as the

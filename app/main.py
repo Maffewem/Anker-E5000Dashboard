@@ -8,6 +8,8 @@ import hashlib
 import logging
 import os
 from contextlib import asynccontextmanager
+from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -20,6 +22,7 @@ from .collector import DEVICE_NAMES, Collector
 from .registers import BATTERY, METER
 from .config import Connection, ConnectionStore, Settings
 from .storage import Storage
+from .tariff import Tariff, payback
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO").upper(),
@@ -99,6 +102,33 @@ def history(
     offset_hours: int = Query(0, ge=0, le=24 * 366),
 ) -> dict:
     return app.state.storage.history(hours, offset_hours=offset_hours)
+
+
+class TariffIn(BaseModel):
+    battery_cost: float = 0.0
+    peak_rate: float = 28.0
+    offpeak_rate: float = 28.0
+    offpeak_start: str = "00:30"
+    offpeak_end: str = "05:30"
+    export_rate: float = 15.0
+
+
+@app.get("/api/payback")
+def get_payback() -> dict:
+    store: ConnectionStore = app.state.connection_store
+    storage: Storage = app.state.storage
+    tariff = Tariff.from_dict(store.load_tariff())
+    return payback(tariff, storage.battery_slots(), datetime.now(storage.tz).date())
+
+
+@app.post("/api/tariff")
+def save_tariff(body: TariffIn) -> dict:
+    try:
+        tariff = Tariff(**body.model_dump()).validate()
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+    app.state.connection_store.save_tariff(asdict(tariff))
+    return get_payback()
 
 
 @app.get("/api/energy")

@@ -28,6 +28,30 @@
     </div>
   </header>
 
+  <dialog id="costs" aria-labelledby="costs-title">
+    <form id="costs-form" method="dialog" novalidate>
+      <h2 id="costs-title">Battery costs</h2>
+      <p class="dialog-intro">Prices in pence per kWh, as on your bill. For a single-rate tariff, use the same price for peak and off-peak.</p>
+      <label for="cost-battery">What you paid for the battery (£)</label>
+      <input id="cost-battery" type="number" min="0" step="1" inputmode="decimal">
+      <div class="row">
+        <div><label for="cost-peak">Peak price</label><input id="cost-peak" type="number" min="0" step="0.01" inputmode="decimal"></div>
+        <div><label for="cost-offpeak">Off-peak price</label><input id="cost-offpeak" type="number" min="0" step="0.01" inputmode="decimal"></div>
+      </div>
+      <div class="row">
+        <div><label for="cost-from">Off-peak from</label><input id="cost-from" type="time" step="1800"></div>
+        <div><label for="cost-to">Off-peak until</label><input id="cost-to" type="time" step="1800"></div>
+      </div>
+      <label for="cost-export">Export price</label>
+      <input id="cost-export" type="number" min="0" step="0.01" inputmode="decimal">
+      <p class="setup-msg" id="costs-msg" role="status" aria-live="polite"></p>
+      <div class="dialog-actions">
+        <button type="button" class="secondary" id="costs-cancel">Cancel</button>
+        <button type="submit" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
   <div class="banner" id="banner" role="alert" hidden>
     <div id="banner-text" class="banner-lines"></div>
     <button type="button" id="banner-setup">Change connection</button>
@@ -121,6 +145,19 @@
           </table>
         </div>
         <p class="note">kWh, worked out from power readings since this dashboard started recording.</p>
+      </details>
+    </section>
+
+    <section class="card" id="payback-card">
+      <div class="card-head">
+        <h2>Battery payback</h2>
+        <button type="button" class="secondary" id="open-costs">Edit costs</button>
+      </div>
+      <p class="note" id="payback-empty" hidden>Enter what you paid for the battery and your electricity prices to see how long it takes to pay for itself.</p>
+      <dl class="facts" id="payback-facts"></dl>
+      <details>
+        <summary>How this is worked out</summary>
+        <p class="note">Each kWh the battery discharges is valued at the price for that half hour, as grid electricity it saved you buying. Charging costs the price for that half hour when the energy came from the grid, and your export rate when it came from solar you could have sold. Charging while the grid supplies power counts as grid charging. Totals start when this dashboard began recording, and the projection assumes future days save the same as the average so far.</p>
       </details>
     </section>
 

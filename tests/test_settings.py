@@ -102,3 +102,12 @@ def test_meter_cannot_reuse_the_solarbank_address(client):
     res = client.post("/api/settings/meter?skip_test=true", json={"host": "192.168.0.40"})
     assert res.status_code == 422
     assert "Solarbank" in res.json()["detail"]
+
+
+def test_tariff_saved_and_payback_returned(client):
+    assert client.get("/api/payback").json()["tariff"]["battery_cost"] == 0
+    res = client.post("/api/tariff", json={"battery_cost": 2500, "peak_rate": 30, "offpeak_rate": 7,
+                                           "offpeak_start": "23:30", "offpeak_end": "05:30", "export_rate": 15})
+    assert res.status_code == 200
+    assert client.get("/api/payback").json()["tariff"]["battery_cost"] == 2500
+    assert client.post("/api/tariff", json={"offpeak_start": "nope"}).status_code == 422
