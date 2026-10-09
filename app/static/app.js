@@ -349,6 +349,16 @@ function duration(days) {
   return m ? `${y} years ${m} months` : `${y} years`;
 }
 
+// "8 to 12 years": a range, since savings per day vary with the seasons.
+function durationRange(low, high) {
+  if (high >= 730) {
+    const [a, b] = [Math.round(low / 365.25), Math.round(high / 365.25)];
+    return a === b ? `${a} years` : `${a} to ${b} years`;
+  }
+  const [a, b] = [Math.max(1, Math.round(low / 30.44)), Math.max(1, Math.round(high / 30.44))];
+  return a === b ? `${a} month${a === 1 ? "" : "s"}` : `${a} to ${b} months`;
+}
+
 function renderPayback(p) {
   payback = p;
   const set = p.tariff.battery_cost > 0;
@@ -358,10 +368,17 @@ function renderPayback(p) {
     : "Enter what you paid for the battery and your electricity prices to see how long it takes to pay for itself.";
   if (!set) { $("payback-facts").replaceChildren(); return; }
   const date = (iso) => new Date(`${iso}T12:00:00`).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" });
+  const year = (iso) => iso.slice(0, 4);
   let eta;
   if (p.payback_days === 0) eta = "Paid back";
-  else if (p.payback_days != null) eta = `About ${duration(p.payback_days)} (${date(p.payback_date)})`;
-  else eta = p.days ? "Not saving yet" : "Waiting for data";
+  else if (p.payback_days != null) {
+    const [a, b] = [year(p.payback_date_low), year(p.payback_date_high)];
+    eta = `About ${durationRange(p.payback_days_low, p.payback_days_high)} (${a === b ? a : `${a} to ${b}`})`;
+  } else if (p.payback_too_long) {
+    eta = "More than 50 years at this rate";
+  } else if (p.days < p.min_days) {
+    eta = `Collecting data: ${p.days} of ${p.min_days} days${p.tariff.installed ? "" : ". Add the install date to count the battery's history"}`;
+  } else eta = "Not saving yet";
   $("payback-source").hidden = p.source !== "octopus";
   $("payback-source").textContent = p.source === "octopus"
     ? `Using your actual ${p.tariff_name || "Octopus"} prices for each half hour since they were fetched, and the prices you typed before that.` : "";
@@ -370,7 +387,8 @@ function renderPayback(p) {
     $("payback-source").textContent = "Using your own prices (set in Edit costs) instead of Octopus.";
   }
   factList($("payback-facts"), [
-    ["Saved so far", p.since ? `${money(p.saved)} over ${p.days} day${p.days === 1 ? "" : "s"}` : money(0)],
+    ["Saved so far", p.since ? `${money(p.saved)} since ${date(p.since)}` : money(0)],
+    ...(p.saved_before_recording != null ? [["Of which before recording", `${money(p.saved_before_recording)} (estimated)`]] : []),
     ["Average per day", money(p.per_day)],
     ["Battery cost", money(p.tariff.battery_cost)],
     ["Left to pay back", money(p.remaining)],
@@ -388,6 +406,8 @@ async function refreshPayback() {
 $("open-costs").addEventListener("click", () => {
   const t = (payback && payback.tariff) || {};
   $("cost-battery").value = t.battery_cost || "";
+  $("cost-installed").value = t.installed || "";
+  $("cost-installed").max = isoDay(new Date());
   $("cost-peak").value = t.peak_rate ?? "";
   $("cost-offpeak").value = t.offpeak_rate ?? "";
   $("cost-from").value = t.offpeak_start || "00:30";
@@ -429,6 +449,8 @@ $("costs-form").addEventListener("submit", async (e) => {
       battery_cost: num("cost-battery"), peak_rate: num("cost-peak"), offpeak_rate: num("cost-offpeak"),
       offpeak_start: time("cost-from", "00:00"), offpeak_end: time("cost-to", "00:00"), export_rate: num("cost-export"),
       use_manual: $("cost-manual").checked,
+      battery_cost: num("cost-battery"), installed: $("cost-installed").value, peak_rate: num("cost-peak"), offpeak_rate: num("cost-offpeak"),
+      offpeak_start: $("cost-from").value || "00:00", offpeak_end: $("cost-to").value || "00:00", export_rate: num("cost-export"),
     });
     renderPayback(p);
     $("costs").close();

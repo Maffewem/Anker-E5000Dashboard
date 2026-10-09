@@ -101,6 +101,12 @@ class ConnectionStore:
     def save_section(self, name: str, value: dict) -> None:
         data = self._read()
         data[name] = value
+    def load_lifetime(self) -> dict | None:
+        return self._read().get("lifetime") or None
+
+    def save_lifetime(self, totals: dict) -> None:
+        data = self._read()
+        data["lifetime"] = totals
         self._write(data)
 
     def octopus_from_env(self) -> bool:
