@@ -16,7 +16,7 @@ You get live solar, home, battery and grid power, power history, daily energy to
 
 The image is private too. To let Portainer pull it, add a registry under **Registries › Add registry › Custom**. Use `ghcr.io`, your GitHub username, and a [token](https://github.com/settings/tokens) with `read:packages`.
 
-**Updating.** Each merge to `main` publishes a new `:latest` image once its CI run is green. In Portainer, open the stack, click **Pull and redeploy**, and turn on **Re-pull image** (without it Portainer reuses the image it already has). The footer of the dashboard shows the version, which matches the commit on GitHub; the container log also prints `Solarbank dashboard version …` at startup.
+**Updating.** Each merge to `main` publishes a new `:latest` image once its CI run is green. In Portainer, open the stack, click **Pull and redeploy**, and turn on **Re-pull image** (without it Portainer reuses the image it already has). The dashboard footer shows the version and build date (for example `v1.0.58 · 9 Oct 2026`; hover for the commit), and the container log prints `Solarbank dashboard version …` at startup. Each build on `main` is also tagged with its version, so you can pin one instead of `:latest`. To start a new series, change `VERSION` (major.minor) or push a `v1.2.3` tag.
 
 ## If something goes wrong
 

@@ -58,7 +58,10 @@ def _asset_version() -> str:
     return digest.hexdigest()[:12]
 
 
-APP_VERSION = os.environ.get("APP_VERSION", "dev").strip()[:12] or "dev"  # the commit the image was built from
+# Set by the image build: a readable version (1.0.57), the commit and the build date.
+APP_VERSION = os.environ.get("APP_VERSION", "").strip()[:32] or "dev"
+APP_COMMIT = os.environ.get("APP_COMMIT", "").strip()[:40]
+APP_BUILT = os.environ.get("APP_BUILT", "").strip()[:10]
 INDEX_HTML = (STATIC / "index.html").read_text().replace("{{version}}", _asset_version())
 
 
@@ -120,7 +123,8 @@ ENV_NAMES = {"battery": "SOLARBANK_HOST", "meter": "METER_HOST"}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    log.info("Solarbank dashboard version %s", APP_VERSION)
+    log.info("Solarbank dashboard version %s (commit %s, built %s)", APP_VERSION, APP_COMMIT[:7] or "unknown",
+             APP_BUILT or "unknown")
     settings = Settings.from_env()
     storage = Storage(settings.db_path, settings.retention_days, settings.timezone)
     store = ConnectionStore(settings.settings_path)
@@ -178,7 +182,7 @@ def live() -> dict:
     battery: Collector = app.state.collectors["battery"]
     meter: Collector = app.state.collectors["meter"]
     return {
-        "version": APP_VERSION,
+        "version": {"name": APP_VERSION, "commit": APP_COMMIT, "built": APP_BUILT},
         "status": battery.status(),
         "data": battery.snapshot,
         "meter": {
