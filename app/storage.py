@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS meter_minutes (
     voltage REAL,
     import_total_kwh REAL,
     export_total_kwh REAL
+);
 -- Prices per local half hour in p/kWh, from Octopus when it is connected.
 CREATE TABLE IF NOT EXISTS rates (
     day TEXT NOT NULL,

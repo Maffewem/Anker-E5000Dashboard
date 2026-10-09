@@ -157,6 +157,7 @@ class TariffIn(BaseModel):
     offpeak_start: str = "00:30"
     offpeak_end: str = "05:30"
     export_rate: float = 15.0
+    installed: str = ""
 
 
 @app.get("/api/payback")
@@ -168,12 +169,25 @@ def get_payback() -> dict:
     profile = octopus.profile() if octopus.configured else None
     if profile:
         # Octopus prices stand in for the typed ones; only the battery cost is kept.
-        tariff = Tariff.from_dict({**{k: v for k, v in profile.items() if v is not None}, "battery_cost": tariff.battery_cost})
+        tariff = Tariff.from_dict({**{k: v for k, v in profile.items() if v is not None},
+                                   "battery_cost": tariff.battery_cost, "installed": tariff.installed})
     prices = storage.rates() if octopus.configured else None
-    out = payback(tariff, storage.battery_slots(), datetime.now(storage.tz).date(), prices)
+    out = payback(tariff, storage.battery_slots(), datetime.now(storage.tz).date(), prices, _lifetime())
     out["source"] = "octopus" if profile else "manual"
     out["tariff_name"] = (octopus.info.get("import") or {}).get("name") if profile else None
     return out
+
+
+def _lifetime() -> dict | None:
+    """The battery's lifetime charge/discharge totals, remembered while it's offline."""
+    store: ConnectionStore = app.state.connection_store
+    snap = app.state.collectors["battery"].snapshot
+    now = {"charged_kwh": snap.get("charged_total_kwh"), "discharged_kwh": snap.get("discharged_total_kwh")}
+    if None in now.values():
+        return store.load_lifetime()
+    if now != store.load_lifetime():
+        store.save_lifetime(now)
+    return now
 
 
 @app.post("/api/tariff")

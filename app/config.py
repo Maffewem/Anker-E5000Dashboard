@@ -94,6 +94,14 @@ class ConnectionStore:
         data["tariff"] = tariff
         self._write(data)
 
+    def load_lifetime(self) -> dict | None:
+        return self._read().get("lifetime") or None
+
+    def save_lifetime(self, totals: dict) -> None:
+        data = self._read()
+        data["lifetime"] = totals
+        self._write(data)
+
     def octopus_from_env(self) -> bool:
         return bool(os.environ.get("OCTOPUS_API_KEY", "").strip())
 
