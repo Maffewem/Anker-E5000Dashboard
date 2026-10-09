@@ -179,6 +179,10 @@ dialog input:focus-visible { outline: 2px solid var(--solar); outline-offset: 1p
 #events-table th, #events-table td { text-align: left; }
 #events-table td:last-child { white-space: normal; min-width: 140px; }
 #events-table td:first-child { color: var(--text-secondary); white-space: normal; min-width: 64px; }
+/* The log scrolls inside the card instead of growing down the page. */
+.events-scroll { max-height: 400px; overflow-y: auto; }
+#events-table thead th { position: sticky; top: 0; background: var(--surface); }
+#events-more { margin: 8px 0 4px; }
 .windows { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 6px; }
 .windows li { display: flex; gap: 10px; align-items: baseline; font-size: 14px; flex-wrap: wrap; }
 .windows .tag { font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-secondary); }

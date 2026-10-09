@@ -972,7 +972,7 @@ let meterPromptShown = false;
 let savedSettings = {};
 // ---------- Event log ----------
 
-const EVENT_PAGE = 50;
+const EVENT_PAGE = 20;
 let eventsShown = [];
 
 function eventTime(ts) {
