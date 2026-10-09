@@ -91,6 +91,14 @@ class Schedule:
         return Schedule(self.action, f"{h1:02d}:{m1:02d}", f"{h2:02d}:{m2:02d}", days,
                         int(self.power_w), int(self.target_soc), bool(self.enabled))
 
+    def week_minutes(self) -> list[tuple[int, int, int]]:
+        """(day, start, end) in minutes from Monday 00:00, one per day it runs."""
+        h1, m1 = _hhmm(self.start)
+        h2, m2 = _hhmm(self.end)
+        a, b = h1 * 60 + m1, h2 * 60 + m2
+        length = b - a if b > a else b - a + 1440
+        return [(d, d * 1440 + a, d * 1440 + a + length) for d in self.days]
+
     def describe(self) -> str:
         days = "every day" if len(self.days) == 7 else ", ".join(DAY_NAMES[d] for d in self.days)
         what = {CHARGE: f"Charge at {self.power_w} W to {self.target_soc}%",
@@ -124,10 +132,27 @@ class ControlSettings:
             raise ValueError("Stop charging at must be between 20% and 100%")
         if len(self.schedules) > MAX_SCHEDULES:
             raise ValueError(f"Up to {MAX_SCHEDULES} schedules")
+        schedules = tuple(s.validate() for s in self.schedules)
+        _check_overlaps(schedules)
         return ControlSettings(enabled=bool(self.enabled), hold_cheap=bool(self.hold_cheap),
                                grid_charge=bool(self.grid_charge), charge_power_w=int(self.charge_power_w),
                                charge_target_soc=int(self.charge_target_soc), charge_dispatch=bool(self.charge_dispatch),
-                               schedules=tuple(s.validate() for s in self.schedules))
+                               schedules=schedules)
+
+
+def _check_overlaps(schedules) -> None:
+    """Two enabled schedules can't cover the same minute: which should win would be a guess."""
+    week = 7 * 1440
+    spans = [(sch, d, a, b) for sch in schedules if sch.enabled for d, a, b in sch.week_minutes()]
+    for i, (s1, d1, a1, b1) in enumerate(spans):
+        for s2, d2, a2, b2 in spans[i + 1:]:
+            if s1 is s2:
+                continue
+            # Sunday night runs into Monday morning, so compare a week either side too.
+            if any(a1 < b2 + k and a2 + k < b1 for k in (-week, 0, week)):
+                what = {CHARGE: "Charge", HOLD: "Hold", DISCHARGE: "Discharge"}
+                raise ValueError(f"Schedules overlap on {DAY_NAMES[d1]}: {what[s1.action]} {s1.start}-{s1.end} "
+                                 f"and {what[s2.action]} {s2.start}-{s2.end}. Change the times or turn one off.")
 
 
 @dataclass(frozen=True)

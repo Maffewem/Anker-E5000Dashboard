@@ -364,3 +364,21 @@ def test_smart_charge_slot_is_logged_and_handed_back(monkeypatch):
     assert c.writes[-1] == ("operating_mode", 6)
     assert [e[3] for e in events] == ["octopus", "octopus", "dashboard"]  # took control, charged, handed back
     assert "13:20-13:40" in events[0][1]
+
+
+def test_overlapping_schedules_are_rejected():
+    from app.control import Schedule
+    every = (0, 1, 2, 3, 4, 5, 6)
+    night = Schedule("charge", "00:30", "05:30", every, 1500, 90, True)
+    day = Schedule("charge", "13:00", "15:00", (0, 1, 2, 3, 4), 1500, 90, True)
+    peak = Schedule("discharge", "16:00", "19:00", every, 1500, 20, True)
+    ControlSettings(schedules=(night, day, peak)).validate()  # several windows a day is fine
+    clash = Schedule("hold", "05:00", "06:00", every, 1500, 90, True)
+    with pytest.raises(ValueError, match="overlap"):
+        ControlSettings(schedules=(night, clash)).validate()
+    ControlSettings(schedules=(night, Schedule("hold", "05:00", "06:00", every, 1500, 90, False))).validate()  # off: fine
+    # Sunday 23:00 to 01:00 runs into Monday's 00:30 start.
+    late = Schedule("hold", "23:00", "01:00", (6,), 1500, 90, True)
+    with pytest.raises(ValueError, match="overlap"):
+        ControlSettings(schedules=(night, late)).validate()
+    ControlSettings(schedules=(Schedule("hold", "23:00", "00:30", (6,), 1500, 90, True), night)).validate()  # touching is fine
