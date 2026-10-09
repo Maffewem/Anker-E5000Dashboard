@@ -108,13 +108,14 @@ IMPLEMENTED = {
     3: {*range(10060, 10082), *range(60000, 60004)},
 }
 
-METER_IMPLEMENTED = {4: set(range(10620, 10713))}
+METER_IMPLEMENTED = {4: {*range(10620, 10713), *range(32768, 32773)}}
 
 METER_STATIC = {
     "meter_model": "A17X8",
     "meter_type": 1,
     "meter_sn": "AZVDNSL0SIMULATOR",
     "meter_sw_version": "1.0.4.2",
+    "meter_pn": "A17X9",
     "phase_1_voltage": 2405,  # 240.5 V
 }
 
