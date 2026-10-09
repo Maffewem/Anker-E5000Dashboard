@@ -119,6 +119,35 @@ def _ranges(slots: set[int]) -> str:
     return ", ".join(f"{slot_time(r[0])}-{slot_time(r[-1] + 1)}" for r in out)
 
 
+def cheap_slots(known: list[tuple[float, int]], need: int) -> tuple[set[int], float]:
+    """The day's cheap half hours and the dearest price among them.
+
+    Prices are taken a level at a time (within 0.5p counts as one level), so a
+    whole off-peak window on Go or Cosy comes in together. Levels are added
+    until there are enough half hours to fill the battery, but never the top
+    level, and never one that would make more than half the day cheap: a big
+    battery or a slow charger can't make Go's day rate or Cosy's mid rate
+    "cheap" just because the off-peak window is too short to fill it.
+    With one price all day there's nothing cheap to hold for.
+    """
+    levels: list[list[tuple[float, int]]] = []
+    for p, s in sorted(known):
+        if levels and p <= levels[-1][0][0] + 0.5:
+            levels[-1].append((p, s))
+        else:
+            levels.append([(p, s)])
+    cheap: set[int] = set()
+    cut = 0.0
+    for level in levels[:-1]:
+        if cheap and len(cheap) + len(level) > len(known) / 2:
+            break
+        cheap |= {s for _, s in level}
+        cut = level[-1][0]
+        if len(cheap) >= need:
+            break
+    return cheap, cut
+
+
 def simulate(c: Candidate, days: dict[str, list], cap_kwh: float, power_kw: float, battery: bool = True) -> dict:
     """Import, export and cost over the recorded days on one tariff, with a
     breakdown of where the money goes."""
@@ -139,15 +168,8 @@ def simulate(c: Candidate, days: dict[str, list], cap_kwh: float, power_kw: floa
         if not known:
             continue
         counted += 1
-        # The day's cheapest half hours: enough to fill the battery, plus any
-        # others at the same price (a whole off-peak window on Go or Cosy).
         need = max(1, math.ceil((cap_kwh - floor) / max(step, 0.01)))
-        ranked = sorted(known)
-        cut = ranked[min(need, len(ranked)) - 1][0]
-        cheap = {s for p, s in known if p <= cut + 0.5}
-        dear = [p for p, s in known if s not in cheap]
-        if not dear:  # one price all day (a flat tariff): nothing to hold for, just use the battery
-            cheap = set()
+        cheap, cut = cheap_slots(known, need)
         # Grid charging pays when a stored kWh, after losses, costs less than
         # the grid price it replaces: the dearest half hours the house uses,
         # up to one battery's worth. With no solar this is all the battery does.
@@ -159,8 +181,8 @@ def simulate(c: Candidate, days: dict[str, list], cap_kwh: float, power_kw: floa
             if left <= 0:
                 break
         used = (cap_kwh - floor) - left
-        grid_charge_pays = bool(dear) and used > 0 and cut / EFFICIENCY < offset / used
-        mode = "grid" if grid_charge_pays else ("flat" if not dear else "small_gap")
+        grid_charge_pays = bool(cheap) and used > 0 and cut / EFFICIENCY < offset / used
+        mode = "grid" if grid_charge_pays else ("flat" if not cheap else "small_gap")
         modes[mode] = modes.get(mode, 0) + 1
         if battery and grid_charge_pays:
             key = _ranges(cheap)
