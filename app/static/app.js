@@ -903,6 +903,11 @@ function batteryPlan(row) {
   return `Cheap and peak prices are too close for grid charging to pay after about 10% charging losses.${solar}`;
 }
 
+$("compare-more").addEventListener("click", () => {
+  for (const li of $("compare-result").children) li.hidden = false;
+  $("compare-more").hidden = true;
+});
+
 $("compare-run").addEventListener("click", async () => {
   $("compare-msg").className = "setup-msg";
   $("compare-msg").textContent = "Fetching tariffs and replaying your history…";
@@ -922,35 +927,39 @@ $("compare-run").addEventListener("click", async () => {
   $("compare-msg").textContent = r.message || (r.problems && r.problems.length ? `Some tariffs were skipped: ${r.problems.join("; ")}` : "");
   $("compare-result").hidden = !r.rows.length;
   $("compare-assumptions").hidden = !r.rows.length;
+  // One compact line per tariff (cheapest first); the details open on a tap.
+  const SHOWN = 5;
   $("compare-result").replaceChildren(...r.rows.map((row, i) => {
     const li = document.createElement("li");
     if (i === 0) li.className = "best";
     if (row.key === "current") li.classList.add("current");
-    const info = document.createElement("div");
-    const strong = document.createElement("b"); strong.textContent = row.name;
-    const extra = [
-      batteryPlan(row),
-      row.export ? `Export: ${row.export}` : "", row.note || "",
-    ].filter(Boolean);
-    info.append(strong, ...extra.map((t) => { const sm = document.createElement("small"); sm.textContent = t; return sm; }));
-    const money = document.createElement("div");
-    money.className = "money";
-    const total = document.createElement("b"); total.textContent = `${pounds(row.annual)} a year`;
-    money.append(total);
-    if (row.vs_current != null && row.key !== "current") {
-      const vs = document.createElement("small");
-      vs.className = row.vs_current < 0 ? "cheaper" : "dearer";
-      vs.textContent = `${pounds(Math.abs(row.vs_current))} ${row.vs_current < 0 ? "less" : "more"} than now`;
-      money.append(vs);
+    li.hidden = i >= SHOWN && row.key !== "current";
+    const det = document.createElement("details");
+    const sum = document.createElement("summary");
+    const name = document.createElement("span"); name.className = "name"; name.textContent = row.name;
+    const total = document.createElement("span"); total.className = "total"; total.textContent = pounds(row.annual);
+    const vs = document.createElement("span"); vs.className = "vs";
+    if (row.key === "current") vs.textContent = "now";
+    else if (row.vs_current != null) {
+      vs.className += row.vs_current < 0 ? " cheaper" : " dearer";
+      vs.textContent = `${row.vs_current < 0 ? "−" : "+"}${pounds(Math.abs(row.vs_current))}`;
     }
+    sum.append(name, total, vs);
     const b = row.breakdown || {};
     const parts = [["House", b.home], ["Battery charging", b.battery_charging], ["Standing charge", b.standing], ["Export credit", b.export, true]]
       .filter(([label, v]) => v != null && (v || label === "House"))
       .map(([label, v, minus]) => `${label} ${minus ? "−" : ""}${pounds(v)}`);
-    const split = document.createElement("small"); split.textContent = parts.join(" · ");
-    li.append(info, money, split);
+    const more = document.createElement("div"); more.className = "more";
+    for (const t of [batteryPlan(row), parts.join(" · "), row.export ? `Export: ${row.export}` : "", row.note || ""].filter(Boolean)) {
+      const p = document.createElement("p"); p.textContent = t; more.append(p);
+    }
+    det.append(sum, more);
+    li.append(det);
     return li;
   }));
+  const extra = r.rows.length - [...$("compare-result").children].filter((li) => !li.hidden).length;
+  $("compare-more").hidden = extra <= 0;
+  $("compare-more").textContent = `Show ${extra} more`;
   const best = r.rows[0];
   const cur = r.rows.find((x) => x.key === "current");
   let summary = "";
