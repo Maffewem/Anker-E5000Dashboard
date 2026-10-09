@@ -25,6 +25,7 @@ from pydantic import BaseModel
 from .collector import DEVICE_NAMES, Collector
 from .registers import BATTERY, METER
 from .config import Connection, ConnectionStore, Settings
+from .relay import Relay
 from .storage import Storage
 from .tariff import Tariff, payback
 
@@ -73,9 +74,20 @@ async def lifespan(app: FastAPI):
     app.state.connection_store = store
     app.state.storage = storage
     tasks = [asyncio.create_task(c.run()) for c in collectors.values()]
+    relay = None
+    if settings.relay_meter:
+        relay = Relay(collectors["meter"], settings.relay_port)
+        try:
+            await relay.start()
+        except OSError as err:
+            log.error("Can't start the Smart Meter relay on port %s: %s", settings.relay_port, err)
+            relay = None
+    app.state.relay = relay
     try:
         yield
     finally:
+        if relay is not None:
+            await relay.close()
         for task in tasks:
             task.cancel()
         for task in tasks:
@@ -96,7 +108,11 @@ def live() -> dict:
     return {
         "status": battery.status(),
         "data": battery.snapshot,
-        "meter": {"status": meter.status(), "data": meter.snapshot},
+        "meter": {
+            "status": meter.status(),
+            "data": meter.snapshot,
+            "relay_port": app.state.relay.port if app.state.relay else None,
+        },
     }
 
 

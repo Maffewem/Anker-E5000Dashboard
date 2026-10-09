@@ -40,6 +40,9 @@ class Collector:
         self.client: AsyncModbusTcpClient | None = None
         self.snapshot: dict[str, Any] = {}
         self.raw: dict[str, Any] = {}
+        # Every register word from the last poll, keyed (function code,
+        # address), for the Modbus relay to serve.
+        self.words: dict[tuple[int, int], int] = {}
         self.connected = False
         self.last_update: float | None = None
         self.last_error: str | None = None
@@ -65,7 +68,7 @@ class Collector:
         """Switch to a different device address; takes effect immediately."""
         self.connection = connection
         self._mark_offline(None)
-        self.snapshot, self.raw = {}, {}
+        self.snapshot, self.raw, self.words = {}, {}, {}
         self.last_update = None
         self._unavailable_blocks.clear()
         self._changed.set()
@@ -147,6 +150,11 @@ class Collector:
         if not blocks:
             raise ConnectionError("device answered but returned no data")
 
+        self.words = {
+            (3 if kind == HOLDING else 4, start + i): word
+            for (kind, start), values in blocks.items()
+            for i, word in enumerate(values)
+        }
         self.raw = extract(blocks, self.profile.registers)
         self.snapshot = self.profile.derive(self.raw)
         now = time.time()
