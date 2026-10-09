@@ -101,6 +101,8 @@ class ConnectionStore:
     def save_section(self, name: str, value: dict) -> None:
         data = self._read()
         data[name] = value
+        self._write(data)
+
     def load_lifetime(self) -> dict | None:
         return self._read().get("lifetime") or None
 
