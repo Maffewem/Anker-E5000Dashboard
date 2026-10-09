@@ -123,7 +123,8 @@ async def _octopus_loop(app: FastAPI) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    log.info("Solarbank dashboard version %s", APP_VERSION)
+    log.info("Solarbank dashboard version %s (commit %s, built %s)", APP_VERSION, APP_COMMIT[:7] or "unknown",
+             APP_BUILT or "unknown")
     app.state.auth = auth = Auth.from_env()
     if auth.read_only:
         log.info("READ_ONLY is set: the dashboard can't change anything")

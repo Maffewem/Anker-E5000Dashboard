@@ -130,6 +130,8 @@ def simulate(c: Candidate, days: dict[str, list], cap_kwh: float, power_kw: floa
     charge_kwh = from_battery_kwh = 0.0
     counted = 0
     windows: dict[str, int] = {}  # how often each charging window was used
+    modes: dict[str, int] = {}  # per day: "grid" charging pays, "flat" one price, "small_gap" not worth it
+    solar_kwh = 0.0
     for day in sorted(days):
         net = days[day]
         prices = [c.import_p(day, s) for s in range(48)]
@@ -146,7 +148,20 @@ def simulate(c: Candidate, days: dict[str, list], cap_kwh: float, power_kw: floa
         dear = [p for p, s in known if s not in cheap]
         if not dear:  # one price all day (a flat tariff): nothing to hold for, just use the battery
             cheap = set()
-        grid_charge_pays = bool(dear) and cut / EFFICIENCY < sum(dear) / len(dear)
+        # Grid charging pays when a stored kWh, after losses, costs less than
+        # the grid price it replaces: the dearest half hours the house uses,
+        # up to one battery's worth. With no solar this is all the battery does.
+        offset, left = 0.0, cap_kwh - floor
+        for p, s in sorted(((p, s) for p, s in known if s not in cheap), reverse=True):
+            take = min(max(net[s], 0.0), left)
+            offset += take * p
+            left -= take
+            if left <= 0:
+                break
+        used = (cap_kwh - floor) - left
+        grid_charge_pays = bool(dear) and used > 0 and cut / EFFICIENCY < offset / used
+        mode = "grid" if grid_charge_pays else ("flat" if not dear else "small_gap")
+        modes[mode] = modes.get(mode, 0) + 1
         if battery and grid_charge_pays:
             key = _ranges(cheap)
             windows[key] = windows.get(key, 0) + 1
@@ -158,6 +173,7 @@ def simulate(c: Candidate, days: dict[str, list], cap_kwh: float, power_kw: floa
                 spare = -load
                 stored = min(spare, step, (cap_kwh - soc) / EFFICIENCY) if battery else 0.0
                 soc += stored * EFFICIENCY
+                solar_kwh += stored
                 exported = spare - stored
             elif battery and s in cheap:
                 house = load  # hold: the house uses cheap grid power
@@ -184,8 +200,10 @@ def simulate(c: Candidate, days: dict[str, list], cap_kwh: float, power_kw: floa
             "breakdown": {"home": yearly(home_p), "battery_charging": yearly(charge_p),
                           "export": yearly(export_p), "standing": yearly(standing_p)},
             "daily": {"grid_charge_kwh": round(charge_kwh / counted, 1) if counted else 0,
-                      "from_battery_kwh": round(from_battery_kwh / counted, 1) if counted else 0},
-            "charge_window": max(windows, key=windows.get) if windows else None}
+                      "from_battery_kwh": round(from_battery_kwh / counted, 1) if counted else 0,
+                      "solar_stored_kwh": round(solar_kwh / counted, 1) if counted else 0},
+            "charge_window": max(windows, key=windows.get) if windows else None,
+            "battery_mode": max(modes, key=modes.get) if modes else None}
 
 
 class Comparer:
@@ -336,8 +354,9 @@ def compare(candidates: list[Candidate], usage: list[dict], cap_kwh: float, powe
             f"Uses the {len(days)} day(s) of home use and solar recorded so far, scaled to a year. "
             "More history, especially across seasons, makes this more reliable.",
             f"Battery: {cap_kwh:g} kWh, {power_kw:g} kW, {EFFICIENCY:.0%} round-trip efficiency, {RESERVE:.0%} kept in reserve.",
-            "On each tariff the battery stores spare solar, then charges from the grid in that tariff's cheapest "
-            "hours each day (up to full) when that pays after losses, holding so the house runs on the cheap price. "
+            "On each tariff the battery stores any spare solar, then charges from the grid in that tariff's cheapest "
+            "hours each day (up to full) whenever that costs less, after losses, than the peak electricity it "
+            "replaces, holding so the house runs on the cheap price. Without solar, grid charging is all it does. "
             "The rest of the day it covers the house's half-hour by half-hour use until it reaches its reserve. "
             "It isn't used to export to the grid.",
             "Each tariff's yearly cost is split into the house's own grid use, grid electricity used to charge "

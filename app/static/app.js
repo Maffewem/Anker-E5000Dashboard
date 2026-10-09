@@ -889,6 +889,20 @@ $("custom-preset").addEventListener("change", () => {
   }
 });
 
+// What the battery does on this tariff in the replay, in plain words.
+function batteryPlan(row) {
+  const d = row.daily || {};
+  const solar = d.solar_stored_kwh > 0.1 ? ` It also stores about ${d.solar_stored_kwh} kWh of spare solar a day.` : "";
+  if (row.charge_window) {
+    return `Battery charges from the grid ${row.charge_window} (about ${d.grid_charge_kwh} kWh a day) and covers the house in dearer hours.${solar}`;
+  }
+  if (row.battery_mode === "flat") {
+    return solar ? `One price all day, so grid charging saves nothing.${solar}`
+      : "One price all day, so the battery can't save anything here without solar.";
+  }
+  return `Cheap and peak prices are too close for grid charging to pay after about 10% charging losses.${solar}`;
+}
+
 $("compare-run").addEventListener("click", async () => {
   $("compare-msg").className = "setup-msg";
   $("compare-msg").textContent = "Fetching tariffs and replaying your history…";
@@ -915,8 +929,7 @@ $("compare-run").addEventListener("click", async () => {
     const info = document.createElement("div");
     const strong = document.createElement("b"); strong.textContent = row.name;
     const extra = [
-      row.charge_window ? `Battery charges ${row.charge_window}, about ${row.daily.grid_charge_kwh} kWh a day from the grid`
-        : "Battery runs on solar only (grid charging doesn't pay)",
+      batteryPlan(row),
       row.export ? `Export: ${row.export}` : "", row.note || "",
     ].filter(Boolean);
     info.append(strong, ...extra.map((t) => { const sm = document.createElement("small"); sm.textContent = t; return sm; }));
