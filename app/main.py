@@ -30,7 +30,7 @@ from .config import Connection, ConnectionStore, Settings
 from .control import ControlSettings, Controller, cheap_windows
 from .octopus import Octopus, OctopusError, tariff_parts, validate as validate_octopus
 from .relay import Relay
-from .storage import Storage
+from .storage import EVENT_KINDS, Storage
 from .tariff import Tariff, payback
 
 logging.basicConfig(
@@ -494,9 +494,23 @@ def _validated(body: ConnectionIn) -> Connection:
         raise HTTPException(status_code=422, detail=str(err)) from err
 
 
+@app.get("/api/events")
+def events(
+    limit: int = Query(100, ge=1, le=1000),
+    before: int | None = Query(None, description="an event id; returns older events"),
+    kind: str = Query("", description="comma-separated kinds, e.g. charging,mode"),
+) -> list[dict]:
+    """The event log, newest first."""
+    kinds = [k for k in kind.split(",") if k]
+    unknown = set(kinds) - set(EVENT_KINDS)
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"Unknown kind: {', '.join(sorted(unknown))}")
+    return app.state.storage.events(limit, before, kinds)
+
+
 @app.get("/api/export")
 def export(
-    data: str = Query("minutes", pattern="^(minutes|daily|meter|slots)$"),
+    data: str = Query("minutes", pattern="^(minutes|daily|meter|slots|events)$"),
     start: date | None = None,
     end: date | None = None,
     format: str = Query("csv", pattern="^(csv|json)$"),
@@ -505,6 +519,7 @@ def export(
 
     minutes: Solarbank power and energy per minute. daily: daily kWh totals.
     meter: Smart Meter readings per minute. slots: battery energy per half hour.
+    events: the event log.
     """
     storage: Storage = app.state.storage
     today = datetime.now(storage.tz).date()

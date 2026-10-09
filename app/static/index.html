@@ -303,6 +303,28 @@
       <dl class="facts" id="facts"></dl>
     </section>
 
+    <section class="card" id="events-card">
+      <div class="card-head">
+        <h2>Event log</h2>
+        <select id="events-filter" aria-label="Show">
+          <option value="">Everything</option>
+          <option value="charging">Charging and discharging</option>
+          <option value="mode,setting">Mode and settings</option>
+          <option value="connection">Connection</option>
+          <option value="firmware">Firmware</option>
+          <option value="control">Dashboard actions</option>
+        </select>
+      </div>
+      <p class="note" id="events-empty" hidden>Nothing logged yet. Changes to the battery's mode, settings and charging, and devices connecting or dropping, appear here as they happen.</p>
+      <div class="table-wrap">
+        <table id="events-table">
+          <thead><tr><th>When</th><th>Device</th><th>What happened</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <button type="button" class="link" id="events-more" hidden>Show older</button>
+    </section>
+
     <section class="card" id="export-card">
       <h2>Export data</h2>
       <form class="export" id="export-form">
@@ -312,6 +334,7 @@
             <option value="daily">Daily totals</option>
             <option value="meter">Smart Meter, every minute</option>
             <option value="slots">Battery, every half hour</option>
+            <option value="events">Event log</option>
           </select>
         </label>
         <label>From <input type="date" id="export-start" required></label>

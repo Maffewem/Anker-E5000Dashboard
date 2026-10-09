@@ -739,6 +739,59 @@ let setupShownOnce = false;
 let setupDevice = "battery";
 let meterPromptShown = false;
 let savedSettings = {};
+// ---------- Event log ----------
+
+const EVENT_PAGE = 50;
+let eventsShown = [];
+
+function eventTime(ts) {
+  const d = new Date(ts * 1000);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  return sameDay
+    ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : d.toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+function renderEvents() {
+  const body = $("events-table").querySelector("tbody");
+  body.replaceChildren(...eventsShown.map((e) => {
+    const tr = document.createElement("tr");
+    for (const text of [eventTime(e.ts), DEVICE_LABEL[e.device] || e.device, e.message]) {
+      const td = document.createElement("td");
+      td.textContent = text;
+      tr.append(td);
+    }
+    return tr;
+  }));
+  $("events-empty").hidden = eventsShown.length > 0;
+  $("events-table").hidden = eventsShown.length === 0;
+}
+
+async function getEvents(before) {
+  const params = new URLSearchParams({ limit: EVENT_PAGE, kind: $("events-filter").value });
+  if (before) params.set("before", before);
+  const r = await fetch(`/api/events?${params}`);
+  return r.ok ? r.json() : [];
+}
+
+async function refreshEvents() {
+  // Reload as many as are showing, so "Show older" pages aren't lost on refresh.
+  const params = new URLSearchParams({ limit: Math.max(EVENT_PAGE, eventsShown.length), kind: $("events-filter").value });
+  const r = await fetch(`/api/events?${params}`);
+  if (!r.ok) return;
+  eventsShown = await r.json();
+  $("events-more").hidden = eventsShown.length < Number(params.get("limit"));
+  renderEvents();
+}
+
+$("events-more").addEventListener("click", async () => {
+  const older = await getEvents(eventsShown.at(-1)?.id);
+  eventsShown = eventsShown.concat(older);
+  $("events-more").hidden = older.length < EVENT_PAGE;
+  renderEvents();
+});
+$("events-filter").addEventListener("change", () => { eventsShown = []; refreshEvents(); });
+
 // Export: dates default to the last 7 days, in the browser's local time.
 function isoDay(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -959,6 +1012,7 @@ refreshLive();
 refreshHistory();
 refreshEnergy();
 refreshPayback();
+refreshEvents();
 refreshOctopus();
 refreshControl();
 refreshCare();
@@ -968,9 +1022,9 @@ setInterval(refreshCare, 10 * 60 * 1000);
 setInterval(refreshPayback, 5 * 60 * 1000);
 setInterval(refreshOctopus, 5 * 60 * 1000);
 setInterval(refreshLive, LIVE_MS);
-setInterval(() => { refreshHistory(); refreshEnergy(); }, HISTORY_MS);
+setInterval(() => { refreshHistory(); refreshEnergy(); refreshEvents(); }, HISTORY_MS);
 // Browsers slow timers down in background tabs, so catch up as soon as the
 // page is looked at again rather than showing old numbers.
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") { refreshLive(); refreshHistory(); refreshEnergy(); }
+  if (document.visibilityState === "visible") { refreshLive(); refreshHistory(); refreshEnergy(); refreshEvents(); }
 });
