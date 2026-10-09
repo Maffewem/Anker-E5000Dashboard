@@ -33,8 +33,11 @@
       <h2 id="costs-title">Battery costs</h2>
       <p class="dialog-intro">Prices in pence per kWh, as on your bill. For a single-rate tariff, use the same price for peak and off-peak.</p>
       <p class="locked-note" id="costs-octopus" hidden>Prices come from your Octopus account, so only the battery's price is used from here.</p>
-      <label for="cost-battery">What you paid for the battery (£)</label>
-      <input id="cost-battery" type="number" min="0" step="1" inputmode="decimal">
+      <div class="row">
+        <div><label for="cost-battery">What you paid (£)</label><input id="cost-battery" type="number" min="0" step="1" inputmode="decimal"></div>
+        <div><label for="cost-installed">Installed on</label><input id="cost-installed" type="date"></div>
+      </div>
+      <p class="note">With the install date, savings from before this dashboard was running are estimated from the battery's lifetime totals.</p>
       <div class="row">
         <div><label for="cost-peak">Peak price</label><input id="cost-peak" type="number" min="0" step="0.01" inputmode="decimal"></div>
         <div><label for="cost-offpeak">Off-peak price</label><input id="cost-offpeak" type="number" min="0" step="0.01" inputmode="decimal"></div>
@@ -193,7 +196,7 @@
       <p class="note" id="payback-source" hidden></p>
       <details>
         <summary>How this is worked out</summary>
-        <p class="note">Each kWh the battery discharges is valued at the price for that half hour, as grid electricity it saved you buying. Charging costs the price for that half hour when the energy came from the grid, and your export rate when it came from solar you could have sold. Charging while the grid supplies power counts as grid charging. Totals start when this dashboard began recording, and the projection assumes future days save the same as the average so far.</p>
+        <p class="note">Each kWh the battery discharges is valued at the price for that half hour, as grid electricity it saved you buying. Charging costs the price for that half hour when the energy came from the grid, and your export rate when it came from solar you could have sold. Charging while the grid supplies power counts as grid charging. Totals start when this dashboard began recording. If you enter the install date, the energy the battery moved before then (from its own lifetime totals) is added, valued at the average price per kWh recorded so far. The projection needs at least a week of savings, and is shown as a range because savings per day vary a lot with the seasons.</p>
       </details>
     </section>
 

@@ -30,7 +30,33 @@ def test_payback_values_discharge_and_charging():
     assert p["saved"] == 1.00
     assert p["days"] == 2 and p["per_day"] == 0.5
     assert p["remaining"] == 99.0
-    assert p["payback_days"] == 198
+    assert p["payback_days"] is None  # two days is too little to project from
+    week = payback(tariff, slots, date(2026, 10, 14))  # the same savings over a week
+    assert week["days"] == 7 and week["per_day"] == pytest.approx(1 / 7, abs=0.001)
+    assert week["payback_days"] == 693
+    assert (week["payback_days_low"], week["payback_days_high"]) == (554, 924)
+    pricey = payback(Tariff(**{**tariff.__dict__, "battery_cost": 1e5}), slots, date(2026, 10, 14))
+    assert pricey["payback_too_long"] and pricey["payback_date"] is None
+
+
+def test_lifetime_totals_count_savings_from_before_recording():
+    tariff = Tariff(battery_cost=3000, peak_rate=30, offpeak_rate=8, offpeak_start="00:30",
+                    offpeak_end="05:30", export_rate=15, installed="2026-01-01")
+    slots = [  # one recorded day: 10 kWh charged off-peak, 9 kWh discharged at peak
+        {"day": "2026-10-09", "slot": 2, "discharge_wh": 0, "grid_charge_wh": 10000, "solar_charge_wh": 0},
+        {"day": "2026-10-09", "slot": 36, "discharge_wh": 9000, "grid_charge_wh": 0, "solar_charge_wh": 0},
+    ]
+    lifetime = {"charged_kwh": 2810, "discharged_kwh": 2529}  # 280 days like that, the last one recorded
+    p = payback(tariff, slots, date(2026, 10, 9), lifetime=lifetime)
+    assert p["since"] == "2026-01-01" and p["days"] == 282
+    # Before recording: 2520 kWh out at 30p, 2800 kWh in at 8p.
+    assert p["saved_before_recording"] == 532.0
+    assert p["saved"] == 533.9
+    assert p["payback_days"] == round((3000 - 533.9) / (533.9 / 282))
+    # Without an install date the lifetime totals aren't used.
+    plain = payback(Tariff(battery_cost=3000, peak_rate=30, offpeak_rate=8, export_rate=15), slots,
+                    date(2026, 10, 9), lifetime=lifetime)
+    assert plain["saved_before_recording"] is None and plain["days"] == 1 and plain["payback_days"] is None
 
 
 def test_storage_splits_grid_and_solar_charging_by_half_hour():
@@ -47,3 +73,7 @@ def test_storage_splits_grid_and_solar_charging_by_half_hour():
 def test_validate_rejects_bad_times():
     with pytest.raises(ValueError):
         Tariff(offpeak_start="25:00").validate()
+    with pytest.raises(ValueError):
+        Tariff(installed="2999-01-01").validate()
+    with pytest.raises(ValueError):
+        Tariff(installed="last year").validate()
