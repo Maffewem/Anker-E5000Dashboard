@@ -186,3 +186,14 @@ def test_live_actions_go_to_the_event_log(monkeypatch):
         ("control", "battery_power_setpoint", None, 0, "octopus"),
         ("control", "operating_mode", "Third-party control", "Smart", "dashboard"),
     ]
+
+
+def test_control_settings_and_state_are_saved(tmp_path):
+    from app.config import ConnectionStore
+
+    store = ConnectionStore(str(tmp_path / "settings.json"))
+    store.save_section("control", {"enabled": True})
+    store.save_section("control_state", {"saved_mode": 6, "in_control": True})
+    again = ConnectionStore(str(tmp_path / "settings.json"))
+    assert again.load_section("control") == {"enabled": True}
+    assert again.load_section("control_state")["saved_mode"] == 6

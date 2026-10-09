@@ -46,8 +46,6 @@ class Tariff:
         for name in ("offpeak_start", "offpeak_end"):
             if not TIME_RE.match(getattr(self, name)):
                 raise ValueError("Off-peak times must look like 00:30")
-        return Tariff(**{**asdict(self), "use_manual": bool(self.use_manual),
-                         **{n: float(getattr(self, n)) for n in ("battery_cost", "peak_rate", "offpeak_rate", "export_rate")}})
         if self.installed:
             try:
                 installed = date.fromisoformat(self.installed)
@@ -55,8 +53,8 @@ class Tariff:
                 raise ValueError("Enter the install date as a date") from None
             if installed > date.today() or installed.year < 2015:
                 raise ValueError("The install date can't be in the future")
-        return Tariff(**{**asdict(self), **{n: float(getattr(self, n)) for n in
-                                            ("battery_cost", "peak_rate", "offpeak_rate", "export_rate")}})
+        return Tariff(**{**asdict(self), "use_manual": bool(self.use_manual),
+                         **{n: float(getattr(self, n)) for n in ("battery_cost", "peak_rate", "offpeak_rate", "export_rate")}})
 
     def slot_rates(self) -> list[float]:
         """Price in p/kWh for each half hour of the day (48 slots)."""

@@ -446,11 +446,9 @@ $("costs-form").addEventListener("submit", async (e) => {
   const time = (id, fallback) => ($(id).disabled && typed[KEYS[id]] ? typed[KEYS[id]] : $(id).value || fallback);
   try {
     const p = await postSettings("/api/tariff", {
-      battery_cost: num("cost-battery"), peak_rate: num("cost-peak"), offpeak_rate: num("cost-offpeak"),
+      battery_cost: num("cost-battery"), installed: $("cost-installed").value, peak_rate: num("cost-peak"), offpeak_rate: num("cost-offpeak"),
       offpeak_start: time("cost-from", "00:00"), offpeak_end: time("cost-to", "00:00"), export_rate: num("cost-export"),
       use_manual: $("cost-manual").checked,
-      battery_cost: num("cost-battery"), installed: $("cost-installed").value, peak_rate: num("cost-peak"), offpeak_rate: num("cost-offpeak"),
-      offpeak_start: $("cost-from").value || "00:00", offpeak_end: $("cost-to").value || "00:00", export_rate: num("cost-export"),
     });
     renderPayback(p);
     $("costs").close();
