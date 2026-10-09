@@ -13,9 +13,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 COPY simulator ./simulator
 
-# Which commit this image was built from, shown in the dashboard footer and logged at startup.
+# Version, commit and build date, shown in the dashboard footer and logged at startup.
 ARG APP_VERSION=dev
-ENV APP_VERSION=$APP_VERSION
+ARG APP_COMMIT=
+ARG APP_BUILT=
+ENV APP_VERSION=$APP_VERSION APP_COMMIT=$APP_COMMIT APP_BUILT=$APP_BUILT
 
 RUN useradd --system --uid 1000 solarbank && mkdir -p /data && chown solarbank /data
 USER solarbank
