@@ -10,6 +10,7 @@ import io
 import logging
 import os
 import tempfile
+import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import date, datetime, timedelta
@@ -28,6 +29,7 @@ from .config import Connection, ConnectionStore, Settings
 from .octopus import Octopus, OctopusError, validate as validate_octopus
 from .relay import Relay
 from .storage import Storage
+from .runtime import PATTERN_DAYS, estimate, pattern_from_minutes
 from .tariff import Tariff, payback
 
 logging.basicConfig(
@@ -97,6 +99,7 @@ async def lifespan(app: FastAPI):
     app.state.collector = collectors["battery"]
     app.state.connection_store = store
     app.state.storage = storage
+    app.state.pattern_cache = {}
     app.state.octopus = _make_octopus(store, storage)
     tasks = [asyncio.create_task(c.run()) for c in collectors.values()]
     tasks.append(asyncio.create_task(_octopus_loop(app)))
@@ -140,6 +143,19 @@ def live() -> dict:
             "relay_port": app.state.relay.port if app.state.relay else None,
         },
     }
+
+
+@app.get("/api/runtime")
+def runtime() -> dict:
+    """When the battery is expected to run empty or be full, from its usage pattern."""
+    storage: Storage = app.state.storage
+    now = time.time()
+    cache = app.state.pattern_cache
+    if now - cache.get("at", 0) > 600:  # the pattern moves slowly; rebuild every 10 minutes
+        rows = storage.battery_power_since(int(now) - PATTERN_DAYS * 86400)
+        cache.update(zip(("pattern", "hours"), pattern_from_minutes(rows, storage.tz)), at=now)
+    snap = app.state.collectors["battery"].snapshot
+    return estimate(snap, cache["pattern"], cache["hours"], datetime.now(storage.tz))
 
 
 @app.get("/api/history")

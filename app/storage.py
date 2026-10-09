@@ -201,6 +201,13 @@ class Storage:
                 self._add_slot(dict(r))
             self._db.commit()
 
+    def battery_power_since(self, start: int) -> list[tuple[int, float | None]]:
+        """(ts, average battery W) for every recorded minute since `start`."""
+        with self._lock:
+            return [tuple(r) for r in self._db.execute(
+                "SELECT ts, battery_w FROM minutes WHERE ts >= ?", (start,)
+            ).fetchall()]
+
     def battery_slots(self) -> list[dict]:
         with self._lock:
             rows = self._db.execute(

@@ -84,6 +84,38 @@ async function refreshLive() {
   renderFacts(data, status);
 }
 
+// ---------- Battery runtime ----------
+
+function atTime(iso) {
+  const d = new Date(iso);
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const days = Math.round((new Date(d).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 864e5);
+  return days === 0 ? time : days === 1 ? `${time} tomorrow` : `${d.toLocaleDateString([], { weekday: "short" })} ${time}`;
+}
+
+function runtimeText(r) {
+  const charging = $("battery-detail").textContent.startsWith("Charging");
+  if (r.soc <= r.floor_soc + 0.5 && !charging) return `At its ${Math.round(r.floor_soc)}% discharge limit`;
+  const low = r.empty_at ? `down to ${Math.round(r.floor_soc)}% around ${atTime(r.empty_at)}` : null;
+  if (charging && r.full_at) return `Full around ${atTime(r.full_at)}${low ? `, then ${low}` : ""}`;
+  if (low) return low[0].toUpperCase() + low.slice(1);
+  if (r.recharges_at) return `Lasts until it charges at ${atTime(r.recharges_at)}`;
+  if (r.full_at) return `Full around ${atTime(r.full_at)}`;
+  return r.method === "pattern" ? "Lasts beyond the next 2 days" : "";
+}
+
+async function refreshRuntime() {
+  let r;
+  try { r = await (await fetch("/api/runtime", { cache: "no-store" })).json(); } catch (_) { return; }
+  const el = $("battery-runtime");
+  const text = r.available ? runtimeText(r) : "";
+  el.hidden = !text;
+  el.textContent = text;
+  el.title = !r.available ? "" : r.method === "pattern"
+    ? `Estimate from how the battery was used at each time of day over the last ${Math.round(r.pattern_days)} days, down to its ${Math.round(r.floor_soc)}% limit.`
+    : `Estimate at the current power, down to its ${Math.round(r.floor_soc)}% limit. After a day of history it follows your usual daily pattern instead.`;
+}
+
 function renderGrid(data, meter) {
   // Prefer the Smart Meter's reading of the grid connection when it's live.
   const meterLive = meter && meter.status.connected && meter.data && meter.data.grid_w != null;
@@ -749,6 +781,8 @@ refreshHistory();
 refreshEnergy();
 refreshPayback();
 refreshOctopus();
+refreshRuntime();
+setInterval(refreshRuntime, HISTORY_MS);
 setInterval(refreshPayback, 5 * 60 * 1000);
 setInterval(refreshOctopus, 5 * 60 * 1000);
 setInterval(refreshLive, LIVE_MS);
@@ -756,5 +790,5 @@ setInterval(() => { refreshHistory(); refreshEnergy(); }, HISTORY_MS);
 // Browsers slow timers down in background tabs, so catch up as soon as the
 // page is looked at again rather than showing old numbers.
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") { refreshLive(); refreshHistory(); refreshEnergy(); }
+  if (document.visibilityState === "visible") { refreshLive(); refreshHistory(); refreshEnergy(); refreshRuntime(); }
 });

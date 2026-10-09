@@ -64,6 +64,6 @@ The relay is read-only: it never sends anything to the meter, and Home Assistant
 
 - **Export:** the Export data card at the bottom of the dashboard downloads readings as CSV or JSON for any date range, or a full backup of the database. Smart Meter readings are recorded from this version on.
 - **Try it without hardware:** `docker compose -f docker-compose.demo.yml up --build` runs simulated devices.
-- **API:** `/api/live`, `/api/history?hours=24`, `/api/energy?days=14`, `/api/payback`, `/api/export?data=minutes&start=2026-01-01&end=2026-01-31` (also `daily`, `meter`, `slots`; add `&format=json` for JSON), `/api/export/backup` (the whole SQLite database), `/api/raw` (every register, for troubleshooting) and `/healthz`.
+- **API:** `/api/live`, `/api/history?hours=24`, `/api/energy?days=14`, `/api/payback`, `/api/runtime` (when the battery is expected to reach its discharge limit or be full), `/api/export?data=minutes&start=2026-01-01&end=2026-01-31` (also `daily`, `meter`, `slots`; add `&format=json` for JSON), `/api/export/backup` (the whole SQLite database), `/api/raw` (every register, for troubleshooting) and `/healthz`.
 - **Development:** `pip install -r requirements-dev.txt && python -m pytest`, then `python -m simulator.sim --meter-port 5021` and `python -m app`.
 - The register maps come from Anker's MIT-licensed [official Home Assistant integration](https://github.com/anker-charging/ha-anker-solix-official). See [NOTICE.md](NOTICE.md).
