@@ -190,9 +190,12 @@ def raw() -> dict:
 
 @app.get("/healthz")
 def healthz():
-    c: Collector = app.state.collector
-    body = c.status()
-    return JSONResponse(body, status_code=200 if c.connected else 503)
+    # Healthy when every device that has an address is connected.
+    collectors = app.state.collectors
+    body = {device: c.status() for device, c in collectors.items()}
+    configured = [c for c in collectors.values() if c.connection.host]
+    healthy = bool(configured) and all(c.connected for c in configured)
+    return JSONResponse(body, status_code=200 if healthy else 503)
 
 
 @app.get("/")
