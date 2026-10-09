@@ -214,3 +214,14 @@ def test_agile_still_picks_the_cheapest_half_hours():
     c = Candidate("agile", "Agile", 50.0, import_profile=prices, export_profile=[15.0] * 48)
     r = simulate(c, usage_by_day(usage()), 5, 2.4)
     assert r["battery_mode"] == "grid"
+
+
+def test_agile_charges_in_negative_and_cheapest_slots():
+    prices = [22.0 + (s % 5) * 0.7 for s in range(48)]
+    prices[6:10] = [-2.0, -1.5, 3.0, 4.0]  # a windy night
+    prices[32:38] = [35.0] * 6
+    c = Candidate("agile", "Agile", 50.0, import_profile=prices, export_profile=[15.0] * 48)
+    r = simulate(c, usage_by_day(usage()), 5, 2.4)
+    assert r["battery_mode"] == "grid" and r["charge_window"] == "03:00-05:00"
+    assert r["avg_import_p"] < 22.0
+    assert r["cost"] < simulate(c, usage_by_day(usage()), 5, 2.4, battery=False)["cost"]

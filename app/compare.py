@@ -224,6 +224,7 @@ def simulate(c: Candidate, days: dict[str, list], cap_kwh: float, power_kw: floa
             "daily": {"grid_charge_kwh": round(charge_kwh / counted, 1) if counted else 0,
                       "from_battery_kwh": round(from_battery_kwh / counted, 1) if counted else 0,
                       "solar_stored_kwh": round(solar_kwh / counted, 1) if counted else 0},
+            "avg_import_p": round((home_p + charge_p) / imp_kwh, 1) if imp_kwh > 0 else None,
             "charge_window": max(windows, key=windows.get) if windows else None,
             "battery_mode": max(modes, key=modes.get) if modes else None}
 

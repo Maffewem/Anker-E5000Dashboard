@@ -1029,6 +1029,7 @@ $("compare-run").addEventListener("click", async () => {
     const parts = [["House", b.home], ["Battery charging", b.battery_charging], ["Standing charge", b.standing], ["Export credit", b.export, true]]
       .filter(([label, v]) => v != null && (v || label === "House"))
       .map(([label, v, minus]) => `${label} ${minus ? "−" : ""}${pounds(v)}`);
+    if (row.avg_import_p != null) parts.push(`average ${pence(row.avg_import_p)}/kWh from the grid`);
     const more = document.createElement("div"); more.className = "more";
     for (const t of [batteryPlan(row), parts.join(" · "), row.export ? `Export: ${row.export}` : "", row.note || ""].filter(Boolean)) {
       const p = document.createElement("p"); p.textContent = t; more.append(p);
