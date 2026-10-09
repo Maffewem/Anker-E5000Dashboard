@@ -202,13 +202,8 @@ dialog input:focus-visible { outline: 2px solid var(--solar); outline-offset: 1p
 .diag { font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-secondary); margin: 8px 0 0; }
 .compare-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
 .compare-actions select { font: inherit; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--page); color: var(--text-primary); }
-#compare-table tr.best td { font-weight: 600; color: var(--battery); }
-#compare-table tr.current td:first-child::after { content: " (now)"; color: var(--text-muted); font-weight: 400; }
-#compare-table td:last-child { color: var(--text-muted); font-size: 12px; min-width: 200px; }
-#compare-table td:nth-child(4), #compare-table td:last-child, #compare-table th:nth-child(4), #compare-table th:last-child { text-align: left; white-space: normal; }
 .control-form input.text, .control-form input[type=time] { width: 100%; font: inherit; font-size: 16px; padding: 8px 10px; border-radius: 8px;
   border: 1px solid var(--border); background: var(--page); color: var(--text-primary); }
-.preset-row { display: flex; gap: 8px; flex-wrap: wrap; }
 #custom-list li { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
 dialog .compare { display: flex; margin: 12px 0 0; }
 dialog .compare input { width: auto; padding: 0; }
@@ -231,3 +226,14 @@ dialog input:disabled { opacity: 0.6; }
 .device-state { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); margin: 0; }
 .device-state.live .dot { background: var(--good); }
 .device-state.offline .dot { background: var(--critical); }
+.notice { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--gridpower); border-radius: 12px; padding: 12px 16px; }
+.notice h2 { font-size: 14px; }
+.compare-rows { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 0; }
+.compare-rows li { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 10px 0; border-top: 1px solid var(--border); }
+.compare-rows li:first-child { border-top: 0; }
+.compare-rows small { display: block; font-size: 12px; color: var(--text-muted); }
+.compare-rows .money { text-align: right; }
+.compare-rows .money small.cheaper { color: var(--good); }
+.compare-rows li > small { grid-column: 1 / -1; color: var(--text-secondary); }
+.compare-rows li.best > div > b:first-child { color: var(--battery); }
+.control-form select.text { width: 100%; font: inherit; font-size: 16px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--page); color: var(--text-primary); box-sizing: border-box; }
