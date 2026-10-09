@@ -271,3 +271,35 @@ def test_env_without_account_says_so(tmp_path, monkeypatch):
     with TestClient(app) as c:
         body = c.get("/api/octopus").json()
         assert body["configured"] is False and "OCTOPUS_ACCOUNT" in body["last_error"]
+
+
+def test_smart_charge_slots_are_re_read_between_syncs(storage):
+    fake = FakeOctopus("E-1R-INTELLI-VAR-24-10-29-C")
+    o = make(storage, fake)
+    o.sync(NOW)
+    assert o.status({}, NOW)["dispatches"] == []
+    fake.dispatches["planned"] = [{"start": "2026-10-09T12:20:00Z", "end": "2026-10-09T12:40:00Z", "type": "BOOST"}]
+    o.refresh_dispatches()
+    assert o.status({}, NOW)["dispatches"] == [{"start": "2026-10-09T12:20:00Z", "end": "2026-10-09T12:40:00Z"}]
+    fake.dispatches["planned"] = []  # cancelled
+    o.refresh_dispatches()
+    assert o.status({}, NOW)["dispatches"] == []
+
+
+def test_refresh_keeps_slots_when_octopus_fails(storage):
+    planned = [{"start": "2026-10-09T12:20:00Z", "end": "2026-10-09T12:40:00Z"}]
+    fake = FakeOctopus("E-1R-INTELLI-VAR-24-10-29-C", {"completed": [], "planned": planned})
+    o = make(storage, fake)
+    o.sync(NOW)
+    o.client._fetch = lambda *a: (_ for _ in ()).throw(OctopusError("down"))
+    o.refresh_dispatches()
+    assert len(o.status({}, NOW)["dispatches"]) == 1
+
+
+def test_refresh_does_nothing_off_intelligent_go(storage):
+    fake = FakeOctopus()
+    o = make(storage, fake)
+    o.sync(NOW)
+    n = len(fake.calls)
+    o.refresh_dispatches()
+    assert len(fake.calls) == n

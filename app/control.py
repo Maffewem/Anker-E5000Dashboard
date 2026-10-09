@@ -106,6 +106,7 @@ class ControlSettings:
     grid_charge: bool = False  # also charge from the grid in the cheapest hours
     charge_power_w: int = 1500
     charge_target_soc: int = 90  # stop grid charging here; easier on the cells than 100%
+    charge_dispatch: bool = True  # charge (and never discharge) in Intelligent Go smart-charge slots
     schedules: tuple[Schedule, ...] = ()  # your own windows; they win over cheap hours
 
     @classmethod
@@ -123,9 +124,10 @@ class ControlSettings:
             raise ValueError("Stop charging at must be between 20% and 100%")
         if len(self.schedules) > MAX_SCHEDULES:
             raise ValueError(f"Up to {MAX_SCHEDULES} schedules")
-        return ControlSettings(bool(self.enabled), bool(self.hold_cheap), bool(self.grid_charge),
-                               int(self.charge_power_w), int(self.charge_target_soc),
-                               tuple(s.validate() for s in self.schedules))
+        return ControlSettings(enabled=bool(self.enabled), hold_cheap=bool(self.hold_cheap),
+                               grid_charge=bool(self.grid_charge), charge_power_w=int(self.charge_power_w),
+                               charge_target_soc=int(self.charge_target_soc), charge_dispatch=bool(self.charge_dispatch),
+                               schedules=tuple(s.validate() for s in self.schedules))
 
 
 @dataclass(frozen=True)
@@ -135,6 +137,7 @@ class Window:
     why: str
     source: str = "octopus"  # for the event log: "octopus" or "schedule" (typed off-peak hours, your schedules)
     schedule: Schedule | None = None  # set for your own schedules
+    dispatch: bool = False  # an Intelligent Go smart-charge slot: the whole home pays the off-peak price
 
 
 def _daily(start: str, end: str, tz, now: datetime, days=range(7)) -> list[tuple[datetime, datetime]]:
@@ -179,7 +182,9 @@ def cheap_windows(octopus_status: dict | None, offpeak: tuple[str, str] | None, 
             if w["kind"] == "charge":
                 out.append(Window(_utc(w["start"]), _utc(w["end"]), f"{w['note']} ({w['avg_p']:.2f}p)"))
         for d in octopus_status.get("dispatches") or []:
-            out.append(Window(_utc(d["start"]), _utc(d["end"]), "Intelligent Go smart-charge slot"))
+            a, b = _utc(d["start"]), _utc(d["end"])
+            out.append(Window(a, b, f"Intelligent Go smart-charge slot {a.astimezone(tz):%H:%M}-{b.astimezone(tz):%H:%M}",
+                              dispatch=True))
         return sorted(out, key=lambda w: w.start)
     if offpeak and offpeak[0] != offpeak[1]:
         out = [Window(a, b, "Off-peak hours", "schedule") for a, b in _daily(*offpeak, tz, now)]
@@ -195,6 +200,17 @@ def decide(settings: ControlSettings, windows: list[Window], snapshot: dict, now
         return APP, 0, "Control is off", None
     soc = snapshot.get("soc")
     mine = next((w for w in windows if w.schedule and w.start <= now < w.end), None)
+    slot = next((w for w in windows if w.dispatch and w.start <= now < w.end), None) if settings.charge_dispatch else None
+    if slot and not (mine and mine.schedule.action == CHARGE):
+        # Smart-charge slots come at short notice, at any time of day, and
+        # price the whole home at off-peak: top the battery up and let the
+        # house run on the grid rather than spend stored energy now.
+        if soc is not None and soc < settings.charge_target_soc:
+            power = settings.charge_power_w
+            if snapshot.get("max_charge_w"):
+                power = min(power, int(snapshot["max_charge_w"]))
+            return CHARGE, -power, f"Charging at {power} W to {settings.charge_target_soc}% ({slot.why})", slot
+        return HOLD, 0, f"Holding the battery (target reached; {slot.why})", slot
     if mine:
         sch = mine.schedule
         if sch.action == CHARGE and soc is not None and soc < sch.target_soc:
@@ -206,7 +222,7 @@ def decide(settings: ControlSettings, windows: list[Window], snapshot: dict, now
         reached = {CHARGE: " (target reached)", DISCHARGE: " (floor reached)"}.get(sch.action, "")
         return HOLD, 0, f"Holding the battery{reached} ({mine.why})", mine
     if not (settings.hold_cheap or settings.grid_charge):
-        windows = [w for w in windows if w.schedule]
+        windows = [w for w in windows if w.schedule or (w.dispatch and settings.charge_dispatch)]
     current = next((w for w in windows if not w.schedule and w.start <= now < w.end), None)
     if current is None:
         nxt = next((w for w in windows if w.start > now), None)
