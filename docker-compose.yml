@@ -30,6 +30,9 @@ services:
       METER_UNIT_ID: "${METER_UNIT_ID:-1}"
       POLL_SECONDS: "${POLL_SECONDS:-5}"
       RETENTION_DAYS: "${RETENTION_DAYS:-365}"
+      # Optional: Octopus Energy account, instead of entering it on the dashboard.
+      OCTOPUS_API_KEY: "${OCTOPUS_API_KEY:-}"
+      OCTOPUS_ACCOUNT: "${OCTOPUS_ACCOUNT:-}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
       # Set RELAY_METER=true to re-serve the Smart Meter's registers
       # (read-only) so Home Assistant can use this host instead of the meter.

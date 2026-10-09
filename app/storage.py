@@ -44,6 +44,14 @@ CREATE TABLE IF NOT EXISTS meter_minutes (
     import_total_kwh REAL,
     export_total_kwh REAL
 );
+-- Prices per local half hour in p/kWh, from Octopus when it is connected.
+CREATE TABLE IF NOT EXISTS rates (
+    day TEXT NOT NULL,
+    slot INTEGER NOT NULL,
+    import_p REAL,
+    export_p REAL,
+    PRIMARY KEY (day, slot)
+);
 -- What happened and when: battery mode, charging and settings changes,
 -- devices connecting and dropping, and actions taken on the battery.
 -- Kept for good (it only grows on changes).
@@ -278,6 +286,36 @@ class Storage:
                 "SELECT day, slot, discharge_wh, grid_charge_wh, solar_charge_wh FROM slots"
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def first_slot_day(self) -> str | None:
+        with self._lock:
+            return self._db.execute("SELECT MIN(day) FROM slots").fetchone()[0]
+
+    def save_rates(self, rows: list[tuple]) -> None:
+        """(day, slot, import_p, export_p); a None leaves that price as it was."""
+        with self._lock:
+            self._db.executemany(
+                "INSERT INTO rates (day, slot, import_p, export_p) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT (day, slot) DO UPDATE SET import_p = COALESCE(excluded.import_p, import_p), "
+                "export_p = COALESCE(excluded.export_p, export_p)",
+                rows,
+            )
+            self._db.commit()
+
+    def rates(self, since: str = "") -> dict[tuple[str, int], tuple]:
+        with self._lock:
+            rows = self._db.execute("SELECT day, slot, import_p, export_p FROM rates WHERE day >= ?", (since,)).fetchall()
+        return {(r["day"], r["slot"]): (r["import_p"], r["export_p"]) for r in rows}
+
+    def rate_days(self) -> tuple[str, str] | None:
+        with self._lock:
+            lo, hi = self._db.execute("SELECT MIN(day), MAX(day) FROM rates").fetchone()
+        return (lo, hi) if lo else None
+
+    def clear_rates(self) -> None:
+        with self._lock:
+            self._db.execute("DELETE FROM rates")
+            self._db.commit()
 
     def prune(self) -> None:
         if self.retention_days <= 0:

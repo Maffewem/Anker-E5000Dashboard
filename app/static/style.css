@@ -174,3 +174,10 @@ dialog input:focus-visible { outline: 2px solid var(--solar); outline-offset: 1p
 #events-table th, #events-table td { text-align: left; }
 #events-table td:last-child { white-space: normal; min-width: 140px; }
 #events-table td:first-child { color: var(--text-secondary); white-space: normal; min-width: 64px; }
+.windows { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 6px; }
+.windows li { display: flex; gap: 10px; align-items: baseline; font-size: 14px; flex-wrap: wrap; }
+.windows .tag { font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-secondary); }
+.windows .tag.charge { color: var(--battery); border-color: var(--battery); }
+.windows .tag.avoid { color: var(--gridpower); border-color: var(--gridpower); }
+.windows .tag.export { color: var(--export); border-color: var(--export); }
+.windows .why { color: var(--text-muted); font-size: 12px; }
