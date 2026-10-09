@@ -8,9 +8,12 @@ services:
     container_name: solarbank-dashboard
     restart: unless-stopped
     ports:
+      # host port : container port. If 8080 is taken on your machine, change
+      # the first number, e.g. "8090:8080", and open :8090 instead.
       - "8080:8080"
     environment:
       TZ: "Europe/London"
+      # PORT: "8080"   # port the dashboard listens on inside the container
       # Optional: fix the battery address here instead of using the setup
       # screen. When set, the setup screen shows it read-only.
       # SOLARBANK_HOST: "192.168.0.42"
@@ -19,7 +22,8 @@ services:
     volumes:
       - solarbank-data:/data
     # If the setup screen says there is no network route to the battery,
-    # remove the "ports" section above and uncomment this line instead:
+    # remove the "ports" section above and uncomment this line instead.
+    # With host networking, choose the port with PORT in "environment".
     # network_mode: host
 
 volumes:

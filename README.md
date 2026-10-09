@@ -31,7 +31,9 @@ Go to **Stacks › Add stack › Web editor**, paste in [`docker-compose.yml`](d
 
 The first time you open it, a setup screen asks for the battery's IP address. It tests the connection, shows the model and serial it finds, and saves the address in the data volume. To change it later, use the gear button at the top right.
 
-If the setup screen says there's **no network route** to the battery, the container can't see your home network from Docker's default bridge network. Switch the stack to host networking: remove the `ports:` section and add `network_mode: host`.
+If port 8080 is already in use on your machine (Portainer reports "port is already allocated"), change the first number in the `ports:` line, for example `"8090:8080"`, and open `http://<your-pi-or-nas>:8090`.
+
+If the setup screen says there's **no network route** to the battery, the container can't see your home network from Docker's default bridge network. Switch the stack to host networking: remove the `ports:` section and add `network_mode: host`. With host networking there's no port mapping, so if 8080 is taken, set `PORT` (for example `PORT: "8090"`) to choose the port the dashboard listens on.
 
 The image is built for `linux/amd64` and `linux/arm64`, which covers a 64-bit Raspberry Pi OS and most NASes. It is published to `ghcr.io/maffewem/anker-e5000dashboard`. This repository is private, so the image is private too. You have two options:
 
@@ -57,6 +59,7 @@ docker run -d --name solarbank-dashboard --restart unless-stopped \
 | `SOLARBANK_UNIT_ID` | `1` | Modbus unit id |
 | `POLL_SECONDS` | `5` | How often to read the battery |
 | `RETENTION_DAYS` | `365` | How long to keep history (`0` keeps everything) |
+| `PORT` | `8080` | Port the dashboard listens on inside the container (mainly for `network_mode: host`) |
 | `TZ` | `UTC` | Timezone used for daily totals |
 | `LOG_LEVEL` | `INFO` | `DEBUG` for more detail |
 
