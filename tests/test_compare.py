@@ -147,3 +147,16 @@ def test_flat_tariff_still_uses_stored_solar():
     with_battery = simulate(flat(25), days, 5, 2.5)
     assert with_battery["daily"]["from_battery_kwh"] > 0
     assert with_battery["cost"] < simulate(flat(25), days, 5, 2.5, battery=False)["cost"]
+
+
+def test_without_solar_the_battery_grid_charges_to_cover_the_peak():
+    # Cheap overnight, a mid rate most of the day and a short evening peak; no solar at all.
+    prices = [20.0] * 8 + [22.5] * 26 + [45.0] * 6 + [22.5] * 8
+    cosy = Candidate("cosy", "Three-rate", 50.0, import_profile=prices, export_profile=[15.0] * 48)
+    days = usage_by_day(usage())
+    r = simulate(cosy, days, 5, 2.5)
+    assert r["battery_mode"] == "grid" and r["daily"]["solar_stored_kwh"] == 0
+    assert r["cost"] < simulate(cosy, days, 5, 2.5, battery=False)["cost"]
+    assert simulate(flat(25), days, 5, 2.5)["battery_mode"] == "flat"
+    close = Candidate("close", "Close", 50.0, import_profile=fixed_profile(25, 24, "00:30", "05:30"), export_profile=[15.0] * 48)
+    assert simulate(close, days, 5, 2.5)["battery_mode"] == "small_gap"
