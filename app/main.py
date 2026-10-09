@@ -58,6 +58,7 @@ def _asset_version() -> str:
     return digest.hexdigest()[:12]
 
 
+APP_VERSION = os.environ.get("APP_VERSION", "dev").strip()[:12] or "dev"  # the commit the image was built from
 INDEX_HTML = (STATIC / "index.html").read_text().replace("{{version}}", _asset_version())
 
 
@@ -119,6 +120,7 @@ ENV_NAMES = {"battery": "SOLARBANK_HOST", "meter": "METER_HOST"}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    log.info("Solarbank dashboard version %s", APP_VERSION)
     settings = Settings.from_env()
     storage = Storage(settings.db_path, settings.retention_days, settings.timezone)
     store = ConnectionStore(settings.settings_path)
@@ -176,6 +178,7 @@ def live() -> dict:
     battery: Collector = app.state.collectors["battery"]
     meter: Collector = app.state.collectors["meter"]
     return {
+        "version": APP_VERSION,
         "status": battery.status(),
         "data": battery.snapshot,
         "meter": {

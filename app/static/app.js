@@ -37,6 +37,7 @@ async function refreshLive() {
     return;
   }
   const { status, data, meter } = body;
+  if (body.version) $("version").textContent = `Version ${body.version.slice(0, 7)}`;
   renderMeter(meter);
   const stale = status.last_update && Date.now() / 1000 - status.last_update > status.poll_seconds * 4;
   const meterOn = Boolean(meter && meter.status.configured);
