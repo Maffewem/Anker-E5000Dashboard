@@ -522,6 +522,81 @@ $("octopus-form").addEventListener("submit", (e) => {
 });
 $("octopus-remove").addEventListener("click", () => sendOctopus({ api_key: "" }, "Disconnecting…"));
 
+// ---------- Battery control ----------
+
+let controlLoaded = false;
+
+function renderControl(c) {
+  const live = c.live;
+  $("control-mode").textContent = live ? "Live" : "Dry run";
+  $("control-mode").className = `pill${live ? " live" : ""}`;
+  $("control-mode").title = live ? "Writes to the battery are allowed (CONTROL_LIVE=1)"
+    : "Nothing is written to the battery. Set CONTROL_LIVE=1 on the container to allow it.";
+  let now = c.reason;
+  if (c.window && c.action === "app") now += `. Next cheap window: ${when(c.window.start, c.window.end)}.`;
+  else if (c.window) now += `. Until ${clock(c.window.end)}.`;
+  $("control-now").textContent = now;
+  $("control-error").hidden = !c.last_error;
+  $("control-error").textContent = c.last_error || "";
+  if (!controlLoaded || !$("control-card").contains(document.activeElement)) {
+    const t = c.settings;
+    $("control-enabled").checked = t.enabled;
+    $("control-hold").checked = t.hold_cheap;
+    $("control-charge").checked = t.grid_charge;
+    $("control-power").value = t.charge_power_w;
+    $("control-target").value = t.charge_target_soc;
+    controlLoaded = true;
+  }
+  syncControlInputs();
+  $("control-log").replaceChildren(...(c.log.length ? c.log : [{ text: "Nothing yet." }]).map((e) => {
+    const li = document.createElement("li");
+    if (e.ts) { const t = document.createElement("time"); t.textContent = new Date(e.ts * 1000).toLocaleString(); li.append(t); }
+    li.append(e.text);
+    return li;
+  }));
+}
+
+function syncControlInputs() {
+  const on = $("control-enabled").checked;
+  $("control-hold").disabled = !on;
+  $("control-charge").disabled = !on;
+  const charging = on && $("control-charge").checked;
+  $("control-power").disabled = !charging;
+  $("control-target").disabled = !charging;
+}
+for (const id of ["control-enabled", "control-charge"]) $(id).addEventListener("change", syncControlInputs);
+
+async function refreshControl() {
+  try { renderControl(await (await fetch("/api/control", { cache: "no-store" })).json()); } catch (_) {}
+}
+
+$("control-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    renderControl(await postSettings("/api/control", {
+      enabled: $("control-enabled").checked, hold_cheap: $("control-hold").checked, grid_charge: $("control-charge").checked,
+      charge_power_w: Number($("control-power").value) || 1500, charge_target_soc: Number($("control-target").value) || 90,
+    }));
+    document.activeElement?.blur();
+  } catch (err) {
+    $("control-error").hidden = false;
+    $("control-error").textContent = err.message;
+  }
+});
+
+async function refreshCare() {
+  let c;
+  try { c = await (await fetch("/api/battery-care", { cache: "no-store" })).json(); } catch (_) { return; }
+  $("care-cycles").textContent = c.cycles != null ? `${c.cycles} cycles` : "";
+  $("care-tips").replaceChildren(...c.tips.map((t) => {
+    const li = document.createElement("li"); li.className = t.level;
+    const b = document.createElement("b"); b.textContent = t.title;
+    const span = document.createElement("span"); span.textContent = t.text;
+    li.append(b, span);
+    return li;
+  }));
+}
+
 // ---------- Setup ----------
 
 let setupShownOnce = false;
@@ -749,6 +824,10 @@ refreshHistory();
 refreshEnergy();
 refreshPayback();
 refreshOctopus();
+refreshControl();
+refreshCare();
+setInterval(refreshControl, 15000);
+setInterval(refreshCare, 10 * 60 * 1000);
 setInterval(refreshPayback, 5 * 60 * 1000);
 setInterval(refreshOctopus, 5 * 60 * 1000);
 setInterval(refreshLive, LIVE_MS);

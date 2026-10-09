@@ -183,6 +183,38 @@
       </div>
     </section>
 
+    <section class="card" id="control-card">
+      <div class="card-head">
+        <h2>Battery control</h2>
+        <span class="pill" id="control-mode"></span>
+      </div>
+      <p class="control-now" id="control-now">–</p>
+      <p class="setup-msg error" id="control-error" hidden></p>
+      <form id="control-form" class="control-form" novalidate>
+        <label class="compare"><input type="checkbox" id="control-enabled"> Let the dashboard control the battery in cheap hours</label>
+        <label class="compare"><input type="checkbox" id="control-hold"> Don't discharge while electricity is cheap (the house uses grid power instead)</label>
+        <label class="compare"><input type="checkbox" id="control-charge"> Also charge from the grid in the cheapest hours</label>
+        <div class="row">
+          <div><label for="control-power">Charge power (W)</label><input id="control-power" type="number" min="100" max="5000" step="100"></div>
+          <div><label for="control-target">Stop charging at (%)</label><input id="control-target" type="number" min="20" max="100" step="5"></div>
+        </div>
+        <div class="dialog-actions"><button type="submit" class="primary">Save</button></div>
+      </form>
+      <p class="note">Cheap hours come from your Octopus prices (or the off-peak hours in Edit costs). Outside them, and whenever control is off or the dashboard stops, the battery goes back to the mode it was in from the Anker app. Changing the mode in the app makes the dashboard stand back until the next cheap window.</p>
+      <details>
+        <summary>Activity</summary>
+        <ul class="activity" id="control-log"></ul>
+      </details>
+    </section>
+
+    <section class="card" id="care-card">
+      <div class="card-head">
+        <h2>Battery care</h2>
+        <p class="today" id="care-cycles"></p>
+      </div>
+      <ul class="tips" id="care-tips"></ul>
+    </section>
+
     <section class="card" id="payback-card">
       <div class="card-head">
         <h2>Battery payback</h2>

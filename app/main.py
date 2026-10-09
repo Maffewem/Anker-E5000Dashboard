@@ -24,7 +24,9 @@ from pydantic import BaseModel
 
 from .collector import DEVICE_NAMES, Collector
 from .registers import BATTERY, METER
+from .battery_care import care
 from .config import Connection, ConnectionStore, Settings
+from .control import ControlSettings, Controller, cheap_windows
 from .octopus import Octopus, OctopusError, validate as validate_octopus
 from .relay import Relay
 from .storage import Storage
@@ -73,6 +75,23 @@ def _make_octopus(store: ConnectionStore, storage: Storage, api_key: str | None 
     return Octopus(storage, api_key or "", account or "", offpeak=offpeak)
 
 
+def _make_controller(app: FastAPI, store: ConnectionStore, storage: Storage) -> Controller:
+    def windows(now):
+        octopus: Octopus = app.state.octopus
+        battery = app.state.collectors["battery"]
+        status = octopus.status(battery.snapshot, now) if octopus.configured and octopus.info else None
+        t = Tariff.from_dict(store.load_tariff())
+        offpeak = (t.offpeak_start, t.offpeak_end) if t.peak_rate != t.offpeak_rate else None
+        return cheap_windows(status, offpeak, storage.tz, now)
+
+    return Controller(
+        app.state.collectors["battery"],
+        load=lambda: {"settings": store.load_section("control"), "state": store.load_section("control_state")},
+        save_state=lambda state: store.save_section("control_state", state),
+        windows=windows,
+    )
+
+
 async def _octopus_loop(app: FastAPI) -> None:
     while True:
         octopus: Octopus = app.state.octopus
@@ -98,6 +117,8 @@ async def lifespan(app: FastAPI):
     app.state.connection_store = store
     app.state.storage = storage
     app.state.octopus = _make_octopus(store, storage)
+    controller = _make_controller(app, store, storage)
+    app.state.controller = controller
     tasks = [asyncio.create_task(c.run()) for c in collectors.values()]
     tasks.append(asyncio.create_task(_octopus_loop(app)))
     relay = None
@@ -109,9 +130,15 @@ async def lifespan(app: FastAPI):
             log.error("Can't start the Smart Meter relay on port %s: %s", settings.relay_port, err)
             relay = None
     app.state.relay = relay
+    control_task = asyncio.create_task(controller.run())
     try:
         yield
     finally:
+        control_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await control_task
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(controller.restore(), 10)  # hand the battery back before stopping
         if relay is not None:
             await relay.close()
         for task in tasks:
@@ -223,6 +250,38 @@ async def save_octopus(body: OctopusIn) -> dict:
     app.state.octopus = octopus
     log.info("Connected Octopus account %s (%s)", account, octopus.info["import"]["name"])
     return get_octopus()
+
+
+class ControlIn(BaseModel):
+    enabled: bool = False
+    hold_cheap: bool = True
+    grid_charge: bool = False
+    charge_power_w: int = 1500
+    charge_target_soc: int = 90
+
+
+@app.get("/api/control")
+def get_control() -> dict:
+    return app.state.controller.status()
+
+
+@app.post("/api/control")
+async def save_control(body: ControlIn) -> dict:
+    try:
+        settings = ControlSettings(**body.model_dump()).validate()
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+    app.state.connection_store.save_section("control", asdict(settings))
+    controller: Controller = app.state.controller
+    controller.update_settings(settings)
+    await controller.tick()
+    return controller.status()
+
+
+@app.get("/api/battery-care")
+def battery_care() -> dict:
+    snapshot = app.state.collectors["battery"].snapshot
+    return care(snapshot, app.state.storage.soc_stats(), asdict(app.state.controller.settings))
 
 
 @app.get("/api/energy")

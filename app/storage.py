@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS meter_minutes (
     voltage REAL,
     import_total_kwh REAL,
     export_total_kwh REAL
+);
 -- Prices per local half hour in p/kWh, from Octopus when it is connected.
 CREATE TABLE IF NOT EXISTS rates (
     day TEXT NOT NULL,
@@ -206,6 +207,23 @@ class Storage:
                 "SELECT day, slot, discharge_wh, grid_charge_wh, solar_charge_wh FROM slots"
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def soc_stats(self, days: int = 30) -> dict:
+        """Minutes spent nearly full and nearly empty, for battery care tips."""
+        since = int(time.time()) - days * 86400
+        with self._lock:
+            r = self._db.execute(
+                "SELECT COUNT(soc) AS n, SUM(soc >= 98) AS full, SUM(soc <= 7) AS empty, AVG(soc) AS avg, "
+                "MIN(ts) AS first FROM minutes WHERE ts >= ? AND soc IS NOT NULL", (since,)
+            ).fetchone()
+        n = r["n"] or 0
+        return {
+            "minutes": n,
+            "days": round((time.time() - r["first"]) / 86400, 1) if r["first"] else 0,
+            "full_share": (r["full"] or 0) / n if n else None,
+            "empty_share": (r["empty"] or 0) / n if n else None,
+            "avg_soc": round(r["avg"], 1) if r["avg"] is not None else None,
+        }
 
     def first_slot_day(self) -> str | None:
         with self._lock:
