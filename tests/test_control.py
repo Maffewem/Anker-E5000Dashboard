@@ -309,3 +309,58 @@ def test_api_schedules_and_mode(tmp_path, monkeypatch):
         assert client.post("/api/control/mode", json={"mode": 0}).status_code == 409  # no battery connected
         saved = app.state.connection_store.load_section("control")
         assert saved["schedules"][0]["days"] == [0, 1, 2, 3, 4]
+
+
+# An Intelligent Go top-up Octopus adds in the middle of the day.
+SLOT = Window(datetime(2026, 10, 10, 12, 20, tzinfo=UTC), datetime(2026, 10, 10, 12, 40, tzinfo=UTC),
+              "Intelligent Go smart-charge slot 13:20-13:40", dispatch=True)
+IN_SLOT = datetime(2026, 10, 10, 12, 25, tzinfo=UTC)
+
+
+def test_smart_charge_slot_charges_then_holds_without_any_cheap_hour_options():
+    plain = ControlSettings(enabled=True, hold_cheap=False, grid_charge=False, charge_power_w=2000, charge_target_soc=90)
+    action, setpoint, reason, w = decide(plain, [NIGHT, SLOT], {"soc": 40, "max_charge_w": 1200}, IN_SLOT)
+    assert (action, setpoint, w) == (CHARGE, -1200, SLOT) and "13:20-13:40" in reason
+    assert decide(plain, [NIGHT, SLOT], {"soc": 95}, IN_SLOT)[:2] == (HOLD, 0)  # full: still don't discharge
+    assert decide(plain, [NIGHT, SLOT], {"soc": 40}, SLOT.end)[0] == APP  # back to normal straight after
+    off = ControlSettings(enabled=True, hold_cheap=False, grid_charge=False, charge_dispatch=False)
+    assert decide(off, [SLOT], {"soc": 40}, IN_SLOT)[0] == APP
+
+
+def test_smart_charge_slot_beats_a_discharge_schedule():
+    from app.control import Schedule, schedule_windows
+    sch = Schedule("discharge", "13:00", "14:00", (0, 1, 2, 3, 4, 5, 6), 1500, 20, True)
+    tz = ZoneInfo("Europe/London")
+    on = ControlSettings(enabled=True, schedules=(sch,))
+    ws = schedule_windows(on.schedules, tz, IN_SLOT) + [SLOT]
+    assert decide(on, ws, {"soc": 60}, IN_SLOT)[0] == CHARGE
+    assert decide(on, ws, {"soc": 60}, SLOT.end + timedelta(minutes=5))[0] == "discharge"
+
+
+def test_dispatch_windows_keep_odd_times():
+    tz = ZoneInfo("Europe/London")
+    status = {"prices": [{}], "recommendations": [], "dispatches": [
+        {"start": "2026-10-10T12:20:00Z", "end": "2026-10-10T12:40:00Z"}]}
+    (w,) = cheap_windows(status, None, tz, IN_SLOT)
+    assert w.dispatch and w.start.minute == 20 and w.end.minute == 40
+    assert w.why == "Intelligent Go smart-charge slot 13:20-13:40"
+
+
+def test_smart_charge_slot_is_logged_and_handed_back(monkeypatch):
+    monkeypatch.setenv("CONTROL_LIVE", "1")
+    events = []
+
+    class Store:
+        def record_event(self, kind, message, **kw):
+            events.append((kind, message, kw["new"], kw["source"]))
+
+    c = FakeCollector(mode=6, soc=40)
+    c.storage = Store()
+    ctl = Controller(c, load=lambda: {"settings": {"enabled": True, "hold_cheap": False}}, save_state=lambda s: None,
+                     windows=lambda now: [SLOT])
+    asyncio.run(ctl.tick(IN_SLOT))
+    assert c.writes == [("operating_mode", 3), ("battery_power_setpoint", -1500)]
+    asyncio.run(ctl.tick(SLOT.end))
+    assert c.writes[-1] == ("operating_mode", 6)
+    assert [e[3] for e in events] == ["octopus", "octopus", "dashboard"]  # took control, charged, handed back
+    assert "13:20-13:40" in events[0][1]

@@ -68,7 +68,10 @@ INDEX_HTML = (STATIC / "index.html").read_text().replace("{{version}}", _asset_v
 
 DEVICES = {"battery": BATTERY, "meter": METER}
 OCTOPUS_SYNC_SECONDS = 30 * 60
-OCTOPUS_DISPATCH_SECONDS = 5 * 60  # Intelligent Go slots change through the evening
+OCTOPUS_RETRY_SECONDS = 5 * 60  # after an error
+# Intelligent Go slots can be added or cancelled minutes before they start
+# (a 13:20-13:40 top-up), so they're re-read far more often than prices.
+OCTOPUS_DISPATCH_SECONDS = 2 * 60
 
 
 def _make_octopus(store: ConnectionStore, storage: Storage, api_key: str | None = None,
@@ -113,12 +116,19 @@ def _make_controller(app: FastAPI, store: ConnectionStore, storage: Storage) -> 
 
 
 async def _octopus_loop(app: FastAPI) -> None:
+    last_full = -float("inf")
     while True:
         octopus: Octopus = app.state.octopus
         if octopus.configured:
-            await asyncio.to_thread(octopus.sync)
+            every = OCTOPUS_RETRY_SECONDS if octopus.last_error or not octopus.info else OCTOPUS_SYNC_SECONDS
+            if time.monotonic() - last_full >= every:
+                await asyncio.to_thread(octopus.sync)
+                last_full = time.monotonic()
+            else:
+                await asyncio.to_thread(octopus.refresh_dispatches)
         intelligent = (octopus.info.get("import") or {}).get("kind") == "intelligent_go"
-        await asyncio.sleep(OCTOPUS_DISPATCH_SECONDS if intelligent or octopus.last_error else OCTOPUS_SYNC_SECONDS)
+        await asyncio.sleep(OCTOPUS_DISPATCH_SECONDS if intelligent
+                            else OCTOPUS_RETRY_SECONDS if octopus.last_error else OCTOPUS_SYNC_SECONDS)
 
 
 @asynccontextmanager
@@ -368,6 +378,7 @@ class ControlIn(BaseModel):
     grid_charge: bool = False
     charge_power_w: int = 1500
     charge_target_soc: int = 90
+    charge_dispatch: bool = True
     schedules: list[ScheduleIn] = []
 
 

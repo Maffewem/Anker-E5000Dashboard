@@ -676,6 +676,7 @@ function renderControl(c) {
   if (!controlLoaded || (!controlDirty && !$("control-form").contains(document.activeElement))) {
     $("control-hold").checked = t.hold_cheap;
     $("control-charge").checked = t.grid_charge;
+    $("control-dispatch").checked = t.charge_dispatch;
     $("control-power").value = t.charge_power_w;
     $("control-target").value = t.charge_target_soc;
     controlLoaded = true;
@@ -772,7 +773,7 @@ async function saveControl(changes = {}) {
   const t = control.settings;
   try {
     renderControl(await postSettings("/api/control", {
-      enabled: t.enabled, hold_cheap: t.hold_cheap, grid_charge: t.grid_charge,
+      enabled: t.enabled, hold_cheap: t.hold_cheap, grid_charge: t.grid_charge, charge_dispatch: t.charge_dispatch,
       charge_power_w: t.charge_power_w, charge_target_soc: t.charge_target_soc,
       schedules, ...changes,
     }));
@@ -860,11 +861,11 @@ $("schedule-form").addEventListener("submit", async (e) => {
 for (const ev of ["input", "change"]) $("control-form").addEventListener(ev, () => { controlDirty = true; $("control-saved").textContent = ""; });
 
 function syncControlInputs() {
-  const charging = $("control-charge").checked;
+  const charging = $("control-charge").checked || $("control-dispatch").checked;
   $("control-power").disabled = !charging;
   $("control-target").disabled = !charging;
 }
-$("control-charge").addEventListener("change", syncControlInputs);
+for (const id of ["control-charge", "control-dispatch"]) $(id).addEventListener("change", syncControlInputs);
 
 async function refreshControl() {
   try { renderControl(await (await fetch("/api/control", { cache: "no-store" })).json()); } catch (_) {}
@@ -874,7 +875,7 @@ $("control-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   controlDirty = false;
   if (await saveControl({
-    hold_cheap: $("control-hold").checked, grid_charge: $("control-charge").checked,
+    hold_cheap: $("control-hold").checked, grid_charge: $("control-charge").checked, charge_dispatch: $("control-dispatch").checked,
     charge_power_w: Number($("control-power").value) || 1500, charge_target_soc: Number($("control-target").value) || 90,
   })) {
     $("control-saved").textContent = "Saved";

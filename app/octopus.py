@@ -476,6 +476,26 @@ class Octopus:
             out[ts] = night.get(ts, day.get(ts)) if slot in window else day.get(ts, night.get(ts))
         return out
 
+    def refresh_dispatches(self) -> None:
+        """Re-read only the Intelligent Go slots, between full syncs. Blocking.
+
+        Slots can be added or cancelled minutes before they start, so this
+        runs often; on failure the last list is kept until it expires."""
+        if not self.client or (self.info.get("import") or {}).get("kind") != "intelligent_go":
+            return
+        try:
+            slots = self.client.dispatches()
+        except Exception as err:  # never let a bad answer stop the dashboard
+            log.warning("Octopus: couldn't refresh Intelligent Go slots: %s", err)
+            return
+        def key(d):
+            return d.get("start"), d.get("end")
+        if sorted(map(key, slots["planned"])) != sorted(map(key, self.dispatch_slots.get("planned") or [])):
+            log.info("Octopus: smart-charge slots now %s",
+                     ", ".join(f"{d.get('start')}-{d.get('end')}" for d in slots["planned"]) or "none")
+        self.dispatch_slots = slots
+        self._apply_dispatches()
+
     def _apply_dispatches(self) -> None:
         """On Intelligent Octopus Go the whole home pays the off-peak price during
         smart-charge slots outside the usual night window. Octopus's price list

@@ -72,6 +72,7 @@ Off by default. When switched on in **Battery control**, the dashboard takes ove
 
 - **Hold:** the battery doesn't discharge, so the house runs on cheap grid power and the stored energy is kept for the dear hours.
 - **Grid charge (optional):** charges at the power you choose until it reaches your stop level (90% by default).
+- **Intelligent Go smart-charge slots (on by default):** when Octopus adds a slot to charge your car, even a short one in the middle of the day (say 13:20-13:40), the whole home pays the off-peak price, so the battery charges to your stop level and doesn't discharge until the slot ends. Slots are re-read from Octopus every 2 minutes, so ones added or cancelled at short notice are picked up. They beat a discharge schedule but not a charge one.
 
 **Your schedules** let you set your own windows: charge (at a power, up to a level), hold, or discharge (at a power, down to a floor), each on the days you pick. They win over cheap hours, and work on their own if the cheap-hour options are unticked. **Battery mode** switches the battery to one of the Anker app's modes straight away. Every change is recorded in the event log.
 

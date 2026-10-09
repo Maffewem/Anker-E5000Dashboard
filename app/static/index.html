@@ -335,6 +335,7 @@
         <p class="hint">Uses your Octopus prices, or the off-peak hours in Edit costs. Schedules win when they overlap.</p>
         <label class="compare"><input type="checkbox" id="control-hold"> Don't discharge while electricity is cheap (the house uses grid power instead)</label>
         <label class="compare"><input type="checkbox" id="control-charge"> Also charge from the grid in the cheapest hours</label>
+        <label class="compare"><input type="checkbox" id="control-dispatch"> On Intelligent Go, charge during any smart-charge slot Octopus adds (even a short one in the day) and don't discharge while it runs</label>
         <div class="row">
           <div><label for="control-power">Charge power (W)</label><input id="control-power" type="number" min="100" max="5000" step="100"></div>
           <div><label for="control-target">Stop charging at (%)</label><input id="control-target" type="number" min="20" max="100" step="5"></div>
