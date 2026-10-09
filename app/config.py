@@ -39,41 +39,66 @@ class Connection:
         return Connection(host, int(self.port), int(self.unit_id))
 
 
-class ConnectionStore:
-    """The connection to use, from SOLARBANK_HOST if set, else the settings file.
+ENV_PREFIX = {"battery": "SOLARBANK", "meter": "METER"}
 
-    The environment variable wins so that a compose file stays authoritative
-    for people who prefer configuring it there; the setup screen then shows
-    the value as read-only.
+
+class ConnectionStore:
+    """Where each device is: from environment variables if set, else the settings file.
+
+    Devices are "battery" (required) and "meter" (optional Smart Meter). An
+    environment variable such as SOLARBANK_HOST or METER_HOST wins, so a
+    compose file stays authoritative for people who prefer configuring it
+    there; the setup screen then shows that address read-only.
+
+    File layout: the battery's fields at the top level (as before the meter
+    existed), the meter's under "meter".
     """
 
     def __init__(self, path: str) -> None:
         self.path = Path(path)
 
-    @property
-    def from_env(self) -> bool:
-        return bool(os.environ.get("SOLARBANK_HOST", "").strip())
+    def from_env(self, device: str = "battery") -> bool:
+        return bool(os.environ.get(f"{ENV_PREFIX[device]}_HOST", "").strip())
 
-    def load(self) -> Connection:
-        if self.from_env:
-            return Connection(
-                os.environ["SOLARBANK_HOST"].strip(),
-                _int("SOLARBANK_PORT", 502),
-                _int("SOLARBANK_UNIT_ID", 1),
-            )
+    def _read(self) -> dict:
         try:
             data = json.loads(self.path.read_text())
-            return Connection(str(data.get("host", "")), int(data.get("port", 502)), int(data.get("unit_id", 1)))
+            return data if isinstance(data, dict) else {}
         except FileNotFoundError:
-            return Connection()
-        except (ValueError, TypeError, OSError) as err:
+            return {}
+        except (ValueError, OSError) as err:
             log.warning("Ignoring unreadable settings file %s: %s", self.path, err)
+            return {}
+
+    def load(self, device: str = "battery") -> Connection:
+        prefix = ENV_PREFIX[device]
+        if self.from_env(device):
+            return Connection(
+                os.environ[f"{prefix}_HOST"].strip(),
+                _int(f"{prefix}_PORT", 502),
+                _int(f"{prefix}_UNIT_ID", 1),
+            )
+        data = self._read()
+        if device == "meter":
+            data = data.get("meter") or {}
+        try:
+            return Connection(str(data.get("host", "")), int(data.get("port", 502)), int(data.get("unit_id", 1)))
+        except (ValueError, TypeError):
             return Connection()
 
-    def save(self, conn: Connection) -> None:
+    def save(self, conn: Connection, device: str = "battery") -> None:
+        data = self._read()
+        fields = asdict(conn)
+        if device == "meter":
+            if conn.host:
+                data["meter"] = fields
+            else:
+                data.pop("meter", None)
+        else:
+            data.update(fields)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(asdict(conn), indent=2))
+        tmp.write_text(json.dumps(data, indent=2))
         tmp.replace(self.path)
 
 

@@ -2,7 +2,7 @@
 
 Lets you try the dashboard without the real battery:
 
-    python -m simulator.sim --port 5020
+    python -m simulator.sim --port 5020 --meter-port 5021
 
 Values follow a rough sunny-day curve and change every couple of seconds.
 """
@@ -17,7 +17,7 @@ import struct
 import time
 from datetime import datetime
 
-from app.registers import HOLDING, REGISTERS, encode
+from app.registers import HOLDING, METER_REGISTERS, REGISTERS, encode
 
 STATIC = {
     "battery_status": 1,
@@ -83,11 +83,13 @@ class Battery:
 class Registers:
     """Holds the simulated register values, keyed by (function code, address)."""
 
-    def __init__(self) -> None:
+    def __init__(self, registers=REGISTERS, implemented=None) -> None:
         self.words: dict[tuple[int, int], int] = {}
+        self.registers = registers
+        self.implemented = implemented or IMPLEMENTED
 
     def write(self, values: dict) -> None:
-        for reg in REGISTERS:
+        for reg in self.registers:
             if reg.key in values:
                 fc = 3 if reg.kind == HOLDING else 4
                 for i, word in enumerate(encode(reg.data_type, values[reg.key], reg.count)):
@@ -95,7 +97,7 @@ class Registers:
 
     def read(self, fc: int, address: int, count: int) -> list[int] | None:
         """Mimic the device: implemented ranges read as zero-filled, others fail."""
-        implemented = IMPLEMENTED[fc]
+        implemented = self.implemented.get(fc, set())
         if not all(a in implemented for a in range(address, address + count)):
             return None
         return [self.words.get((fc, a), 0) for a in range(address, address + count)]
@@ -105,6 +107,29 @@ IMPLEMENTED = {
     4: {*range(10000, 10266), *range(32768, 32775)},
     3: {*range(10060, 10082), *range(60000, 60004)},
 }
+
+METER_IMPLEMENTED = {4: set(range(10620, 10713))}
+
+METER_STATIC = {
+    "meter_model": "A17X8",
+    "meter_type": 1,
+    "meter_sn": "AZVDNSL0SIMULATOR",
+    "meter_sw_version": "1.0.4.2",
+    "phase_1_voltage": 2405,  # 240.5 V
+}
+
+
+def meter_values(battery: dict, imported: float, exported: float) -> dict:
+    grid = battery["grid_power"]
+    return {
+        "total_power": grid,
+        "phase_1_power": grid,
+        "phase_1_current": round(grid / 240 * 100),
+        "phase_1_voltage": round(2400 + random.uniform(-30, 30)),
+        "total_power_factor": 980,
+        "total_import_energy": round(imported / 100),
+        "total_export_energy": round(exported / 100),
+    }
 
 
 async def handle(regs: Registers, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -132,25 +157,40 @@ async def handle(regs: Registers, reader: asyncio.StreamReader, writer: asyncio.
         writer.close()
 
 
-async def update_loop(regs: Registers, battery: Battery) -> None:
+async def update_loop(regs: Registers, meter: Registers, battery: Battery) -> None:
+    imported, exported, last = 98765.0, 12345.0, time.time()
     while True:
-        regs.write(battery.step())
+        values = battery.step()
+        regs.write(values)
+        now = time.time()
+        grid = values["grid_power"]
+        if grid > 0:
+            imported += grid * (now - last) / 3600
+        else:
+            exported += -grid * (now - last) / 3600
+        last = now
+        meter.write(meter_values(values, imported, exported))
         await asyncio.sleep(2)
 
 
-async def main(port: int) -> None:
+async def main(port: int, meter_port: int | None) -> None:
     regs = Registers()
+    meter = Registers(METER_REGISTERS, METER_IMPLEMENTED)
     battery = Battery()
     regs.write(STATIC)
-    regs.write(battery.step())
-    asyncio.create_task(update_loop(regs, battery))
-    server = await asyncio.start_server(lambda r, w: handle(regs, r, w), "0.0.0.0", port)
+    meter.write(METER_STATIC)
+    asyncio.create_task(update_loop(regs, meter, battery))
+    servers = [await asyncio.start_server(lambda r, w: handle(regs, r, w), "0.0.0.0", port)]
     print(f"Simulated Solarbank listening on 0.0.0.0:{port}", flush=True)
-    async with server:
-        await server.serve_forever()
+    if meter_port:
+        servers.append(await asyncio.start_server(lambda r, w: handle(meter, r, w), "0.0.0.0", meter_port))
+        print(f"Simulated Smart Meter listening on 0.0.0.0:{meter_port}", flush=True)
+    await asyncio.gather(*(s.serve_forever() for s in servers))
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=5020)
-    asyncio.run(main(parser.parse_args().port))
+    parser.add_argument("--meter-port", type=int, default=None, help="also simulate a Smart Meter on this port")
+    args = parser.parse_args()
+    asyncio.run(main(args.port, args.meter_port))

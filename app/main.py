@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .collector import Collector, probe
+from .registers import BATTERY, METER
 from .config import Connection, ConnectionStore, Settings
 from .storage import Storage
 
@@ -27,23 +28,35 @@ logging.basicConfig(
 STATIC = Path(__file__).parent / "static"
 
 
+DEVICES = {"battery": BATTERY, "meter": METER}
+ENV_NAMES = {"battery": "SOLARBANK_HOST", "meter": "METER_HOST"}
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = Settings.from_env()
     storage = Storage(settings.db_path, settings.retention_days, settings.timezone)
     store = ConnectionStore(settings.settings_path)
-    collector = Collector(settings, storage, store.load())
-    app.state.collector = collector
+    collectors = {
+        "battery": Collector(settings, storage, store.load("battery"), BATTERY),
+        # The Smart Meter is optional and shown live only; history comes from the battery.
+        "meter": Collector(settings, None, store.load("meter"), METER),
+    }
+    app.state.collectors = collectors
+    app.state.collector = collectors["battery"]
     app.state.connection_store = store
     app.state.storage = storage
-    task = asyncio.create_task(collector.run())
+    tasks = [asyncio.create_task(c.run()) for c in collectors.values()]
     try:
         yield
     finally:
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-        collector.close()
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        for c in collectors.values():
+            c.close()
         storage.close()
 
 
@@ -52,8 +65,13 @@ app = FastAPI(title="Solarbank Dashboard", lifespan=lifespan)
 
 @app.get("/api/live")
 def live() -> dict:
-    c: Collector = app.state.collector
-    return {"status": c.status(), "data": c.snapshot}
+    battery: Collector = app.state.collectors["battery"]
+    meter: Collector = app.state.collectors["meter"]
+    return {
+        "status": battery.status(),
+        "data": battery.snapshot,
+        "meter": {"status": meter.status(), "data": meter.snapshot},
+    }
 
 
 @app.get("/api/history")
@@ -75,37 +93,51 @@ class ConnectionIn(BaseModel):
 @app.get("/api/settings")
 def get_settings() -> dict:
     store: ConnectionStore = app.state.connection_store
-    conn: Connection = app.state.collector.connection
-    return {"host": conn.host, "port": conn.port, "unit_id": conn.unit_id, "locked": store.from_env}
+    out = {}
+    for device, collector in app.state.collectors.items():
+        conn: Connection = collector.connection
+        out[device] = {"host": conn.host, "port": conn.port, "unit_id": conn.unit_id, "locked": store.from_env(device)}
+    return out
 
 
-@app.post("/api/settings/test")
-async def test_settings(body: ConnectionIn) -> dict:
+@app.post("/api/settings/{device}/test")
+async def test_settings(device: str, body: ConnectionIn) -> dict:
+    profile = _profile(device)
     conn = _validated(body)
     try:
-        return {"ok": True, "device": await probe(conn)}
+        return {"ok": True, "device": await probe(conn, profile)}
     except Exception as err:
         raise HTTPException(status_code=422, detail=str(err)) from err
 
 
-@app.post("/api/settings")
-async def save_settings(body: ConnectionIn, skip_test: bool = False) -> dict:
+@app.post("/api/settings/{device}")
+async def save_settings(device: str, body: ConnectionIn, skip_test: bool = False) -> dict:
+    profile = _profile(device)
     store: ConnectionStore = app.state.connection_store
-    if store.from_env:
+    if store.from_env(device):
         raise HTTPException(
             status_code=409,
-            detail="The address is set by SOLARBANK_HOST in the container settings. Remove it there to edit it here.",
+            detail=f"This address is set by {ENV_NAMES[device]} in the container settings. Remove it there to edit it here.",
         )
-    conn = _validated(body)
-    device = None
-    if not skip_test:
-        try:
-            device = await probe(conn)
-        except Exception as err:
-            raise HTTPException(status_code=422, detail=str(err)) from err
-    store.save(conn)
-    app.state.collector.reconfigure(conn)
-    return {"ok": True, "device": device}
+    found = None
+    if device == "meter" and not body.host.strip():
+        conn = Connection()  # removing the optional meter
+    else:
+        conn = _validated(body)
+        if not skip_test:
+            try:
+                found = await probe(conn, profile)
+            except Exception as err:
+                raise HTTPException(status_code=422, detail=str(err)) from err
+    store.save(conn, device)
+    app.state.collectors[device].reconfigure(conn)
+    return {"ok": True, "device": found}
+
+
+def _profile(device: str):
+    if device not in DEVICES:
+        raise HTTPException(status_code=404, detail="Unknown device")
+    return DEVICES[device]
 
 
 def _validated(body: ConnectionIn) -> Connection:
@@ -118,7 +150,7 @@ def _validated(body: ConnectionIn) -> Connection:
 @app.get("/api/raw")
 def raw() -> dict:
     """Every decoded register, for troubleshooting."""
-    return app.state.collector.raw
+    return {device: c.raw for device, c in app.state.collectors.items()}
 
 
 @app.get("/healthz")
