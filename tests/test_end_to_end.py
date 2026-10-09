@@ -58,3 +58,36 @@ def test_collector_reads_simulated_meter():
     assert c.snapshot["meter_type"] == "Single phase"
     assert c.snapshot["import_total_kwh"] == 1.0
     assert len(c.snapshot["phases"]) == 1
+
+
+def test_meter_that_refuses_block_reads():
+    # Some firmware rejects a range spanning unimplemented addresses but
+    # answers each register on its own; Anker's integration falls back the
+    # same way. Implement only the mapped registers, so every block fails.
+    from app.collector import probe
+    from app.registers import METER, METER_REGISTERS
+    from simulator.sim import METER_STATIC, meter_values
+
+    only_mapped = {4: {r.address + i for r in METER_REGISTERS for i in range(r.count)}}
+
+    async def run():
+        regs = Registers(METER_REGISTERS, only_mapped)
+        regs.write(METER_STATIC)
+        regs.write(meter_values({"grid_power": 420}, 1000.0, 2000.0))
+        server = await asyncio.start_server(lambda r, w: handle(regs, r, w), "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        settings = Settings(5, 365, ":memory:", "unused.json", "UTC")
+        collector = Collector(settings, None, Connection("127.0.0.1", port, 1), METER)
+        try:
+            found = await probe(Connection("127.0.0.1", port, 1), METER)
+            await collector.poll_once()
+        finally:
+            collector.close()
+            server.close()
+        return found, collector
+
+    found, c = asyncio.run(run())
+    assert found["serial"] == METER_STATIC["meter_sn"]
+    assert found["grid_w"] == 420
+    assert c.snapshot["grid_w"] == 420
+    assert c.snapshot["firmware"] == "1.0.4.2"

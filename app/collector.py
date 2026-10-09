@@ -114,9 +114,12 @@ class Collector:
                 self._note_unavailable(kind, start, str(err))
                 continue
             if result.isError():
-                # An exception response (e.g. illegal address on older firmware)
-                # only loses this block, not the whole poll.
-                self._note_unavailable(kind, start, str(result))
+                # An exception response (e.g. a gap of unimplemented addresses)
+                # only loses this block; read its registers one at a time.
+                single = await read_singly(client, self.profile, kind, start, end, conn.unit_id)
+                if not single:
+                    self._note_unavailable(kind, start, str(result))
+                blocks.update(single)
                 continue
             blocks[(kind, start)] = list(result.registers)
 
@@ -224,6 +227,31 @@ async def tcp_check(host: str, port: int, timeout: float = 4) -> None:
     writer.close()
 
 
+async def read_singly(
+    client: AsyncModbusTcpClient, profile: Profile, kind: str, start: int, end: int, unit_id: int
+) -> dict[tuple[str, int], list[int]]:
+    """Read each register in a block on its own, after the block read was refused.
+
+    Anker's own integration does the same: some firmware rejects a range
+    that spans unimplemented addresses but answers the registers within it.
+    Returns one mini block per register that answered.
+    """
+    reader = client.read_holding_registers if kind == HOLDING else client.read_input_registers
+    found: dict[tuple[str, int], list[int]] = {}
+    for reg in profile.registers:
+        if reg.kind != kind or not start <= reg.address <= end:
+            continue
+        try:
+            result = await reader(reg.address, count=reg.count, device_id=unit_id)
+        except ModbusException:
+            if not client.connected:
+                break
+            continue
+        if not result.isError():
+            found[(kind, reg.address)] = list(result.registers)
+    return found
+
+
 BUSY_HINT = (
     "Some Anker devices accept only one Modbus TCP connection at a time, so if Home Assistant "
     "or another tool is connected to it, pause that and try again."
@@ -263,8 +291,13 @@ async def probe(conn: Connection, profile: Profile = BATTERY) -> dict[str, Any]:
                     break  # silent from the start; don't make people wait for every block
                 continue
             if result.isError():
-                log.info("Setup test: read input %s+%s from %s: error response %s", start, count, where, result)
-                errors.append(str(result))
+                single = await read_singly(client, profile, kind, start, end, conn.unit_id)
+                wanted = sum(1 for r in profile.registers if r.kind == kind and start <= r.address <= end)
+                log.info("Setup test: read input %s+%s from %s: error response %s; one at a time got %s of %s values",
+                         start, count, where, result, len(single), wanted)
+                if not single:
+                    errors.append(str(result))
+                blocks.update(single)
                 continue
             log.info("Setup test: read input %s+%s from %s: OK in %.1fs, first words %s", start, count, where,
                      time.monotonic() - began, " ".join(f"{r:04X}" for r in result.registers[:6]))
