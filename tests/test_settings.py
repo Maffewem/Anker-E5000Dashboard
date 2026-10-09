@@ -131,6 +131,8 @@ def test_event_log_api(client):
     client.app.state.storage.record_event("control", "Charged to 80%", source="dashboard")
     assert [e["message"] for e in client.get("/api/events").json()] == ["Charged to 80%"]
     assert client.get("/api/events?kind=charging").json() == []
+    assert client.get("/api/events").headers["X-Total-Count"] == "1"
+    assert client.get("/api/events?offset=1").json() == []
     assert client.get("/api/events?kind=nonsense").status_code == 422
     r = client.get("/api/export?data=events")
     assert r.text.splitlines()[0] == "time,ts,device,kind,field,old,new,message,source"

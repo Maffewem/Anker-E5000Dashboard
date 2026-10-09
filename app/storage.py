@@ -228,8 +228,21 @@ class Storage:
             )
             self._db.commit()
 
-    def events(self, limit: int = 100, before: int | None = None, kinds: list[str] | None = None) -> list[dict]:
-        """Newest first; `before` (an event id) pages back through older ones."""
+    def events(self, limit: int = 100, before: int | None = None, kinds: list[str] | None = None,
+               offset: int = 0) -> list[dict]:
+        """Newest first; page back with `offset` or `before` (an event id)."""
+        where, args = self._event_filter(before, kinds)
+        sql = "SELECT * FROM events" + where + " ORDER BY id DESC LIMIT ? OFFSET ?"
+        with self._lock:
+            return [dict(r) for r in self._db.execute(sql, (*args, limit, offset)).fetchall()]
+
+    def count_events(self, kinds: list[str] | None = None) -> int:
+        where, args = self._event_filter(None, kinds)
+        with self._lock:
+            return self._db.execute("SELECT COUNT(*) FROM events" + where, args).fetchone()[0]
+
+    @staticmethod
+    def _event_filter(before: int | None, kinds: list[str] | None) -> tuple[str, list]:
         where, args = [], []
         if before is not None:
             where.append("id < ?")
@@ -237,9 +250,7 @@ class Storage:
         if kinds:
             where.append(f"kind IN ({','.join('?' * len(kinds))})")
             args.extend(kinds)
-        sql = "SELECT * FROM events" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY id DESC LIMIT ?"
-        with self._lock:
-            return [dict(r) for r in self._db.execute(sql, (*args, limit)).fetchall()]
+        return (" WHERE " + " AND ".join(where) if where else ""), args
 
     def event_state(self, device: str) -> dict[str, str | None]:
         with self._lock:

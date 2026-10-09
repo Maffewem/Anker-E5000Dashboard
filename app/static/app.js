@@ -1069,8 +1069,8 @@ let meterPromptShown = false;
 let savedSettings = {};
 // ---------- Event log ----------
 
-const EVENT_PAGE = 20;
-let eventsShown = [];
+const EVENT_PAGE = 10;
+let eventsPage = 1;
 
 function eventTime(ts) {
   const d = new Date(ts * 1000);
@@ -1080,9 +1080,9 @@ function eventTime(ts) {
     : d.toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
-function renderEvents() {
+function renderEvents(events) {
   const body = $("events-table").querySelector("tbody");
-  body.replaceChildren(...eventsShown.map((e) => {
+  body.replaceChildren(...events.map((e) => {
     const tr = document.createElement("tr");
     for (const text of [eventTime(e.ts), DEVICE_LABEL[e.device] || e.device, e.message]) {
       const td = document.createElement("td");
@@ -1091,34 +1091,64 @@ function renderEvents() {
     }
     return tr;
   }));
-  $("events-empty").hidden = eventsShown.length > 0;
-  $("events-table").hidden = eventsShown.length === 0;
+  $("events-empty").hidden = events.length > 0;
+  $("events-table").hidden = events.length === 0;
 }
 
-async function getEvents(before) {
-  const params = new URLSearchParams({ limit: EVENT_PAGE, kind: $("events-filter").value });
-  if (before) params.set("before", before);
-  const r = await fetch(`/api/events?${params}`);
-  return r.ok ? r.json() : [];
+// Page numbers to show: the first, the last, and two either side of the
+// current one, with null where a run is left out.
+function pageList(current, pages) {
+  const keep = new Set([1, pages]);
+  for (let p = current - 2; p <= current + 2; p++) if (p >= 1 && p <= pages) keep.add(p);
+  const out = [];
+  [...keep].sort((a, b) => a - b).forEach((p, i, all) => {
+    if (i && p - all[i - 1] > 1) out.push(p - all[i - 1] === 2 ? p - 1 : null);
+    out.push(p);
+  });
+  return out;
+}
+
+function renderPager(pages) {
+  const nav = $("events-pager");
+  nav.hidden = pages <= 1;
+  if (pages <= 1) return nav.replaceChildren();
+  const button = (label, page, opts = {}) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = label;
+    if (opts.aria) b.setAttribute("aria-label", opts.aria);
+    if (page === eventsPage && !opts.step) b.setAttribute("aria-current", "page");
+    b.disabled = opts.step ? page < 1 || page > pages : false;
+    b.addEventListener("click", () => { eventsPage = page; refreshEvents(); });
+    return b;
+  };
+  nav.replaceChildren(
+    button("‹", eventsPage - 1, { step: true, aria: "Newer" }),
+    ...pageList(eventsPage, pages).map((p) => {
+      if (p !== null) return button(String(p), p, { aria: `Page ${p}` });
+      const gap = document.createElement("span");
+      gap.className = "gap";
+      gap.textContent = "…";
+      return gap;
+    }),
+    button("›", eventsPage + 1, { step: true, aria: "Older" }),
+  );
 }
 
 async function refreshEvents() {
-  // Reload as many as are showing, so "Show older" pages aren't lost on refresh.
-  const params = new URLSearchParams({ limit: Math.max(EVENT_PAGE, eventsShown.length), kind: $("events-filter").value });
+  const params = new URLSearchParams({
+    limit: EVENT_PAGE, offset: (eventsPage - 1) * EVENT_PAGE, kind: $("events-filter").value,
+  });
   const r = await fetch(`/api/events?${params}`);
   if (!r.ok) return;
-  eventsShown = await r.json();
-  $("events-more").hidden = eventsShown.length < Number(params.get("limit"));
-  renderEvents();
+  const events = await r.json();
+  const pages = Math.max(1, Math.ceil(Number(r.headers.get("X-Total-Count") || 0) / EVENT_PAGE));
+  if (eventsPage > pages) { eventsPage = pages; return refreshEvents(); }
+  renderEvents(events);
+  renderPager(pages);
 }
 
-$("events-more").addEventListener("click", async () => {
-  const older = await getEvents(eventsShown.at(-1)?.id);
-  eventsShown = eventsShown.concat(older);
-  $("events-more").hidden = older.length < EVENT_PAGE;
-  renderEvents();
-});
-$("events-filter").addEventListener("change", () => { eventsShown = []; refreshEvents(); });
+$("events-filter").addEventListener("change", () => { eventsPage = 1; refreshEvents(); });
 
 // Export: dates default to the last 7 days, in the browser's local time.
 function isoDay(d) {
