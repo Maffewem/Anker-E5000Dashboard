@@ -24,15 +24,19 @@
   </header>
 
   <div class="banner" id="banner" role="alert" hidden>
-    <p id="banner-text"></p>
+    <div id="banner-text" class="banner-lines"></div>
     <button type="button" id="banner-setup">Change connection</button>
   </div>
 
   <dialog id="setup" aria-labelledby="setup-title">
     <form id="setup-form" method="dialog" novalidate>
-      <h2 id="setup-title">Connect to your Solarbank</h2>
-      <p class="dialog-intro">In the Anker app, open your Solarbank, tap the gear icon, then <b>Three-Party Control Settings</b>. Turn on <b>Modbus TCP</b> and enter the IP address it shows.</p>
-      <label for="setup-host">Battery IP address</label>
+      <h2 id="setup-title">Connections</h2>
+      <div class="range device-switch" role="group" aria-label="Device">
+        <button type="button" data-device="battery" aria-pressed="true">Solarbank</button>
+        <button type="button" data-device="meter" aria-pressed="false">Smart Meter <span class="muted">(optional)</span></button>
+      </div>
+      <p class="dialog-intro">In the Anker app, open your <span class="device-label">Solarbank</span>, tap the gear icon, then <b>Three-Party Control Settings</b>. Turn on <b>Modbus TCP</b> and enter the IP address it shows.</p>
+      <label for="setup-host"><span class="device-label">Solarbank</span> IP address</label>
       <input id="setup-host" name="host" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="e.g. 192.168.0.42" required>
       <details class="advanced">
         <summary>Advanced</summary>
@@ -41,7 +45,7 @@
           <div><label for="setup-unit">Unit id</label><input id="setup-unit" name="unit_id" type="number" min="0" max="247" value="1"></div>
         </div>
       </details>
-      <p class="locked-note" id="setup-locked" hidden>This address is set by <code>SOLARBANK_HOST</code> in the container settings. Remove that variable from your stack to change it here.</p>
+      <p class="locked-note" id="setup-locked" hidden>This address is set by <code id="setup-env">SOLARBANK_HOST</code> in the container settings. Remove that variable from your stack to change it here.</p>
       <p class="setup-msg" id="setup-msg" role="status" aria-live="polite"></p>
       <div class="dialog-actions">
         <button type="button" class="secondary" id="setup-cancel">Cancel</button>
@@ -49,6 +53,7 @@
         <button type="submit" class="primary" id="setup-save">Save</button>
       </div>
       <button type="button" class="link" id="setup-force" hidden>Save without a successful test</button>
+      <button type="button" class="link" id="setup-remove" hidden>Remove the Smart Meter</button>
     </form>
   </dialog>
 
@@ -111,8 +116,16 @@
       </details>
     </section>
 
+    <section class="card" id="meter-card" hidden>
+      <div class="card-head">
+        <h2>Smart Meter</h2>
+        <p class="today" id="meter-status"></p>
+      </div>
+      <dl class="facts" id="meter-facts"></dl>
+    </section>
+
     <section class="card">
-      <h2>Device</h2>
+      <h2>Solarbank</h2>
       <dl class="facts" id="facts"></dl>
     </section>
   </main>

@@ -92,6 +92,9 @@ def decode(data_type: str, words: list[int]) -> Any:
         if data_type == "INT32" and raw & 0x80000000:
             raw -= 0x100000000
         return raw
+    if data_type == "VERSION":
+        raw = b"".join((w & 0xFFFF).to_bytes(2, "big") for w in words[:2])
+        return ".".join(str(b) for b in raw)
     if data_type == "STRING":
         raw = b"".join((w & 0xFFFF).to_bytes(2, "big") for w in words)
         return raw.decode("utf-8", errors="ignore").replace("\x00", "").strip()
@@ -105,20 +108,24 @@ def encode(data_type: str, value: Any, count: int = 1) -> list[int]:
     if data_type in ("UINT32", "INT32"):
         raw = int(value) & 0xFFFFFFFF
         return [raw >> 16, raw & 0xFFFF]
+    if data_type == "VERSION":
+        parts = [int(x) for x in str(value).split(".")][:4]
+        parts += [0] * (4 - len(parts))
+        return [(parts[0] << 8) | parts[1], (parts[2] << 8) | parts[3]]
     if data_type == "STRING":
         raw = str(value).encode().ljust(count * 2, b"\x00")[: count * 2]
         return [int.from_bytes(raw[i : i + 2], "big") for i in range(0, len(raw), 2)]
     raise ValueError(f"unknown data type {data_type}")
 
 
-def extract(blocks: dict[tuple[str, int], list[int]]) -> dict[str, Any]:
+def extract(blocks: dict[tuple[str, int], list[int]], registers: list[Register] | None = None) -> dict[str, Any]:
     """Pull every register out of the blocks that were read successfully.
 
     `blocks` maps (kind, start_address) to the words read from that block.
     Registers whose block failed are simply absent from the result.
     """
     values: dict[str, Any] = {}
-    for reg in REGISTERS:
+    for reg in REGISTERS if registers is None else registers:
         for (kind, start), words in blocks.items():
             offset = reg.address - start
             if kind == reg.kind and 0 <= offset and offset + reg.count <= len(words):
@@ -165,3 +172,92 @@ def derive(raw: dict[str, Any]) -> dict[str, Any]:
         "serial": raw.get("device_sn") or None,
         "firmware": raw.get("device_sw_version") or None,
     }
+
+
+# =============================================================================
+# Anker SOLIX Smart Meter Gen 2
+# From the official integration's config/42bcf12f...yaml. All input registers.
+# "Primary" is the main CT clamp on the grid connection; "secondary" is the
+# optional second CT. Power is positive when importing from the grid
+# (assumed from the meter's conventions; not yet checked on real hardware).
+# =============================================================================
+
+METER_REGISTERS: list[Register] = [
+    Register("meter_model", 10620, "STRING", 10),
+    Register("meter_type", 10630, "UINT16"),
+    Register("phase_1_voltage", 10632, "UINT16", gain=10),
+    Register("phase_2_voltage", 10633, "UINT16", gain=10),
+    Register("phase_3_voltage", 10634, "UINT16", gain=10),
+    Register("phase_1_current", 10635, "INT16", gain=100),
+    Register("phase_2_current", 10636, "INT16", gain=100),
+    Register("phase_3_current", 10637, "INT16", gain=100),
+    Register("phase_1_power", 10638, "INT32", 2),
+    Register("phase_2_power", 10640, "INT32", 2),
+    Register("phase_3_power", 10642, "INT32", 2),
+    Register("total_power", 10644, "INT32", 2),
+    Register("total_power_factor", 10648, "INT16", gain=1000),
+    Register("total_import_energy", 10656, "UINT32", 2, gain=10),  # kWh
+    Register("total_export_energy", 10664, "UINT32", 2, gain=10),  # kWh
+    Register("secondary_total_power", 10675, "INT32", 2),
+    Register("secondary_import_energy", 10686, "UINT32", 2, gain=10),
+    Register("secondary_export_energy", 10694, "UINT32", 2, gain=10),
+    Register("meter_sw_version", 10696, "VERSION", 2),
+    Register("meter_sn", 10702, "STRING", 10),
+]
+
+METER_BLOCKS: list[tuple[str, int, int]] = [
+    (INPUT, 10620, 10647),
+    (INPUT, 10648, 10695),
+    (INPUT, 10696, 10712),
+]
+
+METER_TYPES = {1: "Single phase", 2: "Three phase"}
+
+
+def derive_meter(raw: dict[str, Any]) -> dict[str, Any]:
+    """Turn raw Smart Meter registers into the snapshot the dashboard shows."""
+
+    def num(key: str) -> float | None:
+        v = raw.get(key)
+        return v if isinstance(v, (int, float)) else None
+
+    meter_type = raw.get("meter_type")
+    three_phase = meter_type == 2
+    phases = []
+    for n in (1, 2, 3) if three_phase else (1,):
+        phases.append(
+            {
+                "phase": n,
+                "voltage": num(f"phase_{n}_voltage"),
+                "current": num(f"phase_{n}_current"),
+                "power_w": num(f"phase_{n}_power"),
+            }
+        )
+    return {
+        "grid_w": num("total_power"),  # + import, - export
+        "power_factor": num("total_power_factor"),
+        "phases": phases,
+        "import_total_kwh": num("total_import_energy"),
+        "export_total_kwh": num("total_export_energy"),
+        "secondary_w": num("secondary_total_power"),
+        "secondary_import_total_kwh": num("secondary_import_energy"),
+        "secondary_export_total_kwh": num("secondary_export_energy"),
+        "meter_type": METER_TYPES.get(meter_type, None if meter_type is None else f"unknown ({meter_type})"),
+        "model": raw.get("meter_model") or None,
+        "serial": raw.get("meter_sn") or None,
+        "firmware": raw.get("meter_sw_version") or None,
+    }
+
+
+@dataclass(frozen=True)
+class Profile:
+    """What to read from one kind of device and how to present it."""
+
+    name: str
+    registers: list[Register]
+    blocks: list[tuple[str, int, int]]
+    derive: Any  # Callable[[dict], dict]
+
+
+BATTERY = Profile("battery", REGISTERS, READ_BLOCKS, derive)
+METER = Profile("meter", METER_REGISTERS, METER_BLOCKS, derive_meter)

@@ -32,7 +32,8 @@ async function refreshLive() {
     setStatus("offline", "Dashboard unreachable");
     return;
   }
-  const { status, data } = body;
+  const { status, data, meter } = body;
+  renderMeter(meter);
   const stale = status.last_update && Date.now() / 1000 - status.last_update > status.poll_seconds * 4;
 
   if (!status.configured) setStatus("offline", "Not set up");
@@ -40,7 +41,7 @@ async function refreshLive() {
   else if (status.last_update) setStatus("offline", `Offline · last data ${timeAgo(status.last_update)}`);
   else setStatus("offline", status.last_error ? "Can't reach battery" : "Connecting");
   $("status").title = status.last_error || "";
-  showBanner(status, stale);
+  showBanner(status, stale, meter);
   if (!status.configured && !setupShownOnce) { setupShownOnce = true; openSetup(); }
 
   if (!data || !Object.keys(data).length) {
@@ -57,28 +58,68 @@ async function refreshLive() {
     .filter(Boolean).join(" · ") || status.host;
 
   $("solar").textContent = watts(data.solar_w);
-  $("solar-detail").textContent = data.solar_total_kwh != null ? `${kwh(data.solar_total_kwh)} lifetime` : " ";
+  $("solar-detail").textContent = data.solar_total_kwh != null ? `${kwh(data.solar_total_kwh)} lifetime` : "\u00a0";
 
   $("home").textContent = watts(data.home_w);
-  $("home-detail").textContent = data.ac_output_w != null ? `Battery AC output ${watts(data.ac_output_w)}` : " ";
+  $("home-detail").textContent = data.ac_output_w != null ? `Battery AC output ${watts(data.ac_output_w)}` : "\u00a0";
 
   $("soc").textContent = data.soc != null ? `${Math.round(data.soc)}%` : "–";
   $("soc-bar").style.width = `${Math.max(0, Math.min(100, data.soc || 0))}%`;
   const b = data.battery_w;
   $("battery-detail").textContent =
-    b == null ? " " : b < -5 ? `Charging ${watts(b)}` : b > 5 ? `Discharging ${watts(b)}` : "Idle";
+    b == null ? "\u00a0" : b < -5 ? `Charging ${watts(b)}` : b > 5 ? `Discharging ${watts(b)}` : "Idle";
 
-  const g = data.grid_w;
+  // Prefer the Smart Meter's reading of the grid connection when it's live.
+  const meterLive = meter && meter.status.connected && meter.data && meter.data.grid_w != null;
+  const g = meterLive ? meter.data.grid_w : data.grid_w;
   $("grid").textContent = watts(g);
-  $("grid-detail").textContent = g == null ? " " : g > 5 ? "Importing" : g < -5 ? "Exporting" : "Balanced";
+  const dir = g == null ? null : g > 5 ? "Importing" : g < -5 ? "Exporting" : "Balanced";
+  $("grid-detail").textContent = dir == null ? "\u00a0" : meterLive ? `${dir} · Smart Meter` : dir;
 
   renderFacts(data, status);
 }
 
-function showBanner(status, stale) {
-  const offline = status.configured && (!status.connected || stale) && status.last_error;
-  $("banner").hidden = !offline;
-  if (offline) $("banner-text").textContent = status.last_error;
+function showBanner(status, stale, meter) {
+  const lines = [];
+  if (status.configured && (!status.connected || stale) && status.last_error) lines.push(`Solarbank: ${status.last_error}`);
+  const m = meter && meter.status;
+  if (m && m.configured && !m.connected && m.last_error) lines.push(`Smart Meter: ${m.last_error}`);
+  $("banner").hidden = !lines.length;
+  $("banner-text").replaceChildren(...lines.map((t) => { const p = document.createElement("p"); p.textContent = t; return p; }));
+}
+
+function factList(el, rows) {
+  el.replaceChildren(...rows.filter(([, v]) => v != null && v !== "").map(([k, v]) => {
+    const div = document.createElement("div");
+    const dt = document.createElement("dt"); dt.textContent = k;
+    const dd = document.createElement("dd"); dd.textContent = v;
+    div.append(dt, dd);
+    return div;
+  }));
+}
+
+function renderMeter(meter) {
+  const card = $("meter-card");
+  if (!meter || !meter.status.configured) { card.hidden = true; return; }
+  card.hidden = false;
+  const s = meter.status, d = meter.data || {};
+  $("meter-status").textContent = s.connected ? `Live · ${s.host}` : s.last_update ? `Offline · last data ${timeAgo(s.last_update)}` : `Waiting for ${s.host}`;
+  const fixed = (v, n, unit) => (v == null ? null : `${v.toFixed(n)} ${unit}`);
+  const rows = [
+    ["Grid power", d.grid_w == null ? null : `${watts(d.grid_w)} ${d.grid_w > 5 ? "importing" : d.grid_w < -5 ? "exporting" : ""}`.trim()],
+  ];
+  for (const p of d.phases || []) {
+    const label = d.phases.length > 1 ? `Phase ${p.phase}` : "Line";
+    rows.push([label, [fixed(p.voltage, 1, "V"), fixed(p.current, 2, "A"), p.power_w == null ? null : watts(p.power_w)].filter(Boolean).join(" · ")]);
+  }
+  rows.push(
+    ["Power factor", d.power_factor == null ? null : d.power_factor.toFixed(2)],
+    ["Lifetime import", d.import_total_kwh == null ? null : kwh(d.import_total_kwh)],
+    ["Lifetime export", d.export_total_kwh == null ? null : kwh(d.export_total_kwh)],
+  );
+  if (d.secondary_w) rows.push(["Second CT power", watts(d.secondary_w)]);
+  rows.push(["Model", d.model], ["Serial number", d.serial], ["Firmware", d.firmware], ["Type", d.meter_type]);
+  factList($("meter-facts"), rows);
 }
 
 function setStatus(kind, text) {
@@ -264,6 +305,10 @@ async function refreshEnergy() {
 // ---------- Setup ----------
 
 let setupShownOnce = false;
+let setupDevice = "battery";
+let savedSettings = {};
+const DEVICE_LABEL = { battery: "Solarbank", meter: "Smart Meter" };
+const DEVICE_ENV = { battery: "SOLARBANK_HOST", meter: "METER_HOST" };
 
 function setupValues() {
   return {
@@ -281,8 +326,10 @@ function setupMessage(kind, text) {
 
 function describeDevice(d) {
   if (!d) return "Connected.";
-  const bits = [d.model && `model ${d.model}`, d.serial && `serial ${d.serial}`, d.soc != null && `battery at ${Math.round(d.soc)}%`].filter(Boolean);
-  return bits.length ? `Found your Solarbank: ${bits.join(", ")}.` : "Connected.";
+  const bits = [d.model && `model ${d.model}`, d.serial && `serial ${d.serial}`,
+    d.soc != null && `battery at ${Math.round(d.soc)}%`,
+    setupDevice === "meter" && d.grid_w != null && `grid ${watts(d.grid_w)}`].filter(Boolean);
+  return bits.length ? `Found your ${DEVICE_LABEL[setupDevice]}: ${bits.join(", ")}.` : "Connected.";
 }
 
 async function postSettings(path, body) {
@@ -297,35 +344,47 @@ async function postSettings(path, body) {
 }
 
 function setBusy(busy) {
-  for (const id of ["setup-test", "setup-save", "setup-force"]) $(id).disabled = busy || $("setup").dataset.locked === "1";
+  const locked = $("setup").dataset.locked === "1";
+  for (const id of ["setup-test", "setup-save", "setup-force", "setup-remove"]) $(id).disabled = busy || locked;
 }
 
-async function openSetup() {
-  const dlg = $("setup");
-  setupMessage("", "");
+function showDevice(device) {
+  setupDevice = device;
+  const s = savedSettings[device] || { host: "", port: 502, unit_id: 1, locked: false };
+  for (const b of document.querySelectorAll(".device-switch button")) b.setAttribute("aria-pressed", String(b.dataset.device === device));
+  for (const el of document.querySelectorAll(".device-label")) el.textContent = DEVICE_LABEL[device];
+  $("setup-host").value = s.host || "";
+  $("setup-port").value = s.port;
+  $("setup-unit").value = s.unit_id;
+  $("setup").dataset.locked = s.locked ? "1" : "0";
+  $("setup-env").textContent = DEVICE_ENV[device];
+  $("setup-locked").hidden = !s.locked;
+  for (const id of ["setup-host", "setup-port", "setup-unit"]) $(id).disabled = s.locked;
+  $("setup-remove").hidden = device !== "meter" || !s.host || s.locked;
   $("setup-force").hidden = true;
-  try {
-    const s = await (await fetch("/api/settings", { cache: "no-store" })).json();
-    $("setup-host").value = s.host || "";
-    $("setup-port").value = s.port;
-    $("setup-unit").value = s.unit_id;
-    dlg.dataset.locked = s.locked ? "1" : "0";
-    $("setup-locked").hidden = !s.locked;
-    for (const id of ["setup-host", "setup-port", "setup-unit"]) $(id).disabled = s.locked;
-    $("setup-cancel").hidden = !s.host;
-  } catch (_) {}
+  setupMessage("", "");
   setBusy(false);
+}
+
+async function openSetup(device = "battery") {
+  try {
+    savedSettings = await (await fetch("/api/settings", { cache: "no-store" })).json();
+  } catch (_) {}
+  // The dialog can't be dismissed until the battery has an address.
+  $("setup-cancel").hidden = !(savedSettings.battery && savedSettings.battery.host);
+  showDevice(device);
+  const dlg = $("setup");
   if (!dlg.open) dlg.showModal();
   if (!$("setup-host").disabled) $("setup-host").focus();
 }
 
 $("setup-test").addEventListener("click", async () => {
   const body = setupValues();
-  if (!body.host) return setupMessage("error", "Enter the battery's IP address.");
+  if (!body.host) return setupMessage("error", `Enter the ${DEVICE_LABEL[setupDevice]}'s IP address.`);
   setBusy(true);
   setupMessage("", `Trying ${body.host}…`);
   try {
-    const r = await postSettings("/api/settings/test", body);
+    const r = await postSettings(`/api/settings/${setupDevice}/test`, body);
     setupMessage("ok", describeDevice(r.device));
   } catch (err) {
     setupMessage("error", err.message);
@@ -334,11 +393,11 @@ $("setup-test").addEventListener("click", async () => {
 
 async function save(skipTest) {
   const body = setupValues();
-  if (!body.host) return setupMessage("error", "Enter the battery's IP address.");
+  if (!body.host) return setupMessage("error", `Enter the ${DEVICE_LABEL[setupDevice]}'s IP address.`);
   setBusy(true);
   setupMessage("", skipTest ? "Saving…" : `Connecting to ${body.host}…`);
   try {
-    const r = await postSettings(`/api/settings${skipTest ? "?skip_test=true" : ""}`, body);
+    const r = await postSettings(`/api/settings/${setupDevice}${skipTest ? "?skip_test=true" : ""}`, body);
     setupMessage("ok", `${describeDevice(r.device)} Saved.`);
     setTimeout(() => { $("setup").close(); refreshLive(); }, 900);
   } catch (err) {
@@ -348,20 +407,32 @@ async function save(skipTest) {
   } finally { setBusy(false); }
 }
 
+$("setup-remove").addEventListener("click", async () => {
+  setBusy(true);
+  try {
+    await postSettings("/api/settings/meter", { host: "" });
+    setupMessage("ok", "Smart Meter removed.");
+    setTimeout(() => { $("setup").close(); refreshLive(); }, 700);
+  } catch (err) {
+    setupMessage("error", err.message);
+  } finally { setBusy(false); }
+});
+
+for (const b of document.querySelectorAll(".device-switch button")) b.addEventListener("click", () => showDevice(b.dataset.device));
 $("setup-form").addEventListener("submit", (e) => { e.preventDefault(); save(false); });
 $("setup-force").addEventListener("click", () => save(true));
 $("setup-cancel").addEventListener("click", () => $("setup").close());
-$("open-setup").addEventListener("click", openSetup);
-$("banner-setup").addEventListener("click", openSetup);
+$("open-setup").addEventListener("click", () => openSetup("battery"));
+$("banner-setup").addEventListener("click", () => openSetup("battery"));
 
 // ---------- Wiring ----------
 
-for (const btn of document.querySelectorAll(".range button")) {
+for (const btn of document.querySelectorAll(".range button[data-hours]")) {
   btn.setAttribute("aria-pressed", String(Number(btn.dataset.hours) === hours));
   btn.addEventListener("click", () => {
     hours = Number(btn.dataset.hours);
     try { localStorage.setItem("hours", String(hours)); } catch (_) {}
-    for (const b of document.querySelectorAll(".range button")) b.setAttribute("aria-pressed", String(b === btn));
+    for (const b of document.querySelectorAll(".range button[data-hours]")) b.setAttribute("aria-pressed", String(b === btn));
     refreshHistory();
   });
 }

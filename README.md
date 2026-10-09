@@ -1,110 +1,48 @@
 # Anker E5000 Dashboard
 
-A small self-hosted dashboard for the **Anker SOLIX Solarbank 4 E5000 (Pro)**, in a single Docker container. You don't need Home Assistant or an Anker cloud login.
-
-It reads the battery directly over your local network with **Modbus TCP**, which Anker added for third-party integrations. The data refreshes every 5 seconds, and the container keeps a year of history in a small SQLite database.
+A self-hosted dashboard for the **Anker SOLIX Solarbank 4 E5000**, with optional **Anker Smart Meter Gen 2** support. It runs as one Docker container and reads both devices directly on your network, so you don't need Home Assistant or an Anker cloud login. It only ever reads and never changes any settings.
 
 ![Dashboard screenshot (simulated data)](docs/screenshot.png)
 
-**What it shows**
+You get live solar, home, battery and grid power, power history, daily energy totals and device details. The container keeps a year of history.
 
-- Live solar, home load, battery (charge level, charging or discharging) and grid import/export
-- Power history over 6 hours, 24 hours, 7 days or 30 days, plus battery level
-- Daily energy totals for solar, home use, grid import and grid export, with a table view
-- Device details: model, serial, firmware, operating mode, SOC limits and lifetime totals
+## Setup
 
-**It is read-only.** It never writes to the battery, so the Anker app's mode and schedule stay in charge. Anker's own Home Assistant integration does write: it switches the battery into "third-party control" the first time it connects. This dashboard doesn't do that.
+**1. Turn on Modbus in the Anker app.** For each device (the Solarbank, and the Smart Meter if you have one), open it in the app, tap the gear icon, then **Three-Party Control Settings**. Turn on **Modbus TCP**, and note the IP address it shows. It helps to give each device a fixed IP in your router.
 
-## 1. Turn on Modbus TCP in the Anker app
+**2. Deploy the stack in Portainer.** Go to **Stacks › Add stack › Repository**, enter this repo's URL, and deploy. Turn on **Authentication** with your GitHub username and token, since the repo is private. The Compose path is `docker-compose.yml`.
 
-1. Open the Anker app, go to **Devices**, and pick your Solarbank.
-2. Tap the gear icon, then **Three-Party Control Settings**.
-3. Turn on **Modbus TCP**, and note the **IP address** it shows.
+**3. Open the dashboard** at `http://<your-pi-or-nas>:8080` and enter the Solarbank's IP address. To add a Smart Meter, click the gear icon (top right) and choose **Smart Meter**.
 
-Give the Solarbank a fixed IP address in your router (a DHCP reservation) so it doesn't move.
+The image is private too. To let Portainer pull it, add a registry under **Registries › Add registry › Custom**. Use `ghcr.io`, your GitHub username, and a [token](https://github.com/settings/tokens) with `read:packages`.
 
-## 2. Run it
+## If something goes wrong
 
-### Portainer
-
-Either option works:
-
-- **Repository** (recommended, updates with the repo): go to **Stacks › Add stack › Repository**, enter this repo's URL with **Compose path** `docker-compose.yml`, and deploy.
-- **Web editor**: paste in [`docker-compose.yml`](docker-compose.yml) and deploy.
-
-Then open `http://<your-pi-or-nas>:8080`. The first time you open it, a setup screen asks for the battery's IP address. It tests the connection, shows the model and serial it finds, and saves the address in the data volume. To change it later, use the gear button at the top right.
-
-You never need to edit the compose file. Every setting is read from the stack's **Environment variables** section in Portainer (see [Settings](#settings)):
-
-- **Port 8080 already in use** ("port is already allocated"): add `HOST_PORT` = `8090` (or any free port), redeploy, and open `http://<your-pi-or-nas>:8090`.
-- **"No network route" on the setup screen**: the container can't see your home network through Docker's bridge network. Change the stack's **Compose path** to `docker-compose.host.yml`, which uses host networking. That file has no port mapping, so if 8080 is taken there, set `PORT` instead.
-
-The image is built for `linux/amd64` and `linux/arm64`, which covers a 64-bit Raspberry Pi OS and most NASes. It is published to `ghcr.io/maffewem/anker-e5000dashboard`. This repository is private, so the image is private too. You have two options:
-
-- In Portainer, add a registry under **Registries › Add registry › Custom**. Use `ghcr.io`, your GitHub username, and a [personal access token](https://github.com/settings/tokens) with the `read:packages` scope.
-- Or make the package public, from your GitHub profile under **Packages › anker-e5000dashboard › Package settings**.
-
-### Plain Docker
-
-```sh
-docker run -d --name solarbank-dashboard --restart unless-stopped \
-  -p 8080:8080 -e TZ=Europe/London \
-  -v solarbank-data:/data ghcr.io/maffewem/anker-e5000dashboard:latest
-```
-
-### Settings
-
-Set these in Portainer's stack **Environment variables** (or a `.env` file next to the compose file).
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `HOST_PORT` | `8080` | Port to open the dashboard on, from your browser |
-| `SOLARBANK_HOST` | *(unset)* | Optional. Sets the battery IP here instead of on the setup screen, which then shows it read-only |
-| `SOLARBANK_PORT` | `502` | Modbus TCP port |
-| `SOLARBANK_UNIT_ID` | `1` | Modbus unit id |
-| `POLL_SECONDS` | `5` | How often to read the battery |
-| `RETENTION_DAYS` | `365` | How long to keep history (`0` keeps everything) |
-| `PORT` | `8080` | Port the dashboard listens on inside the container (only needed with `docker-compose.host.yml`) |
-| `TZ` | `Europe/London` in the compose files, `UTC` otherwise | Timezone used for daily totals |
-| `LOG_LEVEL` | `INFO` | `DEBUG` for more detail |
-
-History is stored as one row per minute in `/data/solarbank.db`. That comes to roughly 50 MB a year.
-
-## Try it without a battery
-
-```sh
-docker compose -f docker-compose.demo.yml up --build
-```
-
-This starts a simulated Solarbank next to the dashboard, at http://localhost:8080.
-
-## API
-
-| Endpoint | Returns |
+| Problem | Fix |
 |---|---|
-| `GET /api/live` | Latest reading and connection status |
-| `GET /api/history?hours=24` | Average power and battery level over time |
-| `GET /api/energy?days=14` | kWh per day |
-| `GET /api/raw` | Every decoded register, for troubleshooting |
-| `GET/POST /api/settings` | The saved battery address (POST tests it, then saves it) |
-| `GET /healthz` | `200` when connected to the battery, otherwise `503` |
+| "Port is already allocated" when deploying | Add the stack environment variable `HOST_PORT` = `8090` (or any free port), and open that port instead |
+| Setup says **no network route** | Set the stack's Compose path to `docker-compose.host.yml`, which uses host networking |
+| Setup says **port 502 is closed** | Modbus TCP is off in the Anker app |
+| Setup says **no answer** | The IP is wrong, or the device is offline |
 
-## Troubleshooting
+## Settings
 
-- **"Can't reach battery"**: the red banner gives the reason.
-  - *No network route*: the address isn't on a network the container can reach. Check the IP, or use `network_mode: host`.
-  - *Port 502 is closed*: the device is there, but Modbus TCP is off in the Anker app.
-  - *No answer*: the IP is probably wrong, or the battery is offline.
-- **Some values show "–"**: your firmware may not expose every register. `GET /api/raw` shows what was read.
-- **Daily totals start from when the dashboard first ran**: they are worked out from the 5-second power readings. The lifetime totals on the device card come straight from the battery.
+You don't need to edit the compose file. Set any of these as **Environment variables** on the Portainer stack.
 
-## Development
+| Variable | Default | What it does |
+|---|---|---|
+| `HOST_PORT` | `8080` | Port you open the dashboard on |
+| `TZ` | `Europe/London` | Timezone for daily totals |
+| `RETENTION_DAYS` | `365` | Days of history to keep (`0` keeps everything) |
+| `POLL_SECONDS` | `5` | How often to read the devices |
+| `SOLARBANK_HOST`, `METER_HOST` | – | Set an address here instead of on the setup screen. The setup screen then shows it read-only |
+| `PORT` | `8080` | Port inside the container. Only needed with `docker-compose.host.yml` |
 
-```sh
-pip install -r requirements-dev.txt
-python -m pytest
-python -m simulator.sim --port 5020 &
-SOLARBANK_HOST=127.0.0.1 SOLARBANK_PORT=5020 DB_PATH=./data/dev.db uvicorn app.main:app --reload --port 8080
-```
+`SOLARBANK_PORT`, `SOLARBANK_UNIT_ID`, `METER_PORT`, `METER_UNIT_ID` and `LOG_LEVEL` also exist, but you'll rarely need them.
 
-The register map comes from Anker's MIT-licensed [official Home Assistant integration](https://github.com/anker-charging/ha-anker-solix-official). See [NOTICE.md](NOTICE.md).
+## More
+
+- **Try it without hardware:** `docker compose -f docker-compose.demo.yml up --build` runs simulated devices.
+- **API:** `/api/live`, `/api/history?hours=24`, `/api/energy?days=14`, `/api/raw` (every register, for troubleshooting) and `/healthz`.
+- **Development:** `pip install -r requirements-dev.txt && python -m pytest`, then `python -m simulator.sim --meter-port 5021` and `python -m app`.
+- The register maps come from Anker's MIT-licensed [official Home Assistant integration](https://github.com/anker-charging/ha-anker-solix-official). See [NOTICE.md](NOTICE.md).

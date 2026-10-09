@@ -3,7 +3,7 @@
 services:
   simulator:
     build: .
-    command: ["python", "-m", "simulator.sim", "--port", "5020"]
+    command: ["python", "-m", "simulator.sim", "--port", "5020", "--meter-port", "5021"]
   dashboard:
     build: .
     ports:
@@ -11,5 +11,7 @@ services:
     environment:
       SOLARBANK_HOST: simulator
       SOLARBANK_PORT: "5020"
+      METER_HOST: simulator
+      METER_PORT: "5021"
     depends_on:
       - simulator
