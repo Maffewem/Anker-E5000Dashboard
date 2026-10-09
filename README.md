@@ -1,6 +1,6 @@
 # Anker E5000 Dashboard
 
-A self-hosted dashboard for the **Anker SOLIX Solarbank 4 E5000**, with optional **Anker Smart Meter Gen 2** support. It runs as one Docker container and reads both devices directly on your network, so you don't need Home Assistant or an Anker cloud login. It only ever reads and never changes any settings.
+A self-hosted dashboard for the **Anker SOLIX Solarbank 4 E5000**, with optional **Anker Smart Meter Gen 2** support. It runs as one Docker container and reads both devices directly on your network, so you don't need Home Assistant or an Anker cloud login. It only reads, unless you turn on [Battery control](#battery-control).
 
 ![Dashboard screenshot (simulated data)](docs/screenshot.png)
 
@@ -55,6 +55,7 @@ You don't need to edit the compose file. Set any of these as **Environment varia
 - The battery payback then uses the price of each half hour you actually paid, including Agile's changing prices and Intelligent Go's extra smart-charge slots, so you only need to enter what the battery cost.
 - **Electricity prices** shows the upcoming prices and suggests when charging the battery from the grid is worth it, when to run the house from the battery, and the best export times.
 - Find your API key on octopus.energy under **Account > Personal details > API access**. It's stored in the data volume (`settings.json`), readable only inside the container.
+
 ## Using the Smart Meter in Home Assistant too
 
 The Smart Meter accepts only one Modbus TCP connection at a time, so the dashboard and Home Assistant can't both connect to it. The relay fixes that: the dashboard keeps the meter's one connection and answers Home Assistant with the same registers, on port 502, as if it were the meter.
@@ -91,8 +92,8 @@ What's protected either way: the Octopus API key is never sent to the browser (v
 ## More
 
 - **Event log:** the dashboard logs when the Solarbank starts or stops charging or discharging (once the new state has lasted a minute), changes mode, charge or discharge limit, backup reserve or firmware, and when either device connects, drops or gets a new address. Changes made while the dashboard was stopped are logged when it starts again.
-- **Export:** the Export data card at the bottom of the dashboard downloads readings as CSV or JSON for any date range, or a full backup of the database. Smart Meter readings are recorded from this version on.
+- **Export:** the Export data card at the bottom of the dashboard downloads readings as CSV or JSON for any date range, or a full backup of the database.
 - **Try it without hardware:** `docker compose -f docker-compose.demo.yml up --build` runs simulated devices.
-- **API:** `/api/live`, `/api/history?hours=24`, `/api/energy?days=14`, `/api/payback`, `/api/export?data=minutes&start=2026-01-01&end=2026-01-31` (also `daily`, `meter`, `slots`, `events`; add `&format=json` for JSON), `/api/export/backup` (the whole SQLite database), `/api/events?kind=charging,mode` (the event log, newest first), `/api/raw` (every register, for troubleshooting) and `/healthz`.
+- **API:** `/api/live`, `/api/history?hours=24`, `/api/energy?days=14`, `/api/runtime` (when the battery runs empty or fills), `/api/payback`, `/api/octopus`, `/api/compare` (tariff comparison), `/api/control`, `/api/battery-care`, `/api/export?data=minutes&start=2026-01-01&end=2026-01-31` (also `daily`, `meter`, `slots`, `events`; add `&format=json` for JSON), `/api/export/backup` (the whole SQLite database), `/api/events?kind=charging,mode` (the event log, newest first), `/api/raw` (every register, for troubleshooting) and `/healthz`.
 - **Development:** `pip install -r requirements-dev.txt && python -m pytest`, then `python -m simulator.sim --meter-port 5021` and `python -m app`.
 - The register maps come from Anker's MIT-licensed [official Home Assistant integration](https://github.com/anker-charging/ha-anker-solix-official). See [NOTICE.md](NOTICE.md).

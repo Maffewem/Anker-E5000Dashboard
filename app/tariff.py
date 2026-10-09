@@ -58,18 +58,28 @@ class Tariff:
 
     def slot_rates(self) -> list[float]:
         """Price in p/kWh for each half hour of the day (48 slots)."""
+        return fixed_profile(self.peak_rate, self.offpeak_rate, self.offpeak_start, self.offpeak_end)
 
-        def slot(hhmm: str) -> int:
-            h, m = map(int, hhmm.split(":"))
-            return (h * 60 + m) // 30
 
-        start, end = slot(self.offpeak_start), slot(self.offpeak_end)
-        rates = [self.peak_rate] * 48
-        i = start
-        while i != end:  # the window may run past midnight
-            rates[i] = self.offpeak_rate
-            i = (i + 1) % 48
-        return rates
+def slot_of(hhmm: str) -> int:
+    """The half hour of the day (0-47) a "HH:MM" time falls in."""
+    h, m = map(int, hhmm.split(":"))
+    return (h * 60 + m) // 30
+
+
+def slot_time(slot: int) -> str:
+    """When a half hour of the day starts, as "HH:MM"; 48 wraps to 00:00."""
+    return f"{slot % 48 // 2:02d}:{slot % 2 * 30:02d}"
+
+
+def fixed_profile(peak: float, offpeak: float, start: str, end: str) -> list[float]:
+    """Price per half hour of a two-rate day, off-peak from `start` to `end`."""
+    rates = [peak] * 48
+    i, stop = slot_of(start), slot_of(end)
+    while i != stop:  # the window may run past midnight
+        rates[i] = offpeak
+        i = (i + 1) % 48
+    return rates
 
 
 def payback(tariff: Tariff, slots: list[dict], today: date,

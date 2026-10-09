@@ -116,9 +116,6 @@ class ControlSettings:
                                   for s in data.get("schedules") or ())
         return cls(**data)
 
-    def to_dict(self) -> dict:
-        return asdict(self)
-
     def validate(self) -> "ControlSettings":
         if not 100 <= int(self.charge_power_w) <= 5000:
             raise ValueError("Charge power must be between 100 and 5000 W")
@@ -140,25 +137,31 @@ class Window:
     schedule: Schedule | None = None  # set for your own schedules
 
 
+def _daily(start: str, end: str, tz, now: datetime, days=range(7)) -> list[tuple[datetime, datetime]]:
+    """A daily "HH:MM" to "HH:MM" window as UTC (start, end) pairs starting
+    yesterday, today and tomorrow, on the given weekdays. An end at or
+    before the start runs past midnight."""
+    h1, m1 = _hhmm(start)
+    h2, m2 = _hhmm(end)
+    local = now.astimezone(tz)
+    out = []
+    for day in (-1, 0, 1):
+        base = (local + timedelta(days=day)).date()
+        if base.weekday() not in days:
+            continue
+        a = datetime(base.year, base.month, base.day, h1, m1, tzinfo=tz)
+        b = datetime(base.year, base.month, base.day, h2, m2, tzinfo=tz)
+        if b <= a:
+            b += timedelta(days=1)
+        out.append((a.astimezone(timezone.utc), b.astimezone(timezone.utc)))
+    return out
+
+
 def schedule_windows(schedules, tz, now: datetime) -> list[Window]:
     """Your enabled schedules as concrete windows around now (yesterday to tomorrow)."""
-    out: list[Window] = []
-    local = now.astimezone(tz)
-    for sch in schedules:
-        if not sch.enabled:
-            continue
-        h1, m1 = _hhmm(sch.start)
-        h2, m2 = _hhmm(sch.end)
-        for day in (-1, 0, 1):
-            base = (local + timedelta(days=day)).date()
-            if base.weekday() not in sch.days:
-                continue
-            start = datetime(base.year, base.month, base.day, h1, m1, tzinfo=tz)
-            end = datetime(base.year, base.month, base.day, h2, m2, tzinfo=tz)
-            if end <= start:
-                end += timedelta(days=1)
-            out.append(Window(start.astimezone(timezone.utc), end.astimezone(timezone.utc),
-                              f"your schedule {sch.start}-{sch.end}", "schedule", sch))
+    out = [Window(a, b, f"your schedule {sch.start}-{sch.end}", "schedule", sch)
+           for sch in schedules if sch.enabled
+           for a, b in _daily(sch.start, sch.end, tz, now, sch.days)]
     return sorted(out, key=lambda w: w.start)
 
 
@@ -179,16 +182,7 @@ def cheap_windows(octopus_status: dict | None, offpeak: tuple[str, str] | None, 
             out.append(Window(_utc(d["start"]), _utc(d["end"]), "Intelligent Go smart-charge slot"))
         return sorted(out, key=lambda w: w.start)
     if offpeak and offpeak[0] != offpeak[1]:
-        local = now.astimezone(tz)
-        for day in (-1, 0, 1):
-            base = (local + timedelta(days=day)).date()
-            h1, m1 = map(int, offpeak[0].split(":"))
-            h2, m2 = map(int, offpeak[1].split(":"))
-            start = datetime(base.year, base.month, base.day, h1, m1, tzinfo=tz)
-            end = datetime(base.year, base.month, base.day, h2, m2, tzinfo=tz)
-            if end <= start:
-                end += timedelta(days=1)
-            out.append(Window(start.astimezone(timezone.utc), end.astimezone(timezone.utc), "Off-peak hours", "schedule"))
+        out = [Window(a, b, "Off-peak hours", "schedule") for a, b in _daily(*offpeak, tz, now)]
     return out
 
 
@@ -274,10 +268,10 @@ class Controller:
         log.info("Control: %s", text)
 
     def _event(self, message: str, field: str, old, new, source: str, always: bool = False) -> None:
-        """Add a line to the dashboard's battery event log, when it has one.
+        """Add a line to the battery event log.
         Battery writes are only logged when they really happen (live)."""
         storage = getattr(self.collector, "storage", None)
-        if not (self.live or always) or storage is None or not hasattr(storage, "record_event"):
+        if not (self.live or always) or storage is None:
             return
         try:
             storage.record_event("control", message, field=field, old=old, new=new, source=source)

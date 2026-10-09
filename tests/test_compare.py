@@ -4,7 +4,8 @@ import urllib.parse
 from datetime import datetime, timedelta, timezone
 
 from app import octopus as oct
-from app.compare import Candidate, Comparer, compare, fixed_profile, simulate, usage_by_day
+from app.compare import Candidate, Comparer, compare, simulate, usage_by_day
+from app.tariff import fixed_profile
 from tests.test_octopus import go_rows
 
 UTC = timezone.utc
