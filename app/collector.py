@@ -114,9 +114,12 @@ class Collector:
                 self._note_unavailable(kind, start, str(err))
                 continue
             if result.isError():
-                # An exception response (e.g. illegal address on older firmware)
-                # only loses this block, not the whole poll.
-                self._note_unavailable(kind, start, str(result))
+                # An exception response (e.g. a gap of unimplemented addresses)
+                # only loses this block; read its registers one at a time.
+                single = await read_singly(client, self.profile, kind, start, end, conn.unit_id)
+                if not single:
+                    self._note_unavailable(kind, start, str(result))
+                blocks.update(single)
                 continue
             blocks[(kind, start)] = list(result.registers)
 
@@ -169,9 +172,12 @@ class Collector:
         if self.client is None:
             self.client = AsyncModbusTcpClient(conn.host, port=conn.port, timeout=5, retries=1)
         if not self.client.connected:
-            log.info("Connecting to %s:%s", conn.host, conn.port)
-            await tcp_check(conn.host, conn.port)
+            log.info("Connecting to %s %s:%s", self.profile.name, conn.host, conn.port)
             if not await self.client.connect():
+                # Only now open a plain socket, to explain the failure. Doing
+                # it first would use up the slot on devices that accept just
+                # one Modbus client at a time.
+                await tcp_check(conn.host, conn.port)
                 raise ConnectionError(f"cannot connect to {conn.host}:{conn.port}")
         return self.client
 
@@ -221,34 +227,94 @@ async def tcp_check(host: str, port: int, timeout: float = 4) -> None:
     writer.close()
 
 
+async def read_singly(
+    client: AsyncModbusTcpClient, profile: Profile, kind: str, start: int, end: int, unit_id: int
+) -> dict[tuple[str, int], list[int]]:
+    """Read each register in a block on its own, after the block read was refused.
+
+    Anker's own integration does the same: some firmware rejects a range
+    that spans unimplemented addresses but answers the registers within it.
+    Returns one mini block per register that answered.
+    """
+    reader = client.read_holding_registers if kind == HOLDING else client.read_input_registers
+    found: dict[tuple[str, int], list[int]] = {}
+    for reg in profile.registers:
+        if reg.kind != kind or not start <= reg.address <= end:
+            continue
+        try:
+            result = await reader(reg.address, count=reg.count, device_id=unit_id)
+        except ModbusException:
+            if not client.connected:
+                break
+            continue
+        if not result.isError():
+            found[(kind, reg.address)] = list(result.registers)
+    return found
+
+
+BUSY_HINT = (
+    "Some Anker devices accept only one Modbus TCP connection at a time, so if Home Assistant "
+    "or another tool is connected to it, pause that and try again."
+)
+
+
 async def probe(conn: Connection, profile: Profile = BATTERY) -> dict[str, Any]:
     """Check that the expected device answers at `conn`; returns its identity.
 
     Used by the setup screen before saving, so a typo is caught straight away.
+    Every step is logged so the container logs show exactly what happened.
     """
-    await tcp_check(conn.host, conn.port)
-    client = AsyncModbusTcpClient(conn.host, port=conn.port, timeout=4, retries=0)
+    name = DEVICE_NAMES[profile.name]
+    where = f"{conn.host}:{conn.port}"
+    log.info("Setup test: connecting to %s at %s (unit id %s)", name, where, conn.unit_id)
+    client = AsyncModbusTcpClient(conn.host, port=conn.port, timeout=5, retries=1, reconnect_delay=0)
     try:
         if not await client.connect():
-            raise ConnectionError(
-                f"Nothing answered at {conn.host}:{conn.port}. Check the IP address and that "
-                "Modbus TCP is turned on in the Anker app."
-            )
+            log.info("Setup test: Modbus connection to %s failed; checking the network", where)
+            await tcp_check(conn.host, conn.port)
+            raise ConnectionError(f"{where} accepted a connection but Modbus TCP didn't start. {BUSY_HINT}")
+        log.info("Setup test: connected to %s", where)
         blocks: dict[tuple[str, int], list[int]] = {}
+        errors: list[str] = []
         for kind, start, end in profile.blocks:
             if kind == HOLDING:
                 continue
-            result = await client.read_input_registers(start, count=end - start + 1, device_id=conn.unit_id)
-            if not result.isError():
-                blocks[(kind, start)] = list(result.registers)
+            count = end - start + 1
+            began = time.monotonic()
+            try:
+                result = await client.read_input_registers(start, count=count, device_id=conn.unit_id)
+            except ModbusException as err:
+                log.info("Setup test: read input %s+%s from %s: no response after %.1fs (%s)",
+                         start, count, where, time.monotonic() - began, err)
+                errors.append(f"no response ({err})")
+                if not blocks:
+                    break  # silent from the start; don't make people wait for every block
+                continue
+            if result.isError():
+                single = await read_singly(client, profile, kind, start, end, conn.unit_id)
+                wanted = sum(1 for r in profile.registers if r.kind == kind and start <= r.address <= end)
+                log.info("Setup test: read input %s+%s from %s: error response %s; one at a time got %s of %s values",
+                         start, count, where, result, len(single), wanted)
+                if not single:
+                    errors.append(str(result))
+                blocks.update(single)
+                continue
+            log.info("Setup test: read input %s+%s from %s: OK in %.1fs, first words %s", start, count, where,
+                     time.monotonic() - began, " ".join(f"{r:04X}" for r in result.registers[:6]))
+            blocks[(kind, start)] = list(result.registers)
         if not blocks:
+            if errors and all(e.startswith("no response") for e in errors):
+                raise ConnectionError(f"{where} accepted the connection but didn't answer any Modbus request. {BUSY_HINT}")
             raise ConnectionError(
-                f"{conn.host}:{conn.port} answered but returned no {DEVICE_NAMES[profile.name]} data. "
-                "Is this the right device?"
+                f"{where} answered but returned no {name} data ({errors[0] if errors else 'nothing read'}). "
+                f"Is this the right device, and is the unit id 1?"
             )
         snap = profile.derive(extract(blocks, profile.registers))
-        return {k: snap.get(k) for k in ("model", "serial", "firmware", "soc", "grid_w")}
-    except ModbusException as err:
-        raise ConnectionError(f"{conn.host}:{conn.port} did not respond to Modbus requests ({err})") from err
+        found = {k: snap.get(k) for k in ("model", "serial", "firmware", "soc", "grid_w")}
+        log.info("Setup test: found %s %s", name, found)
+        return found
+    except ConnectionError as err:
+        log.warning("Setup test for %s at %s failed: %s", name, where, err)
+        raise
     finally:
         client.close()
