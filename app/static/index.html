@@ -173,6 +173,14 @@
       </details>
     </section>
 
+    <section class="notice" id="care-card" hidden>
+      <div class="card-head">
+        <h2>Battery care</h2>
+        <button type="button" class="link" id="care-dismiss">Dismiss</button>
+      </div>
+      <ul class="tips" id="care-tips"></ul>
+    </section>
+
     <section class="card" id="tariff-card">
       <div class="card-head">
         <h2>Electricity prices</h2>
@@ -189,8 +197,54 @@
         <div class="chart-box short"><canvas id="price-chart" aria-label="Upcoming electricity prices"></canvas></div>
         <h3>Suggested battery times</h3>
         <ul class="windows" id="tariff-windows"></ul>
-        <p class="note">Suggestions only: the dashboard doesn't change your battery. Charging from the grid only pays when the cheap price is below the dear one after about 10% round-trip losses.</p>
       </div>
+    </section>
+
+    <section class="card" id="compare-card">
+      <div class="card-head">
+        <h2>Compare tariffs</h2>
+        <div class="compare-actions">
+          <label for="compare-region" class="muted">Region</label>
+          <select id="compare-region">
+            <option value="">Your Octopus region</option>
+            <option value="A">Eastern England</option><option value="B">East Midlands</option><option value="C">London</option>
+            <option value="D">Merseyside and North Wales</option><option value="E">West Midlands</option><option value="F">North Eastern England</option>
+            <option value="G">North Western England</option><option value="H">Southern England</option><option value="J">South Eastern England</option>
+            <option value="K">South Wales</option><option value="L">South Western England</option><option value="M">Yorkshire</option>
+            <option value="N">Southern Scotland</option><option value="P">Northern Scotland</option>
+          </select>
+          <button type="button" class="secondary" id="compare-run">Compare</button>
+        </div>
+      </div>
+      <p class="note" id="compare-intro">Replays your recorded home use and solar against other tariffs, with the battery run to suit each one, and estimates a year's cost.</p>
+      <p class="setup-msg" id="compare-msg" role="status" aria-live="polite"></p>
+      <ul class="compare-rows" id="compare-result" hidden></ul>
+      <p class="note" id="compare-summary"></p>
+      <details id="compare-assumptions" hidden>
+        <summary>How this is worked out</summary>
+        <ul class="note" id="compare-assumption-list"></ul>
+      </details>
+      <details>
+        <summary>Add your own tariff (E.ON, EDF or any other supplier)</summary>
+        <ul class="tips" id="custom-list"></ul>
+        <form id="custom-form" class="control-form" novalidate>
+          <div><label for="custom-preset">Tariff</label><select id="custom-preset" class="text"></select></div>
+          <div><label for="custom-name">Name</label><input id="custom-name" class="text" maxlength="60" placeholder="e.g. E.ON Next Drive"></div>
+          <div class="row">
+            <div><label for="custom-peak">Peak price (p)</label><input id="custom-peak" type="number" step="0.01" min="0"></div>
+            <div><label for="custom-offpeak">Off-peak price (p)</label><input id="custom-offpeak" type="number" step="0.01" min="0"></div>
+          </div>
+          <div class="row">
+            <div><label for="custom-from">Off-peak from</label><input id="custom-from" type="time" step="1800" value="00:00"></div>
+            <div><label for="custom-to">Off-peak until</label><input id="custom-to" type="time" step="1800" value="07:00"></div>
+          </div>
+          <div class="row">
+            <div><label for="custom-export">Export price (p)</label><input id="custom-export" type="number" step="0.01" min="0"></div>
+            <div><label for="custom-standing">Standing charge (p a day)</label><input id="custom-standing" type="number" step="0.01" min="0"></div>
+          </div>
+          <div class="dialog-actions"><button type="submit" class="secondary">Add tariff</button></div>
+        </form>
+      </details>
     </section>
 
     <section class="card" id="control-card">
@@ -228,65 +282,6 @@
       </details>
     </section>
 
-    <section class="card" id="care-card">
-      <div class="card-head">
-        <h2>Battery care</h2>
-        <p class="today" id="care-cycles"></p>
-      </div>
-      <ul class="tips" id="care-tips"></ul>
-    </section>
-
-    <section class="card" id="compare-card">
-      <div class="card-head">
-        <h2>Compare tariffs</h2>
-        <div class="compare-actions">
-          <label for="compare-region" class="muted">Region</label>
-          <select id="compare-region">
-            <option value="">Your Octopus region</option>
-            <option value="A">Eastern England</option><option value="B">East Midlands</option><option value="C">London</option>
-            <option value="D">Merseyside and North Wales</option><option value="E">West Midlands</option><option value="F">North Eastern England</option>
-            <option value="G">North Western England</option><option value="H">Southern England</option><option value="J">South Eastern England</option>
-            <option value="K">South Wales</option><option value="L">South Western England</option><option value="M">Yorkshire</option>
-            <option value="N">Southern Scotland</option><option value="P">Northern Scotland</option>
-          </select>
-          <button type="button" class="secondary" id="compare-run">Compare</button>
-        </div>
-      </div>
-      <p class="note" id="compare-intro">Replays your recorded home use and solar against other tariffs, with the battery run to suit each one, and estimates a year's cost.</p>
-      <p class="setup-msg" id="compare-msg" role="status" aria-live="polite"></p>
-      <div class="table-wrap" id="compare-result" hidden>
-        <table id="compare-table">
-          <thead><tr><th>Tariff</th><th>A year</th><th>vs now</th><th>Export</th><th>Notes</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-      <p class="note" id="compare-summary"></p>
-      <details id="compare-assumptions" hidden>
-        <summary>How this is worked out</summary>
-        <ul class="note" id="compare-assumption-list"></ul>
-      </details>
-      <details>
-        <summary>Add your own tariffs (E.ON, EDF or any other)</summary>
-        <ul class="tips" id="custom-list"></ul>
-        <form id="custom-form" class="control-form" novalidate>
-          <div class="preset-row" id="custom-presets"></div>
-          <div><label for="custom-name">Name</label><input id="custom-name" class="text" maxlength="60" placeholder="e.g. E.ON Next Drive"></div>
-          <div class="row">
-            <div><label for="custom-peak">Peak price (p)</label><input id="custom-peak" type="number" step="0.01" min="0"></div>
-            <div><label for="custom-offpeak">Off-peak price (p)</label><input id="custom-offpeak" type="number" step="0.01" min="0"></div>
-          </div>
-          <div class="row">
-            <div><label for="custom-from">Off-peak from</label><input id="custom-from" type="time" step="1800" value="00:00"></div>
-            <div><label for="custom-to">Off-peak until</label><input id="custom-to" type="time" step="1800" value="07:00"></div>
-          </div>
-          <div class="row">
-            <div><label for="custom-export">Export price (p)</label><input id="custom-export" type="number" step="0.01" min="0"></div>
-            <div><label for="custom-standing">Standing charge (p a day)</label><input id="custom-standing" type="number" step="0.01" min="0"></div>
-          </div>
-          <div class="dialog-actions"><button type="submit" class="secondary">Add tariff</button></div>
-        </form>
-      </details>
-    </section>
 
     <section class="card" id="payback-card">
       <div class="card-head">

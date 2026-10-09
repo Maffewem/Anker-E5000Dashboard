@@ -121,3 +121,28 @@ def test_api_compare_and_custom(tmp_path, monkeypatch):
         assert any(r["key"] == "current" for r in out["rows"])
         assert out["days"] >= 3
         assert json.dumps(out)  # serialisable
+
+
+def test_breakdown_adds_up_and_names_the_charge_window():
+    go = Candidate("go", "Go", 50.0, import_profile=fixed_profile(30, 8, "00:30", "05:30"), export_profile=[15.0] * 48)
+    r = simulate(go, usage_by_day(usage()), cap_kwh=5, power_kw=2.5)
+    b = r["breakdown"]
+    assert abs(b["home"] + b["battery_charging"] - b["export"] + b["standing"] - r["annual"]) <= 2
+    assert b["battery_charging"] > 0 and r["daily"]["grid_charge_kwh"] > 0
+    assert r["charge_window"] == "00:30-05:30"
+    out = compare([go], usage(), 5, 2.5)
+    assert out["daily_use_kwh"] == round((40 * 0.15 + 8 * 1.0), 1)
+
+
+def test_ranges_wrap_midnight():
+    from app.compare import _ranges
+    assert _ranges({46, 47, 0, 1}) == "23:00-01:00"
+    assert _ranges({2, 3, 10}) == "01:00-02:00, 05:00-05:30"
+
+
+def test_flat_tariff_still_uses_stored_solar():
+    sunny = [dict(u, solar_wh=1500.0 if 20 <= u["slot"] < 28 else 0.0) for u in usage()]
+    days = usage_by_day(sunny)
+    with_battery = simulate(flat(25), days, 5, 2.5)
+    assert with_battery["daily"]["from_battery_kwh"] > 0
+    assert with_battery["cost"] < simulate(flat(25), days, 5, 2.5, battery=False)["cost"]

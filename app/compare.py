@@ -116,13 +116,33 @@ def usage_by_day(slots: list[dict]) -> dict[str, list]:
     return days
 
 
+def _ranges(slots: set[int]) -> str:
+    """Half-hour slots as readable time ranges, e.g. "00:30-05:30"."""
+    out, run = [], []
+    for s in sorted(slots):
+        if run and s != run[-1] + 1:
+            out.append(run)
+            run = []
+        run.append(s)
+    if run:
+        out.append(run)
+    if len(out) > 1 and out[0][0] == 0 and out[-1][-1] == 47:  # wraps past midnight
+        out[0] = out.pop() + out[0]
+    hhmm = lambda s: f"{s // 2:02d}:{s % 2 * 30:02d}"  # noqa: E731
+    return ", ".join(f"{hhmm(r[0])}-{hhmm((r[-1] + 1) % 48)}" for r in out)
+
+
 def simulate(c: Candidate, days: dict[str, list], cap_kwh: float, power_kw: float, battery: bool = True) -> dict:
-    """Import, export and cost over the recorded days on one tariff."""
-    soc = cap_kwh * 0.5
+    """Import, export and cost over the recorded days on one tariff, with a
+    breakdown of where the money goes."""
     floor = cap_kwh * RESERVE
+    soc = floor  # start empty, so the battery never brings free energy into the comparison
     step = power_kw * 0.5  # kWh per half hour
-    imp_kwh = exp_kwh = cost = 0.0
+    imp_kwh = exp_kwh = 0.0
+    home_p = charge_p = export_p = 0.0  # pence: house from the grid, grid charging, export credit
+    charge_kwh = from_battery_kwh = 0.0
     counted = 0
+    windows: dict[str, int] = {}  # how often each charging window was used
     for day in sorted(days):
         net = days[day]
         prices = [c.import_p(day, s) for s in range(48)]
@@ -137,37 +157,48 @@ def simulate(c: Candidate, days: dict[str, list], cap_kwh: float, power_kw: floa
         cut = ranked[min(need, len(ranked)) - 1][0]
         cheap = {s for p, s in known if p <= cut + 0.5}
         dear = [p for p, s in known if s not in cheap]
+        if not dear:  # one price all day (a flat tariff): nothing to hold for, just use the battery
+            cheap = set()
         grid_charge_pays = bool(dear) and cut / EFFICIENCY < sum(dear) / len(dear)
+        if battery and grid_charge_pays:
+            key = _ranges(cheap)
+            windows[key] = windows.get(key, 0) + 1
         for p, s in sorted(known, key=lambda x: x[1]):
             load = net[s]
-            grid = 0.0
+            house = charged = 0.0  # grid kWh for the house and for the battery
+            exported = 0.0
             if load < 0:  # spare solar
                 spare = -load
                 stored = min(spare, step, (cap_kwh - soc) / EFFICIENCY) if battery else 0.0
                 soc += stored * EFFICIENCY
-                grid = -(spare - stored)
+                exported = spare - stored
             elif battery and s in cheap:
-                grid = load  # hold: the house uses cheap grid power
+                house = load  # hold: the house uses cheap grid power
                 if grid_charge_pays:
-                    charge = min(step, (cap_kwh - soc) / EFFICIENCY)
-                    soc += charge * EFFICIENCY
-                    grid += charge
+                    charged = max(0.0, min(step, (cap_kwh - soc) / EFFICIENCY))
+                    soc += charged * EFFICIENCY
             else:
-                use = min(load, step, soc - floor) if battery else 0.0
-                use = max(0.0, use)
+                use = max(0.0, min(load, step, soc - floor)) if battery else 0.0
                 soc -= use
-                grid = load - use
-            if grid >= 0:
-                imp_kwh += grid
-                cost += grid * p
-            else:
-                exp_kwh += -grid
-                cost -= -grid * c.export_p(day, s)
-    standing = (c.standing_p or 0.0) * counted
-    total = (cost + standing) / 100
+                from_battery_kwh += use
+                house = load - use
+            imp_kwh += house + charged
+            charge_kwh += charged
+            exp_kwh += exported
+            home_p += house * p
+            charge_p += charged * p
+            export_p += exported * c.export_p(day, s)
+    standing_p = (c.standing_p or 0.0) * counted
+    total = (home_p + charge_p - export_p + standing_p) / 100
     year = 365 / counted if counted else 0
+    yearly = lambda pence: round(pence / 100 * year, 0) if counted else None  # noqa: E731
     return {"days": counted, "import_kwh": round(imp_kwh, 1), "export_kwh": round(exp_kwh, 1),
-            "cost": round(total, 2), "annual": round(total * year, 0) if counted else None}
+            "cost": round(total, 2), "annual": round(total * year, 0) if counted else None,
+            "breakdown": {"home": yearly(home_p), "battery_charging": yearly(charge_p),
+                          "export": yearly(export_p), "standing": yearly(standing_p)},
+            "daily": {"grid_charge_kwh": round(charge_kwh / counted, 1) if counted else 0,
+                      "from_battery_kwh": round(from_battery_kwh / counted, 1) if counted else 0},
+            "charge_window": max(windows, key=windows.get) if windows else None}
 
 
 class Comparer:
@@ -302,8 +333,14 @@ def compare(candidates: list[Candidate], usage: list[dict], cap_kwh: float, powe
     base = next((r for r in rows if r["key"] == "current"), None)
     for r in ranked:
         r["vs_current"] = round(r["annual"] - base["annual"], 0) if base and base["annual"] is not None else None
+    home: dict[str, float] = {}
+    for r in usage:
+        if r["minutes"] >= 10:
+            home[r["day"]] = home.get(r["day"], 0.0) + r["home_wh"] * 30 / min(30, r["minutes"]) / 1000
+    used = list(home.values())
     return {
         "days": len(days),
+        "daily_use_kwh": round(sum(used) / len(used), 1) if used else None,
         "rows": ranked,
         "best": ranked[0]["name"] if ranked else None,
         "without_battery": without,
@@ -312,8 +349,12 @@ def compare(candidates: list[Candidate], usage: list[dict], cap_kwh: float, powe
             f"Uses the {len(days)} day(s) of home use and solar recorded so far, scaled to a year. "
             "More history, especially across seasons, makes this more reliable.",
             f"Battery: {cap_kwh:g} kWh, {power_kw:g} kW, {EFFICIENCY:.0%} round-trip efficiency, {RESERVE:.0%} kept in reserve.",
-            "On each tariff the battery stores spare solar, holds and grid-charges in the day's cheapest hours "
-            "when that pays after losses, and covers the house otherwise. It isn't used to export to the grid.",
+            "On each tariff the battery stores spare solar, then charges from the grid in that tariff's cheapest "
+            "hours each day (up to full) when that pays after losses, holding so the house runs on the cheap price. "
+            "The rest of the day it covers the house's half-hour by half-hour use until it reaches its reserve. "
+            "It isn't used to export to the grid.",
+            "Each tariff's yearly cost is split into the house's own grid use, grid electricity used to charge "
+            "the battery, the standing charge, and export credit (taken off).",
             "Where a price list doesn't go back far enough, its average price for each half hour is used. "
             "Prices include VAT. The standing charge is included where Octopus publishes it.",
             "Eligibility (EV, heat pump, smart meter) isn't checked: see the notes.",
