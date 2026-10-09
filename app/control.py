@@ -1,6 +1,7 @@
-"""Battery control: hold the battery in cheap hours, optionally charge it
-from the grid in the cheapest ones, and hand control back to the Anker app
-the rest of the time.
+"""Battery control: your own charge, hold and discharge schedules, holding
+the battery in cheap hours, optionally charging it from the grid in the
+cheapest ones, and handing control back to the Anker app the rest of the
+time.
 
 The battery has no schedule registers, so this is the scheduler. While a
 window is active it switches the battery to third-party control (mode 3)
@@ -33,10 +34,69 @@ REASSERT_SECONDS = 60  # rewrite the setpoint now and then in case the battery f
 APP = "app"
 HOLD = "hold"
 CHARGE = "charge"
+DISCHARGE = "discharge"
+ACTIONS = (CHARGE, HOLD, DISCHARGE)
+DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+MAX_SCHEDULES = 20
 
 
 def live_writes_allowed() -> bool:
     return os.environ.get("CONTROL_LIVE", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _hhmm(value: str) -> tuple[int, int]:
+    try:
+        h, m = (int(x) for x in str(value).split(":"))
+    except ValueError:
+        raise ValueError(f"Times look like 07:30, not {value!r}") from None
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        raise ValueError(f"Times look like 07:30, not {value!r}")
+    return h, m
+
+
+@dataclass(frozen=True)
+class Schedule:
+    """One of your own time windows: charge, hold or discharge on the chosen days."""
+
+    action: str = CHARGE
+    start: str = "00:30"
+    end: str = "05:30"
+    days: tuple[int, ...] = (0, 1, 2, 3, 4, 5, 6)  # Monday = 0; the day the window starts
+    power_w: int = 1500  # charge or discharge power
+    target_soc: int = 90  # charge: stop here; discharge: stop here (a floor)
+    enabled: bool = True
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Schedule":
+        known = {f.name for f in fields(cls)}
+        data = {k: v for k, v in (data or {}).items() if k in known}
+        if "days" in data:
+            data["days"] = tuple(data["days"])
+        return cls(**data)
+
+    def validate(self) -> "Schedule":
+        if self.action not in ACTIONS:
+            raise ValueError("A schedule must charge, hold or discharge")
+        h1, m1 = _hhmm(self.start)
+        h2, m2 = _hhmm(self.end)
+        if (h1, m1) == (h2, m2):
+            raise ValueError("A schedule's start and end can't be the same")
+        days = tuple(sorted({int(d) for d in self.days}))
+        if not days or not all(0 <= d <= 6 for d in days):
+            raise ValueError("Pick at least one day for each schedule")
+        if self.action != HOLD and not 100 <= int(self.power_w) <= 5000:
+            raise ValueError("Schedule power must be between 100 and 5000 W")
+        if not 5 <= int(self.target_soc) <= 100:
+            raise ValueError("Schedule battery level must be between 5% and 100%")
+        return Schedule(self.action, f"{h1:02d}:{m1:02d}", f"{h2:02d}:{m2:02d}", days,
+                        int(self.power_w), int(self.target_soc), bool(self.enabled))
+
+    def describe(self) -> str:
+        days = "every day" if len(self.days) == 7 else ", ".join(DAY_NAMES[d] for d in self.days)
+        what = {CHARGE: f"Charge at {self.power_w} W to {self.target_soc}%",
+                DISCHARGE: f"Discharge at {self.power_w} W down to {self.target_soc}%",
+                HOLD: "Hold (no charging or discharging)"}[self.action]
+        return f"{what}, {self.start}-{self.end} {days}"
 
 
 @dataclass(frozen=True)
@@ -46,19 +106,29 @@ class ControlSettings:
     grid_charge: bool = False  # also charge from the grid in the cheapest hours
     charge_power_w: int = 1500
     charge_target_soc: int = 90  # stop grid charging here; easier on the cells than 100%
+    schedules: tuple[Schedule, ...] = ()  # your own windows; they win over cheap hours
 
     @classmethod
     def from_dict(cls, data: dict | None) -> "ControlSettings":
         known = {f.name for f in fields(cls)}
-        return cls(**{k: v for k, v in (data or {}).items() if k in known})
+        data = {k: v for k, v in (data or {}).items() if k in known}
+        data["schedules"] = tuple(s if isinstance(s, Schedule) else Schedule.from_dict(s)
+                                  for s in data.get("schedules") or ())
+        return cls(**data)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
 
     def validate(self) -> "ControlSettings":
         if not 100 <= int(self.charge_power_w) <= 5000:
             raise ValueError("Charge power must be between 100 and 5000 W")
         if not 20 <= int(self.charge_target_soc) <= 100:
             raise ValueError("Stop charging at must be between 20% and 100%")
+        if len(self.schedules) > MAX_SCHEDULES:
+            raise ValueError(f"Up to {MAX_SCHEDULES} schedules")
         return ControlSettings(bool(self.enabled), bool(self.hold_cheap), bool(self.grid_charge),
-                               int(self.charge_power_w), int(self.charge_target_soc))
+                               int(self.charge_power_w), int(self.charge_target_soc),
+                               tuple(s.validate() for s in self.schedules))
 
 
 @dataclass(frozen=True)
@@ -66,7 +136,30 @@ class Window:
     start: datetime
     end: datetime
     why: str
-    source: str = "octopus"  # for the event log: "octopus" or "schedule" (typed off-peak hours)
+    source: str = "octopus"  # for the event log: "octopus" or "schedule" (typed off-peak hours, your schedules)
+    schedule: Schedule | None = None  # set for your own schedules
+
+
+def schedule_windows(schedules, tz, now: datetime) -> list[Window]:
+    """Your enabled schedules as concrete windows around now (yesterday to tomorrow)."""
+    out: list[Window] = []
+    local = now.astimezone(tz)
+    for sch in schedules:
+        if not sch.enabled:
+            continue
+        h1, m1 = _hhmm(sch.start)
+        h2, m2 = _hhmm(sch.end)
+        for day in (-1, 0, 1):
+            base = (local + timedelta(days=day)).date()
+            if base.weekday() not in sch.days:
+                continue
+            start = datetime(base.year, base.month, base.day, h1, m1, tzinfo=tz)
+            end = datetime(base.year, base.month, base.day, h2, m2, tzinfo=tz)
+            if end <= start:
+                end += timedelta(days=1)
+            out.append(Window(start.astimezone(timezone.utc), end.astimezone(timezone.utc),
+                              f"your schedule {sch.start}-{sch.end}", "schedule", sch))
+    return sorted(out, key=lambda w: w.start)
 
 
 def _utc(iso: str) -> datetime:
@@ -100,14 +193,30 @@ def cheap_windows(octopus_status: dict | None, offpeak: tuple[str, str] | None, 
 
 
 def decide(settings: ControlSettings, windows: list[Window], snapshot: dict, now: datetime) -> tuple[str, int, str, Window | None]:
-    """(action, setpoint W, reason, window) for this moment."""
+    """(action, setpoint W, reason, window) for this moment.
+
+    Your own schedules come first; cheap-hour windows only apply when the
+    cheap-hour options are ticked."""
     if not settings.enabled:
         return APP, 0, "Control is off", None
-    current = next((w for w in windows if w.start <= now < w.end), None)
+    soc = snapshot.get("soc")
+    mine = next((w for w in windows if w.schedule and w.start <= now < w.end), None)
+    if mine:
+        sch = mine.schedule
+        if sch.action == CHARGE and soc is not None and soc < sch.target_soc:
+            power = min(sch.power_w, int(snapshot["max_charge_w"])) if snapshot.get("max_charge_w") else sch.power_w
+            return CHARGE, -power, f"Charging at {power} W to {sch.target_soc}% ({mine.why})", mine
+        if sch.action == DISCHARGE and soc is not None and soc > sch.target_soc:
+            power = min(sch.power_w, int(snapshot["max_discharge_w"])) if snapshot.get("max_discharge_w") else sch.power_w
+            return DISCHARGE, power, f"Discharging at {power} W down to {sch.target_soc}% ({mine.why})", mine
+        reached = {CHARGE: " (target reached)", DISCHARGE: " (floor reached)"}.get(sch.action, "")
+        return HOLD, 0, f"Holding the battery{reached} ({mine.why})", mine
+    if not (settings.hold_cheap or settings.grid_charge):
+        windows = [w for w in windows if w.schedule]
+    current = next((w for w in windows if not w.schedule and w.start <= now < w.end), None)
     if current is None:
         nxt = next((w for w in windows if w.start > now), None)
-        return APP, 0, "Normal price: the Anker app is in charge", nxt
-    soc = snapshot.get("soc")
+        return APP, 0, "No schedule or cheap window now: the Anker app is in charge", nxt
     if settings.grid_charge and soc is not None and soc < settings.charge_target_soc:
         power = settings.charge_power_w
         if snapshot.get("max_charge_w"):
@@ -149,18 +258,26 @@ class Controller:
         return live_writes_allowed()
 
     def update_settings(self, settings: ControlSettings) -> None:
-        self.settings = settings
+        old, self.settings = self.settings, settings
         self._note(f"Settings changed: control {'on' if settings.enabled else 'off'}")
+        bits = [f"control {'on' if settings.enabled else 'off'}" + ("" if self.live else " (dry run)")]
+        if settings.hold_cheap or settings.grid_charge:
+            bits.append("hold in cheap hours" + (f", grid charge to {settings.charge_target_soc}%" if settings.grid_charge else ""))
+        on = [s for s in settings.schedules if s.enabled]
+        bits.append(f"{len(on)} schedule{'s' if len(on) != 1 else ''}" + (": " + "; ".join(s.describe() for s in on) if on else ""))
+        self._event("Control settings saved: " + ", ".join(bits), "control_enabled", old.enabled, settings.enabled,
+                    "dashboard", always=True)
         self._wake.set()
 
     def _note(self, text: str) -> None:
         self.log.appendleft({"ts": time.time(), "text": text})
         log.info("Control: %s", text)
 
-    def _event(self, message: str, field: str, old, new, source: str) -> None:
-        """Add a line to the dashboard's battery event log, when it has one."""
+    def _event(self, message: str, field: str, old, new, source: str, always: bool = False) -> None:
+        """Add a line to the dashboard's battery event log, when it has one.
+        Battery writes are only logged when they really happen (live)."""
         storage = getattr(self.collector, "storage", None)
-        if not self.live or storage is None or not hasattr(storage, "record_event"):
+        if not (self.live or always) or storage is None or not hasattr(storage, "record_event"):
             return
         try:
             storage.record_event("control", message, field=field, old=old, new=new, source=source)
@@ -224,23 +341,47 @@ class Controller:
                         self._persist()
                         raise
                     self._note(f"Took control from the Anker app (was {OPERATING_MODES.get(self.saved_mode, self.saved_mode)})")
-                    self._event(f"Took control for a cheap window: {window.why if window else reason}", "operating_mode",
+                    self._event(f"Took control: {window.why if window else reason}", "operating_mode",
                                 OPERATING_MODES.get(self.saved_mode, self.saved_mode), OPERATING_MODES[THIRD_PARTY_MODE],
                                 window.source if window else "dashboard")
                 due = time.monotonic() - self.last_write > REASSERT_SECONDS
                 if setpoint != self.last_setpoint or due:
                     await self._write("battery_power_setpoint", setpoint)
                     if setpoint != self.last_setpoint:
-                        self._note("Holding at 0 W" if action == HOLD else f"Charging at {-setpoint} W")
-                        self._event("Holding the battery (no discharge)" if action == HOLD
-                                    else f"Charging from the grid at {-setpoint} W", "battery_power_setpoint",
-                                    self.last_setpoint, setpoint, window.source if window else "dashboard")
+                        what = {HOLD: "Holding the battery at 0 W", CHARGE: f"Charging at {-setpoint} W",
+                                DISCHARGE: f"Discharging at {setpoint} W"}[action]
+                        self._note(what)
+                        self._event(what, "battery_power_setpoint", self.last_setpoint, setpoint,
+                                    window.source if window else "dashboard")
                     self.last_setpoint, self.last_write = setpoint, time.monotonic()
                 self.action = action
             self.last_error = None
         except Exception as err:
             self.last_error = str(err)
             self._note(f"Write failed: {err}")
+
+    async def set_mode(self, mode: int) -> None:
+        """Switch the battery to one of the Anker app's modes now.
+
+        If the dashboard was in control, it stands back until the current
+        window ends, the same as when the mode is changed in the app."""
+        if mode not in OPERATING_MODES or mode == THIRD_PARTY_MODE:
+            raise ValueError("Pick one of the Anker app's modes")
+        async with self._lock:
+            old = self.collector.raw.get("operating_mode")
+            await self._write("operating_mode", mode)
+            if self.live:
+                self.collector.raw["operating_mode"] = mode  # show it now, before the next poll reads it back
+            name = OPERATING_MODES[mode]
+            self._note(f"Mode set to {name} from the dashboard")
+            self._event(f"Mode set to {name} from the dashboard", "operating_mode",
+                        OPERATING_MODES.get(old, old), name, "dashboard")
+            if self.in_control:
+                self.in_control, self.saved_mode, self.last_setpoint = False, None, None
+                self.stand_back_until = self.window.end if self.window else None
+                self.action, self.reason = APP, f"Standing back: you picked {name}"
+                self._persist()
+            self.last_error = None
 
     async def restore(self) -> None:
         """Give control back now, e.g. when the dashboard shuts down."""
@@ -268,6 +409,8 @@ class Controller:
             "in_control": self.in_control,
             "saved_mode": OPERATING_MODES.get(self.saved_mode) if self.saved_mode is not None else None,
             "window": {"start": w.start.isoformat(), "end": w.end.isoformat(), "why": w.why} if w else None,
+            "modes": [{"value": k, "name": v} for k, v in OPERATING_MODES.items() if k != THIRD_PARTY_MODE],
+            "battery_mode": self.collector.raw.get("operating_mode") if self.collector.connected else None,
             "last_error": self.last_error,
             "log": list(self.log)[:20],
         }

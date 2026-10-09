@@ -200,8 +200,19 @@
       </div>
       <p class="control-now" id="control-now">–</p>
       <p class="setup-msg error" id="control-error" hidden></p>
+      <div class="mode-row">
+        <label for="mode-select">Battery mode <span id="mode-current" class="muted"></span></label>
+        <div class="compare-actions">
+          <select id="mode-select"></select>
+          <button type="button" class="secondary" id="mode-set">Set mode now</button>
+        </div>
+      </div>
       <form id="control-form" class="control-form" novalidate>
-        <label class="compare"><input type="checkbox" id="control-enabled"> Let the dashboard control the battery in cheap hours</label>
+        <label class="compare"><input type="checkbox" id="control-enabled"> Let the dashboard control the battery (your schedules and cheap hours below)</label>
+        <h3>Your schedules</h3>
+        <ul class="schedules" id="schedule-list"></ul>
+        <div><button type="button" class="secondary" id="schedule-add">Add schedule</button></div>
+        <h3>Cheap hours</h3>
         <label class="compare"><input type="checkbox" id="control-hold"> Don't discharge while electricity is cheap (the house uses grid power instead)</label>
         <label class="compare"><input type="checkbox" id="control-charge"> Also charge from the grid in the cheapest hours</label>
         <div class="row">
@@ -210,7 +221,7 @@
         </div>
         <div class="dialog-actions"><button type="submit" class="primary">Save</button></div>
       </form>
-      <p class="note">Cheap hours come from your Octopus prices (or the off-peak hours in Edit costs). Outside them, and whenever control is off or the dashboard stops, the battery goes back to the mode it was in from the Anker app. Changing the mode in the app makes the dashboard stand back until the next cheap window.</p>
+      <p class="note">Your schedules win over cheap hours. Outside them, and whenever control is off or the dashboard stops, the battery goes back to the mode it was in. Cheap hours come from your Octopus prices (or the off-peak hours in Edit costs). Changing the mode here or in the Anker app makes the dashboard stand back until the current window ends.</p>
       <details>
         <summary>Activity</summary>
         <ul class="activity" id="control-log"></ul>
@@ -351,6 +362,7 @@
       <p class="note">Minute readings, and the daily totals worked out from them, go back as far as <code>RETENTION_DAYS</code> (a year by default). Battery half hours are kept for good. <a href="/api/export/backup" download>Download a full backup</a> of everything recorded (SQLite).</p>
     </section>
   </main>
+  <footer class="footer" id="version"></footer>
 
   <script src="/static/vendor/chart.umd.js?v={{version}}"></script>
   <script src="/static/app.js?v={{version}}"></script>

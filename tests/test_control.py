@@ -197,3 +197,116 @@ def test_control_settings_and_state_are_saved(tmp_path):
     again = ConnectionStore(str(tmp_path / "settings.json"))
     assert again.load_section("control") == {"enabled": True}
     assert again.load_section("control_state")["saved_mode"] == 6
+
+
+# ---------- your own schedules and the mode picker ----------
+
+from app.control import DISCHARGE, Schedule, schedule_windows  # noqa: E402
+
+LONDON = ZoneInfo("Europe/London")
+SAT = datetime(2026, 10, 10, 1, 0, tzinfo=UTC)  # Saturday 02:00 in London
+
+
+def sched(**kw):
+    return Schedule(**kw).validate()
+
+
+def test_schedule_windows_follow_days_and_cross_midnight():
+    every = sched(action="charge", start="23:30", end="05:30")
+    ws = schedule_windows([every], LONDON, SAT)
+    assert any(w.start <= SAT < w.end for w in ws)  # started Friday 23:30
+    weekdays = sched(action="charge", start="23:30", end="05:30", days=[0, 1, 2, 3])  # Fri start not included
+    assert not any(w.start <= SAT < w.end for w in schedule_windows([weekdays], LONDON, SAT))
+    off = Schedule(action="hold", start="00:00", end="06:00", enabled=False)
+    assert schedule_windows([off], LONDON, SAT) == []
+
+
+def test_schedules_charge_discharge_hold_and_beat_cheap_hours():
+    on = ControlSettings(enabled=True, hold_cheap=True)
+    dis = schedule_windows([sched(action="discharge", start="01:00", end="03:00", power_w=3000, target_soc=20)], LONDON, SAT)
+    action, sp, reason, w = decide(on, dis + [NIGHT], {"soc": 60, "max_discharge_w": 2500}, SAT)
+    assert (action, sp) == (DISCHARGE, 2500) and w.schedule  # schedule wins over the cheap window
+    assert decide(on, dis, {"soc": 20}, SAT)[:2] == (HOLD, 0)  # floor reached
+    chg = schedule_windows([sched(action="charge", start="01:00", end="03:00", power_w=800, target_soc=80)], LONDON, SAT)
+    assert decide(on, chg, {"soc": 50}, SAT)[:2] == (CHARGE, -800)
+    assert decide(on, chg, {"soc": 80}, SAT)[:2] == (HOLD, 0)
+    # Cheap-hour options off: only schedules act.
+    plain = ControlSettings(enabled=True, hold_cheap=False, grid_charge=False)
+    assert decide(plain, [NIGHT], {"soc": 50}, IN)[0] == APP
+    assert decide(plain, chg + [NIGHT], {"soc": 50}, SAT)[0] == CHARGE
+
+
+def test_schedule_validation():
+    for bad in ({"start": "25:00"}, {"start": "01:00", "end": "01:00"}, {"days": []}, {"action": "boost"},
+                {"power_w": 50}, {"target_soc": 2}):
+        with pytest.raises(ValueError):
+            Schedule(**bad).validate()
+    assert sched(action="hold", power_w=0).power_w == 0  # power doesn't matter for hold
+    with pytest.raises(ValueError):
+        ControlSettings(schedules=tuple(Schedule() for _ in range(21))).validate()
+
+
+def test_settings_round_trip_with_schedules():
+    s = ControlSettings(enabled=True, schedules=(sched(action="discharge", start="16:00", end="19:00", days=[0, 4]),))
+    from dataclasses import asdict
+    again = ControlSettings.from_dict(asdict(s))
+    assert again == s
+
+
+def test_set_mode_writes_logs_and_stands_back(monkeypatch):
+    monkeypatch.setenv("CONTROL_LIVE", "1")
+    events = []
+
+    class Store:
+        def record_event(self, kind, message, **kw):
+            events.append((kw["field"], kw["old"], kw["new"], kw["source"]))
+
+    c = FakeCollector(mode=6)
+    c.storage = Store()
+    ctl = make(c, {"enabled": True}, {})
+    asyncio.run(ctl.tick(IN))
+    assert ctl.in_control
+    asyncio.run(ctl.set_mode(0))
+    assert c.writes[-1] == ("operating_mode", 0) and not ctl.in_control
+    assert events[-1] == ("operating_mode", "Third-party control", "Self-consumption", "dashboard")
+    asyncio.run(ctl.tick(IN + timedelta(minutes=1)))
+    assert c.writes[-1] == ("operating_mode", 0)  # stays out until the window ends
+    with pytest.raises(ValueError):
+        asyncio.run(ctl.set_mode(3))
+
+
+def test_saving_settings_is_logged_even_in_dry_run(monkeypatch):
+    monkeypatch.delenv("CONTROL_LIVE", raising=False)
+    events = []
+
+    class Store:
+        def record_event(self, kind, message, **kw):
+            events.append(message)
+
+    c = FakeCollector()
+    c.storage = Store()
+    ctl = make(c, {}, {})
+    ctl.update_settings(ControlSettings(enabled=True, schedules=(sched(action="hold", start="16:00", end="19:00"),)))
+    assert events and "control on (dry run)" in events[0] and "Hold" in events[0]
+
+
+def test_api_schedules_and_mode(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    for name in ("SOLARBANK_HOST", "METER_HOST", "OCTOPUS_API_KEY", "OCTOPUS_ACCOUNT", "CONTROL_LIVE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "solarbank.db"))
+    from app.main import app
+
+    with TestClient(app) as client:
+        body = {"enabled": True, "hold_cheap": False, "schedules": [
+            {"action": "discharge", "start": "16:00", "end": "19:00", "days": [0, 1, 2, 3, 4], "power_w": 2000, "target_soc": 20}]}
+        r = client.post("/api/control", json=body)
+        assert r.status_code == 200, r.text
+        assert r.json()["settings"]["schedules"][0]["action"] == "discharge"
+        assert {m["value"] for m in r.json()["modes"]} >= {0, 1, 6} and 3 not in {m["value"] for m in r.json()["modes"]}
+        bad = client.post("/api/control", json={"schedules": [{"start": "16:00", "end": "16:00"}]})
+        assert bad.status_code == 422
+        assert client.post("/api/control/mode", json={"mode": 0}).status_code == 409  # no battery connected
+        saved = app.state.connection_store.load_section("control")
+        assert saved["schedules"][0]["days"] == [0, 1, 2, 3, 4]

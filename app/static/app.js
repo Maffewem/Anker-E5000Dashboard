@@ -37,6 +37,7 @@ async function refreshLive() {
     return;
   }
   const { status, data, meter } = body;
+  if (body.version) $("version").textContent = `Version ${body.version.slice(0, 7)}`;
   renderMeter(meter);
   const stale = status.last_update && Date.now() / 1000 - status.last_update > status.poll_seconds * 4;
   const meterOn = Boolean(meter && meter.status.configured);
@@ -607,6 +608,7 @@ $("octopus-remove").addEventListener("click", () => sendOctopus({ api_key: "" },
 // ---------- Battery control ----------
 
 let controlLoaded = false;
+let controlDirty = false; // unsaved edits: don't overwrite them on refresh
 
 function renderControl(c) {
   const live = c.live;
@@ -615,20 +617,22 @@ function renderControl(c) {
   $("control-mode").title = live ? "Writes to the battery are allowed (CONTROL_LIVE=1)"
     : "Nothing is written to the battery. Set CONTROL_LIVE=1 on the container to allow it.";
   let now = c.reason;
-  if (c.window && c.action === "app") now += `. Next cheap window: ${when(c.window.start, c.window.end)}.`;
+  if (c.window && c.action === "app") now += `. Next window: ${when(c.window.start, c.window.end)}.`;
   else if (c.window) now += `. Until ${clock(c.window.end)}.`;
   $("control-now").textContent = now;
   $("control-error").hidden = !c.last_error;
   $("control-error").textContent = c.last_error || "";
-  if (!controlLoaded || !$("control-card").contains(document.activeElement)) {
+  if (!controlLoaded || (!controlDirty && !$("control-card").contains(document.activeElement))) {
     const t = c.settings;
     $("control-enabled").checked = t.enabled;
     $("control-hold").checked = t.hold_cheap;
     $("control-charge").checked = t.grid_charge;
     $("control-power").value = t.charge_power_w;
     $("control-target").value = t.charge_target_soc;
+    renderSchedules(t.schedules || []);
     controlLoaded = true;
   }
+  renderModes(c);
   syncControlInputs();
   $("control-log").replaceChildren(...(c.log.length ? c.log : [{ text: "Nothing yet." }]).map((e) => {
     const li = document.createElement("li");
@@ -637,6 +641,115 @@ function renderControl(c) {
     return li;
   }));
 }
+
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const ACTION_LABEL = { charge: "Charge", hold: "Hold", discharge: "Discharge" };
+
+function renderModes(c) {
+  const sel = $("mode-select");
+  if (!sel.options.length && c.modes) {
+    for (const m of c.modes) sel.append(new Option(m.name, m.value));
+  }
+  const cur = c.battery_mode;
+  const name = cur == null ? "unknown" : (c.modes || []).find((m) => m.value === cur)?.name
+    || (cur === 3 ? "Third-party control, run by the dashboard" : `mode ${cur}`);
+  $("mode-current").textContent = `(now: ${name})`;
+  if (sel !== document.activeElement && cur != null && cur !== 3) sel.value = String(cur);
+  $("mode-set").disabled = cur == null;
+}
+
+$("mode-set").addEventListener("click", async () => {
+  const mode = Number($("mode-select").value);
+  const name = $("mode-select").selectedOptions[0]?.text || mode;
+  if (!confirm(`Switch the battery to ${name} now?`)) return;
+  $("mode-set").disabled = true;
+  try {
+    renderControl(await postSettings("/api/control/mode", { mode }));
+  } catch (err) {
+    $("control-error").hidden = false;
+    $("control-error").textContent = err.message;
+  } finally {
+    $("mode-set").disabled = false;
+  }
+});
+
+function scheduleRow(s) {
+  const li = document.createElement("li");
+  const n = Math.random().toString(36).slice(2, 8);
+  li.innerHTML = `
+    <div class="sched-grid">
+      <div><label for="sa-${n}">Action</label><select id="sa-${n}" data-k="action">
+        ${Object.entries(ACTION_LABEL).map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select></div>
+      <div><label for="ss-${n}">From</label><input id="ss-${n}" type="time" data-k="start" required></div>
+      <div><label for="se-${n}">To</label><input id="se-${n}" type="time" data-k="end" required></div>
+      <div data-power><label for="sp-${n}">Power (W)</label><input id="sp-${n}" type="number" min="100" max="5000" step="100" data-k="power_w"></div>
+      <div data-target><label for="st-${n}"></label><input id="st-${n}" type="number" min="5" max="100" step="5" data-k="target_soc"></div>
+    </div>
+    <div class="days">${DAYS.map((d, i) => `<label><input type="checkbox" data-day="${i}">${d}</label>`).join("")}</div>
+    <div class="sched-foot">
+      <label class="compare"><input type="checkbox" data-k="enabled"> On</label>
+      <button type="button" class="link" data-remove>Remove</button>
+    </div>`;
+  const q = (k) => li.querySelector(`[data-k="${k}"]`);
+  q("action").value = s.action;
+  q("start").value = s.start;
+  q("end").value = s.end;
+  q("power_w").value = s.power_w;
+  q("target_soc").value = s.target_soc;
+  q("enabled").checked = s.enabled !== false;
+  for (const box of li.querySelectorAll("[data-day]")) box.checked = s.days.includes(Number(box.dataset.day));
+  const sync = () => {
+    const a = q("action").value;
+    li.querySelector("[data-power]").hidden = a === "hold";
+    li.querySelector("[data-target]").hidden = a === "hold";
+    li.querySelector("[data-target] label").textContent = a === "discharge" ? "Stop at (%)" : "Charge to (%)";
+  };
+  q("action").addEventListener("change", () => {
+    if (q("action").value === "discharge" && Number(q("target_soc").value) > 50) q("target_soc").value = 20;
+    sync();
+  });
+  li.querySelector("[data-remove]").addEventListener("click", () => { li.remove(); emptyNote(); });
+  sync();
+  return li;
+}
+
+function emptyNote() {
+  const list = $("schedule-list");
+  list.querySelector(".empty")?.remove();
+  if (!list.children.length) {
+    const li = document.createElement("li");
+    li.className = "empty";
+    li.textContent = "No schedules yet. Add one to charge, hold or discharge at set times.";
+    list.append(li);
+  }
+}
+
+function renderSchedules(list) {
+  $("schedule-list").replaceChildren(...list.map(scheduleRow));
+  emptyNote();
+}
+
+function readSchedules() {
+  return [...$("schedule-list").querySelectorAll("li:not(.empty)")].map((li) => {
+    const q = (k) => li.querySelector(`[data-k="${k}"]`);
+    return {
+      action: q("action").value, start: q("start").value, end: q("end").value,
+      days: [...li.querySelectorAll("[data-day]")].filter((b) => b.checked).map((b) => Number(b.dataset.day)),
+      power_w: Number(q("power_w").value) || 1500, target_soc: Number(q("target_soc").value) || 90,
+      enabled: q("enabled").checked,
+    };
+  });
+}
+
+for (const ev of ["input", "change"]) $("control-form").addEventListener(ev, () => { controlDirty = true; });
+$("schedule-list").addEventListener("click", (e) => { if (e.target.closest("[data-remove]")) controlDirty = true; });
+
+$("schedule-add").addEventListener("click", () => {
+  controlDirty = true;
+  $("schedule-list").querySelector(".empty")?.remove();
+  $("schedule-list").append(scheduleRow({ action: "charge", start: "00:30", end: "05:30", days: [0, 1, 2, 3, 4, 5, 6],
+    power_w: 1500, target_soc: 90, enabled: true }));
+});
 
 function syncControlInputs() {
   const on = $("control-enabled").checked;
@@ -658,7 +771,10 @@ $("control-form").addEventListener("submit", async (e) => {
     renderControl(await postSettings("/api/control", {
       enabled: $("control-enabled").checked, hold_cheap: $("control-hold").checked, grid_charge: $("control-charge").checked,
       charge_power_w: Number($("control-power").value) || 1500, charge_target_soc: Number($("control-target").value) || 90,
+      schedules: readSchedules(),
     }));
+    controlDirty = false;
+    renderSchedules((await (await fetch("/api/control", { cache: "no-store" })).json()).settings.schedules);
     document.activeElement?.blur();
   } catch (err) {
     $("control-error").hidden = false;

@@ -16,6 +16,8 @@ You get live solar, home, battery and grid power, power history, daily energy to
 
 The image is private too. To let Portainer pull it, add a registry under **Registries › Add registry › Custom**. Use `ghcr.io`, your GitHub username, and a [token](https://github.com/settings/tokens) with `read:packages`.
 
+**Updating.** Each merge to `main` publishes a new `:latest` image once its CI run is green. In Portainer, open the stack, click **Pull and redeploy**, and turn on **Re-pull image** (without it Portainer reuses the image it already has). The footer of the dashboard shows the version, which matches the commit on GitHub; the container log also prints `Solarbank dashboard version …` at startup.
+
 ## If something goes wrong
 
 | Problem | Fix |
@@ -68,7 +70,9 @@ Off by default. When switched on in **Battery control**, the dashboard takes ove
 - **Hold:** the battery doesn't discharge, so the house runs on cheap grid power and the stored energy is kept for the dear hours.
 - **Grid charge (optional):** charges at the power you choose until it reaches your stop level (90% by default).
 
-To do this it puts the battery in Anker's third-party control mode. Outside cheap hours, when you switch control off, or when the container stops, it writes back the mode the battery was in before (Smart, Self-consumption and so on). If you change the mode in the Anker app, the dashboard stands back until the next cheap window. Nothing is written unless `CONTROL_LIVE=1` is set; without it, the **Activity** list shows what it would have done.
+**Your schedules** let you set your own windows: charge (at a power, up to a level), hold, or discharge (at a power, down to a floor), each on the days you pick. They win over cheap hours, and work on their own if the cheap-hour options are unticked. **Battery mode** switches the battery to one of the Anker app's modes straight away. Every change is recorded in the event log.
+
+To do this it puts the battery in Anker's third-party control mode. Outside cheap hours, when you switch control off, or when the container stops, it writes back the mode the battery was in before (Smart, Self-consumption and so on). If you change the mode here or in the Anker app, the dashboard stands back until the current window ends. Nothing is written unless `CONTROL_LIVE=1` is set; without it, the **Activity** list shows what it would have done.
 
 **Battery care** gives tips from the battery's limits and history: time spent full or empty, charge and discharge limits, and cycles so far.
 
