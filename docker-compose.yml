@@ -36,6 +36,10 @@ services:
       # Battery control only writes to the battery when this is 1. Leave it 0 to
       # try control as a dry run first.
       CONTROL_LIVE: "${CONTROL_LIVE:-0}"
+      # Set a password to lock every change behind a sign-in, or READ_ONLY=true
+      # to turn changes off. Do one of these before publishing the dashboard.
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-}"
+      READ_ONLY: "${READ_ONLY:-false}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
       # Set RELAY_METER=true to re-serve the Smart Meter's registers
       # (read-only) so Home Assistant can use this host instead of the meter.
@@ -43,6 +47,9 @@ services:
       RELAY_PORT: "${RELAY_PORT:-5020}"
     volumes:
       - solarbank-data:/data
+    # It needs no Linux privileges, so drop them all.
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     # If the setup screen says there is no network route to the battery, use
     # docker-compose.host.yml instead (host networking).
 
