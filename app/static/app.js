@@ -53,6 +53,7 @@ async function refreshLive() {
   showBanner(status, stale, meter);
   if (!status.configured && !meterOn && !setupShownOnce) { setupShownOnce = true; openSetup(); }
   $("solarbank-card").hidden = !status.configured;
+  if (status.configured) showDeviceState($("solarbank-status"), status, stale);
 
   if (!data || !Object.keys(data).length) {
     // Nothing read yet from the current address: don't leave old numbers up.
@@ -145,12 +146,24 @@ function factList(el, rows) {
   }));
 }
 
+// "Live · 192.168.0.40" with a green dot, or why it isn't live, in a device card's header.
+function showDeviceState(el, s, stale = false) {
+  const live = s.connected && !stale;
+  el.className = `device-state ${live ? "live" : s.last_update || s.last_error ? "offline" : ""}`;
+  const dot = document.createElement("span");
+  dot.className = "dot";
+  dot.setAttribute("aria-hidden", "true");
+  el.replaceChildren(dot, live ? `Live · ${s.host}` : s.last_update ? `Offline · ${s.host} · last data ${timeAgo(s.last_update)}`
+    : s.last_error ? `Can't reach ${s.host}` : `Connecting to ${s.host}`);
+  el.title = live ? "" : s.last_error || "";
+}
+
 function renderMeter(meter) {
   const card = $("meter-card");
   if (!meter || !meter.status.configured) { card.hidden = true; return; }
   card.hidden = false;
   const s = meter.status, d = meter.data || {};
-  $("meter-status").textContent = s.connected ? `Live · ${s.host}` : s.last_update ? `Offline · last data ${timeAgo(s.last_update)}` : `Waiting for ${s.host}`;
+  showDeviceState($("meter-status"), s);
   const fixed = (v, n, unit) => (v == null ? null : `${v.toFixed(n)} ${unit}`);
   const rows = [
     ["Grid power", d.grid_w == null ? null : `${watts(d.grid_w)} ${d.grid_w > 5 ? "importing" : d.grid_w < -5 ? "exporting" : ""}`.trim()],
@@ -1179,6 +1192,41 @@ $("compare").addEventListener("change", () => {
   try { localStorage.setItem("compare", compare ? "1" : "0"); } catch (_) {}
   refreshHistory();
 });
+
+// ---------- Collapsible cards ----------
+// Any <section class="card" id="..." data-collapsible> gets its title turned
+// into a toggle; collapsed cards keep just their title, and the choice is
+// remembered per card id. Cards added later can call makeCollapsible(card).
+
+const COLLAPSED_KEY = "collapsed-cards";
+function collapsedCards() {
+  try { return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY)) || []); } catch (_) { return new Set(); }
+}
+
+function makeCollapsible(card) {
+  const h2 = card.querySelector("h2");
+  if (!h2 || !card.id || h2.querySelector(".collapse-toggle")) return;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "collapse-toggle";
+  btn.innerHTML = '<svg class="chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  btn.append(...h2.childNodes);
+  h2.append(btn);
+  const show = (collapsed) => {
+    card.classList.toggle("collapsed", collapsed);
+    btn.setAttribute("aria-expanded", String(!collapsed));
+    btn.title = collapsed ? "Show" : "Hide";
+  };
+  show(collapsedCards().has(card.id));
+  btn.addEventListener("click", () => {
+    const set = collapsedCards();
+    const collapsed = !card.classList.contains("collapsed");
+    collapsed ? set.add(card.id) : set.delete(card.id);
+    try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...set])); } catch (_) {}
+    show(collapsed);
+  });
+}
+document.querySelectorAll(".card[data-collapsible]").forEach(makeCollapsible);
 
 // ---------- Theme ----------
 

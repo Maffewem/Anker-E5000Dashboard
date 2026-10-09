@@ -222,6 +222,10 @@ dialog input:disabled { opacity: 0.6; }
 .schedules .sched-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
 .schedules .empty { border: 0; padding: 0; font-size: 13px; color: var(--text-muted); }
 .footer { text-align: center; font-size: 12px; color: var(--text-muted); padding: 8px 16px 24px; }
+
+.device-state { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); margin: 0; }
+.device-state.live .dot { background: var(--good); }
+.device-state.offline .dot { background: var(--critical); }
 .notice { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--gridpower); border-radius: 12px; padding: 12px 16px; }
 .notice h2 { font-size: 14px; }
 .compare-rows { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 0; }
@@ -233,3 +237,10 @@ dialog input:disabled { opacity: 0.6; }
 .compare-rows li > small { grid-column: 1 / -1; color: var(--text-secondary); }
 .compare-rows li.best > div > b:first-child { color: var(--battery); }
 .control-form select.text { width: 100%; font: inherit; font-size: 16px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--page); color: var(--text-primary); box-sizing: border-box; }
+
+/* Collapsible cards (data-collapsible): the title becomes a toggle. */
+.collapse-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none;
+  font: inherit; color: inherit; cursor: pointer; text-align: left; }
+.collapse-toggle .chevron { width: 14px; height: 14px; color: var(--text-muted); transition: transform .15s; flex: none; }
+.collapsed .collapse-toggle .chevron { transform: rotate(-90deg); }
+.card.collapsed > :not(.card-head):not(h2), .card.collapsed .card-head > :not(h2) { display: none !important; }
