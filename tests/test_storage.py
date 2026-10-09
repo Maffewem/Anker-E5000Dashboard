@@ -30,3 +30,14 @@ def test_history_and_daily_energy():
     days = s.daily_energy(2)
     assert len(days) == 2
     assert sum(d["solar_kwh"] for d in days) == 0.1  # 600 W for 10 min
+
+
+def test_history_offset_returns_the_previous_period():
+    s = Storage(":memory:", 365, "UTC")
+    now = int(time.time() // 60 * 60)
+    for minutes_ago, solar in ((5, 100), (65, 200)):  # this hour, and the hour before
+        b = MinuteBucket(now - minutes_ago * 60)
+        b.add({"solar_w": solar, "home_w": 0, "grid_w": 0, "battery_w": 0, "soc": 50}, 60)
+        s.write_minute(b.row())
+    assert [p["solar_w"] for p in s.history(1)["points"]] == [100]
+    assert [p["solar_w"] for p in s.history(1, offset_hours=1)["points"]] == [200]
