@@ -42,6 +42,8 @@ IMPORT_FAMILIES = (
     ("tracker", "Octopus Tracker", lambda c: c.startswith("SILVER-")),
     ("flexible", "Flexible Octopus", lambda c: c.startswith("VAR-")),
 )
+# Products Octopus doesn't always show in its public list; tried by code, newest first.
+KNOWN_CODES = {"intelligent_go": ("INTELLI-VAR-24-10-29", "INTELLI-VAR-22-10-14")}
 EXPORT_FAMILIES = (
     ("agile_outgoing", lambda c: c.startswith("AGILE-OUTGOING-")),
     ("flux_export", lambda c: c.startswith("FLUX-EXPORT-")),
@@ -283,6 +285,17 @@ class Comparer:
             return prices, standing
         return self._cached(("prices", tariff, start.date(), end.date()), load)
 
+    def _by_code(self, client: Client, codes, name: str, region: str, start: datetime, end: datetime, tz):
+        """The first of `codes` with prices, as (product, prices, standing charge)."""
+        for code in codes:
+            try:
+                prices, standing = self._prices(client, code, region, start, end, tz)
+            except OctopusError:
+                continue
+            if prices:
+                return {"code": code, "display_name": name}, prices, standing
+        return None, {}, None
+
     def candidates(self, region: str, start: datetime, end: datetime, tz, current: Candidate | None,
                    custom: list[dict]) -> tuple[list[Candidate], list[str]]:
         problems: list[str] = []
@@ -304,13 +317,19 @@ class Comparer:
         default_export = current if current and (current.export_actual or any(current.export_profile)) else None
         for key, name, match in IMPORT_FAMILIES:
             p = self._latest(products, match)
-            if not p:
+            if not p and key in KNOWN_CODES:
+                p, prices, standing = self._by_code(client, KNOWN_CODES[key], name, region, start, end, tz)
+                if not p:
+                    problems.append(f"{name}: Octopus didn't publish its prices for region {region}")
+                    continue
+            elif not p:
                 continue
-            try:
-                prices, standing = self._prices(client, p["code"], region, start, end, tz)
-            except OctopusError as err:
-                problems.append(f"{name}: {err}")
-                continue
+            else:
+                try:
+                    prices, standing = self._prices(client, p["code"], region, start, end, tz)
+                except OctopusError as err:
+                    problems.append(f"{name}: {err}")
+                    continue
             if not prices:
                 problems.append(f"{name}: no prices for region {region}")
                 continue

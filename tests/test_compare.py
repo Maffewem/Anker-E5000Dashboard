@@ -71,6 +71,15 @@ class FakeProducts:
             start = datetime.fromisoformat(q["period_from"][0].replace("Z", "+00:00"))
             if "OUTGOING" in url:
                 return {"results": [{"value_inc_vat": 15.0, "valid_from": "2024-01-01T00:00:00Z", "valid_to": None}], "next": None}
+            if "INTELLI-VAR" in url:
+                # Not in the product list; only the newer code has prices.
+                if "INTELLI-VAR-24-10-29-B" not in url:
+                    return {"results": [], "next": None}
+                return {"results": [
+                    {"value_inc_vat": 7.0 if (s % 48 < 11 or s % 48 >= 47) else 27.0,
+                     "valid_from": (start + timedelta(minutes=30 * s)).isoformat(),
+                     "valid_to": (start + timedelta(minutes=30 * (s + 1))).isoformat()}
+                    for s in range(48 * 8)], "next": None}
             if "GO-VAR" in url:
                 assert "GO-VAR-22-10-14-B" in url  # newest version, user's region
                 return {"results": go_rows(start, 12), "next": None}
@@ -85,13 +94,16 @@ def test_candidates_from_octopus_products():
         {"name": "E.ON Next Drive", "peak_rate": 27, "offpeak_rate": 7, "offpeak_start": "00:00",
          "offpeak_end": "07:00", "export_rate": 16, "standing_p": 45}])
     names = [c.name for c in cands]
-    assert names == ["Octopus Go", "Flexible Octopus", "E.ON Next Drive"]
+    assert names == ["Octopus Go", "Intelligent Octopus Go", "Flexible Octopus", "E.ON Next Drive"]
     assert problems == []
     go = cands[0]
     assert go.standing_p == 50.0 and go.export_name == "Outgoing Octopus"
     assert go.import_p("2026-10-02", 2) == 8.5  # 01:00 UTC
+    iog = cands[1]
+    assert iog.import_p("2026-10-02", 47) == 7.0 and iog.import_p("2026-10-02", 20) == 27.0
+    assert simulate(iog, usage_by_day(usage()), 5, 2.4)["charge_window"] == "23:30-05:30"
     out = compare(cands, usage(), 5, 2.5)
-    assert out["best"] in ("Octopus Go", "E.ON Next Drive")
+    assert out["best"] in ("Octopus Go", "Intelligent Octopus Go", "E.ON Next Drive")
 
 
 def test_api_compare_and_custom(tmp_path, monkeypatch):
