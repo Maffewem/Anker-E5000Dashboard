@@ -51,7 +51,7 @@ async function refreshLive() {
   else setStatus("offline", shown.last_error ? `Can't reach ${name}` : "Connecting");
   $("status").title = shown.last_error || "";
   showBanner(status, stale, meter);
-  if (!status.configured && !meterOn && !setupShownOnce) { setupShownOnce = true; openSetup(); }
+  if (!status.configured && !meterOn && !setupShownOnce && auth.can_edit) { setupShownOnce = true; openSetup(); }
   $("solarbank-card").hidden = !status.configured;
   if (status.configured) showDeviceState($("solarbank-status"), status, stale);
 
@@ -835,7 +835,7 @@ function renderCustom(list) {
     const li = document.createElement("li");
     const text = document.createElement("span");
     text.textContent = `${t.name}: ${t.peak_rate}p, ${t.offpeak_rate}p ${t.offpeak_start}–${t.offpeak_end}, export ${t.export_rate}p, standing ${t.standing_p}p`;
-    const del = document.createElement("button"); del.type = "button"; del.className = "link"; del.textContent = "Remove";
+    const del = document.createElement("button"); del.type = "button"; del.className = "link edit"; del.textContent = "Remove";
     del.addEventListener("click", () => saveCustom(customTariffs.filter((_, j) => j !== i)));
     li.append(text, del);
     return li;
@@ -1052,9 +1052,12 @@ function describeDevice(d) {
 }
 
 async function postSettings(path, body) {
-  const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const headers = { "Content-Type": "application/json" };
+  if (auth.csrf) headers["X-CSRF-Token"] = auth.csrf;
+  const res = await fetch(path, { method: "POST", headers, body: JSON.stringify(body) });
   let data = {};
   try { data = await res.json(); } catch (_) {}
+  if (res.status === 401 || res.status === 403) refreshAuth();
   if (!res.ok) {
     const detail = Array.isArray(data.detail) ? "Check the values you entered." : data.detail;
     throw new Error(detail || `Request failed (${res.status})`);
@@ -1172,6 +1175,56 @@ $("setup-cancel").addEventListener("click", () => $("setup").close());
 $("open-setup").addEventListener("click", () => openSetup("battery"));
 $("banner-setup").addEventListener("click", () => openSetup("battery"));
 
+// ---------- Lock ----------
+// With ADMIN_PASSWORD set, changes need signing in; with READ_ONLY they're off.
+// The server enforces both; this only hides the controls that would fail.
+
+let auth = { password_set: false, read_only: false, signed_in: false, can_edit: true, csrf: null };
+
+function applyAuth(a) {
+  auth = a;
+  document.body.classList.toggle("locked", !a.can_edit);
+  $("control-fields").disabled = !a.can_edit;
+  const btn = $("lock-btn");
+  btn.hidden = !a.password_set && !a.read_only;
+  btn.classList.toggle("open", a.can_edit);
+  const label = a.read_only ? "Read-only: changes are turned off in the container settings"
+    : a.signed_in ? "Signed in. Click to sign out" : "Locked. Click to sign in and make changes";
+  btn.title = label;
+  btn.setAttribute("aria-label", label);
+}
+
+async function refreshAuth() {
+  try { applyAuth(await (await fetch("/api/auth", { cache: "no-store" })).json()); } catch (_) {}
+}
+
+$("lock-btn").addEventListener("click", async () => {
+  if (auth.read_only) return;
+  if (auth.signed_in) {
+    try { applyAuth(await (await fetch("/api/auth/logout", { method: "POST" })).json()); } catch (_) {}
+    refreshOctopus();
+    return;
+  }
+  $("login-msg").textContent = "";
+  $("login-password").value = "";
+  $("login").showModal();
+  $("login-password").focus();
+});
+
+$("login-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    applyAuth(await postSettings("/api/auth/login", { password: $("login-password").value }));
+    $("login").close();
+    refreshOctopus();
+    refreshControl();
+  } catch (err) {
+    $("login-msg").className = "setup-msg error";
+    $("login-msg").textContent = err.message;
+  }
+});
+$("login-cancel").addEventListener("click", () => $("login").close());
+
 // ---------- Wiring ----------
 
 for (const btn of document.querySelectorAll(".range button[data-hours]")) {
@@ -1256,7 +1309,7 @@ $("theme-toggle").addEventListener("click", () => {
 darkQuery.addEventListener("change", () => { showTheme(); refreshHistory(); refreshEnergy(); drawPrices(octopus); });
 showTheme();
 
-refreshLive();
+refreshAuth().then(refreshLive);
 refreshHistory();
 refreshEnergy();
 refreshPayback();

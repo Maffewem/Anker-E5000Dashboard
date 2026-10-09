@@ -40,6 +40,8 @@ You don't need to edit the compose file. Set any of these as **Environment varia
 | `SOLARBANK_HOST`, `METER_HOST` | – | Set an address here instead of on the setup screen. The setup screen then shows it read-only |
 | `OCTOPUS_API_KEY`, `OCTOPUS_ACCOUNT` | – | Your Octopus Energy API key and account number, instead of entering them with **Connect Octopus** on the dashboard |
 | `CONTROL_LIVE` | `0` | Set to `1` to let **Battery control** write to the battery. Until then it's a dry run that only logs what it would do |
+| `ADMIN_PASSWORD` | – | Locks every change (settings, battery control, mode, schedules, Octopus, costs) and the full backup behind this password. Viewing stays open. See **Security** below |
+| `READ_ONLY` | `false` | `true` turns every change off, even for you. Recording and battery control carry on with the settings they already have |
 | `PORT` | `8080` | Port inside the container. Only needed with `docker-compose.host.yml` |
 | `RELAY_METER` | `false` | `true` shares the Smart Meter with Home Assistant (see below) |
 | `RELAY_HOST_PORT` | `502` | Port the Smart Meter relay is published on |
@@ -75,6 +77,16 @@ Off by default. When switched on in **Battery control**, the dashboard takes ove
 To do this it puts the battery in Anker's third-party control mode. Outside cheap hours, when you switch control off, or when the container stops, it writes back the mode the battery was in before (Smart, Self-consumption and so on). If you change the mode here or in the Anker app, the dashboard stands back until the current window ends. Nothing is written unless `CONTROL_LIVE=1` is set; without it, the **Activity** list shows what it would have done.
 
 **Battery care** gives tips from the battery's limits and history: time spent full or empty, charge and discharge limits, and cycles so far.
+
+## Security
+
+Out of the box the dashboard trusts everyone who can reach it, which is fine on your home network. Anyone who can open it can also change the battery's mode and schedules, so before you make it reachable from anywhere else:
+
+- **Set `ADMIN_PASSWORD`** on the stack (a long one, it's the only thing between the internet and your battery). The dashboard is still viewable, but a padlock appears at the top and the edit buttons disappear until you sign in with it. Signing in lasts 30 days, or until the container restarts. After 5 wrong passwords from one address, that address has to wait 15 minutes. Or **set `READ_ONLY=true`** if nobody should change anything from the dashboard at all; change the stack's variables to make changes instead.
+- **Put it behind a reverse proxy with HTTPS** (Nginx Proxy Manager, Caddy, Traefik or a Cloudflare Tunnel), and publish only that. Without HTTPS the password crosses the internet in plain text. Don't forward the dashboard's port (`HOST_PORT`) or the relay's (`RELAY_HOST_PORT`, 502) straight from your router.
+- Better still, keep it private and reach it over a VPN such as Tailscale or WireGuard, or put the proxy's own login (Cloudflare Access, Authelia) in front as well.
+
+What's protected either way: the Octopus API key is never sent to the browser (viewers see only the start of the account number). Changes need a session cookie that other sites can't use, plus a per-session token, so another web page can't make changes on your behalf, and the dashboard can't be shown inside another site's frame. The Smart Meter relay only answers reads. The container runs as a normal user with no extra Linux privileges.
 
 ## More
 
