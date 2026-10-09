@@ -741,7 +741,99 @@ function scheduleText(s) {
   return `Discharge at ${s.power_w} W down to ${s.target_soc}%`;
 }
 
+// ----- schedule timeline: one day at a time, 24 hours across -----
+let tlDay = (new Date().getDay() + 6) % 7; // Monday = 0, like the server
+const minutes = (hhmm) => { const [h, m] = hhmm.split(":").map(Number); return h * 60 + m; };
+const hhmm = (min) => `${String(Math.floor(min / 60) % 24).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
+
+// The parts of each schedule that fall on `day`: its own start that day, and
+// the tail of yesterday's window if it ran past midnight.
+function daySegments(day) {
+  const out = [];
+  schedules.forEach((s, i) => {
+    const a = minutes(s.start), b = minutes(s.end);
+    const wraps = b <= a;
+    if (s.days.includes(day)) out.push({ i, s, from: a, to: wraps ? 1440 : b });
+    if (wraps && b > 0 && s.days.includes((day + 6) % 7)) out.push({ i, s, from: 0, to: b });
+  });
+  return out;
+}
+
+function renderTimeline() {
+  const chips = $("tl-days");
+  chips.replaceChildren(...DAYS.map((d, i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = d;
+    b.setAttribute("role", "tab");
+    b.setAttribute("aria-selected", String(i === tlDay));
+    b.addEventListener("click", () => { tlDay = i; renderTimeline(); });
+    return b;
+  }));
+  const track = $("tl-track");
+  track.querySelectorAll(".tl-block").forEach((el) => el.remove());
+  for (const seg of daySegments(tlDay)) {
+    const el = document.createElement("button");
+    el.type = "button";
+    el.className = `tl-block ${seg.s.action}${seg.s.enabled ? "" : " off"}`;
+    el.style.left = `${(seg.from / 1440) * 100}%`;
+    el.style.width = `${((seg.to - seg.from) / 1440) * 100}%`;
+    el.title = `${ACTION_LABEL[seg.s.action]} ${seg.s.start}–${seg.s.end}${seg.s.enabled ? "" : " (off)"}`;
+    el.setAttribute("aria-label", el.title);
+    el.textContent = ACTION_LABEL[seg.s.action];
+    el.addEventListener("click", () => openSchedule(seg.i));
+    el.addEventListener("pointerdown", (e) => e.stopPropagation()); // a tap edits, it doesn't start a new window
+    track.append(el);
+    if (el.scrollWidth > el.clientWidth) el.textContent = ""; // too narrow to label; the colour says it
+  }
+}
+
+// Drag across the empty bar to paint a new window, snapped to half hours.
+(() => {
+  const track = $("tl-track");
+  let anchor = null;
+  let ghost = null;
+  const slotAt = (e) => {
+    const r = track.getBoundingClientRect();
+    return Math.max(0, Math.min(47, Math.floor(((e.clientX - r.left) / r.width) * 48)));
+  };
+  const span = (e) => {
+    const s = slotAt(e);
+    return [Math.min(anchor, s) * 30, (Math.max(anchor, s) + 1) * 30];
+  };
+  track.addEventListener("pointerdown", (e) => {
+    if (document.body.classList.contains("locked") || $("control-fields").disabled) return;
+    anchor = slotAt(e);
+    track.setPointerCapture(e.pointerId);
+    ghost = document.createElement("div");
+    ghost.className = "tl-ghost";
+    track.append(ghost);
+    const [a, b] = span(e);
+    ghost.style.left = `${(a / 1440) * 100}%`;
+    ghost.style.width = `${((b - a) / 1440) * 100}%`;
+  });
+  track.addEventListener("pointermove", (e) => {
+    if (anchor == null) return;
+    const [a, b] = span(e);
+    ghost.style.left = `${(a / 1440) * 100}%`;
+    ghost.style.width = `${((b - a) / 1440) * 100}%`;
+    ghost.textContent = `${hhmm(a)}–${hhmm(b)}`;
+  });
+  const finish = (e, open) => {
+    if (anchor == null) return;
+    const [a, b] = span(e);
+    anchor = null;
+    ghost?.remove();
+    if (!open) return;
+    // A tap (one half hour) makes an hour-long window to start from.
+    openSchedule(-1, { start: hhmm(a), end: hhmm(b - a <= 30 ? Math.min(a + 60, 1440) : b), days: [tlDay] });
+  };
+  track.addEventListener("pointerup", (e) => finish(e, true));
+  track.addEventListener("pointercancel", (e) => finish(e, false));
+})();
+
 function renderSchedules() {
+  renderTimeline();
   const list = $("schedule-list");
   if (!schedules.length) {
     const li = document.createElement("li");
@@ -817,10 +909,10 @@ $("sd-action").addEventListener("change", () => {
   syncScheduleDialog();
 });
 
-function openSchedule(i) {
+function openSchedule(i, preset = {}) {
   editing = i;
   const s = i >= 0 ? schedules[i] : { action: "charge", start: "00:30", end: "05:30", days: [0, 1, 2, 3, 4, 5, 6],
-    power_w: 1500, target_soc: 90, enabled: true };
+    power_w: 1500, target_soc: 90, enabled: true, ...preset };
   $("schedule-title").textContent = i >= 0 ? "Edit schedule" : "New schedule";
   $("sd-action").value = s.action;
   $("sd-start").value = s.start;

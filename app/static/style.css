@@ -299,3 +299,26 @@ dialog input:disabled { opacity: 0.6; }
 .collapsed .collapse-toggle .chevron { transform: rotate(-90deg); }
 .card.collapsed > :not(.card-head):not(h2), .card.collapsed .card-head > :not(h2) { display: none !important; }
 #sd-amounts[hidden] { display: none; }
+
+/* Schedule timeline: one day, 24 hours across, drag to add. */
+.timeline { margin-bottom: 10px; }
+.day-chips { display: flex; gap: 4px; margin-bottom: 8px; max-width: 420px; }
+.day-chips button { flex: 1 1 0; min-width: 0; font: inherit; font-size: 13px; padding: 4px 0; min-height: 32px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: transparent; color: var(--text-secondary); }
+.day-chips button[aria-selected="true"] { background: var(--text-primary); color: var(--surface); border-color: var(--text-primary); }
+.tl-track { position: relative; height: 44px; border-radius: 8px; border: 1px solid var(--border); cursor: crosshair;
+  touch-action: pan-y; user-select: none; -webkit-user-select: none;
+  background: repeating-linear-gradient(to right, transparent 0, transparent calc(100% / 8 - 1px), var(--border) calc(100% / 8 - 1px), var(--border) calc(100% / 8)); }
+.tl-block, .tl-ghost { position: absolute; top: 4px; bottom: 4px; border-radius: 6px; font-size: 12px; overflow: hidden;
+  white-space: nowrap; display: flex; align-items: center; justify-content: center; padding: 0; min-width: 6px; box-sizing: border-box; }
+.tl-block { border: 0; cursor: pointer; color: #fff; font: inherit; font-size: 12px; font-weight: 600; }
+.tl-block.charge { background: var(--battery); }
+.tl-block.discharge { background: var(--export); }
+.tl-block.hold { background: var(--text-muted); }
+.tl-block.off { opacity: .35; }
+.tl-block:focus-visible { outline: 2px solid var(--solar); outline-offset: 2px; }
+.tl-ghost { border: 2px dashed var(--text-secondary); background: color-mix(in srgb, var(--text-secondary) 15%, transparent);
+  color: var(--text-primary); pointer-events: none; }
+.tl-axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); margin-top: 2px;
+  font-variant-numeric: tabular-nums; }
+.timeline .hint { margin: 6px 0 0; }

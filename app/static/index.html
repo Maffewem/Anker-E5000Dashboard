@@ -328,6 +328,12 @@
           <h3>Schedules</h3>
           <button type="button" class="secondary edit" id="schedule-add">Add schedule</button>
         </div>
+        <div class="timeline">
+          <div class="day-chips" id="tl-days" role="tablist" aria-label="Day"></div>
+          <div class="tl-track" id="tl-track" aria-label="Schedules for the day: drag to add a window, tap one to edit it"></div>
+          <div class="tl-axis" aria-hidden="true"><span>00</span><span>03</span><span>06</span><span>09</span><span>12</span><span>15</span><span>18</span><span>21</span><span>24</span></div>
+          <p class="hint edit">Drag across the bar to add a window (in half hours), or tap one to change it. Add as many as you like, as long as they don't overlap.</p>
+        </div>
         <ul class="schedules" id="schedule-list"></ul>
       </div>
       <form id="control-form" class="control-form control-section" novalidate>
