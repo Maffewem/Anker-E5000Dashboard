@@ -20,6 +20,11 @@ services:
       POLL_SECONDS: "${POLL_SECONDS:-5}"
       RETENTION_DAYS: "${RETENTION_DAYS:-365}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      # Smart Meter relay: see docker-compose.yml. On host networking the
+      # container can't listen on 502 (it doesn't run as root), so the relay
+      # is on RELAY_PORT; use docker-compose.yml if Home Assistant needs 502.
+      RELAY_METER: "${RELAY_METER:-false}"
+      RELAY_PORT: "${RELAY_PORT:-5020}"
     volumes:
       - solarbank-data:/data
 

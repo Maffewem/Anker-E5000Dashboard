@@ -203,12 +203,16 @@ METER_REGISTERS: list[Register] = [
     Register("secondary_export_energy", 10694, "UINT32", 2, gain=10),
     Register("meter_sw_version", 10696, "VERSION", 2),
     Register("meter_sn", 10702, "STRING", 10),
+    # Product number. Not shown, but Home Assistant reads it to recognise the
+    # device, so the relay (app/relay.py) needs it.
+    Register("meter_pn", 32768, "STRING", 5),
 ]
 
 METER_BLOCKS: list[tuple[str, int, int]] = [
     (INPUT, 10620, 10647),
     (INPUT, 10648, 10695),
     (INPUT, 10696, 10712),
+    (INPUT, 32768, 32772),
 ]
 
 METER_TYPES = {1: "Single phase", 2: "Three phase"}

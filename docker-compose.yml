@@ -14,6 +14,10 @@ services:
     ports:
       # host port : container port
       - "${HOST_PORT:-8080}:${PORT:-8080}"
+      # Smart Meter relay for Home Assistant (only answers when RELAY_METER
+      # is on). Home Assistant's Anker integration always uses port 502.
+      # Change RELAY_HOST_PORT if something else on this host already uses 502.
+      - "${RELAY_HOST_PORT:-502}:${RELAY_PORT:-5020}"
     environment:
       PORT: "${PORT:-8080}"
       TZ: "${TZ:-Europe/London}"
@@ -27,6 +31,10 @@ services:
       POLL_SECONDS: "${POLL_SECONDS:-5}"
       RETENTION_DAYS: "${RETENTION_DAYS:-365}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      # Set RELAY_METER=true to re-serve the Smart Meter's registers
+      # (read-only) so Home Assistant can use this host instead of the meter.
+      RELAY_METER: "${RELAY_METER:-false}"
+      RELAY_PORT: "${RELAY_PORT:-5020}"
     volumes:
       - solarbank-data:/data
     # If the setup screen says there is no network route to the battery, use
