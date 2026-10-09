@@ -27,18 +27,22 @@ Give the Solarbank a fixed IP address in your router (a DHCP reservation) so it 
 
 ### Portainer
 
-Go to **Stacks › Add stack › Web editor**, paste in [`docker-compose.yml`](docker-compose.yml) and deploy. Then open `http://<your-pi-or-nas>:8080`.
+Either option works:
 
-The first time you open it, a setup screen asks for the battery's IP address. It tests the connection, shows the model and serial it finds, and saves the address in the data volume. To change it later, use the gear button at the top right.
+- **Repository** (recommended, updates with the repo): go to **Stacks › Add stack › Repository**, enter this repo's URL with **Compose path** `docker-compose.yml`, and deploy.
+- **Web editor**: paste in [`docker-compose.yml`](docker-compose.yml) and deploy.
 
-If the setup screen says there's **no network route** to the battery, the container can't see your home network from Docker's default bridge network. Switch the stack to host networking: remove the `ports:` section and add `network_mode: host`.
+Then open `http://<your-pi-or-nas>:8080`. The first time you open it, a setup screen asks for the battery's IP address. It tests the connection, shows the model and serial it finds, and saves the address in the data volume. To change it later, use the gear button at the top right.
+
+You never need to edit the compose file. Every setting is read from the stack's **Environment variables** section in Portainer (see [Settings](#settings)):
+
+- **Port 8080 already in use** ("port is already allocated"): add `HOST_PORT` = `8090` (or any free port), redeploy, and open `http://<your-pi-or-nas>:8090`.
+- **"No network route" on the setup screen**: the container can't see your home network through Docker's bridge network. Change the stack's **Compose path** to `docker-compose.host.yml`, which uses host networking. That file has no port mapping, so if 8080 is taken there, set `PORT` instead.
 
 The image is built for `linux/amd64` and `linux/arm64`, which covers a 64-bit Raspberry Pi OS and most NASes. It is published to `ghcr.io/maffewem/anker-e5000dashboard`. This repository is private, so the image is private too. You have two options:
 
 - In Portainer, add a registry under **Registries › Add registry › Custom**. Use `ghcr.io`, your GitHub username, and a [personal access token](https://github.com/settings/tokens) with the `read:packages` scope.
 - Or make the package public, from your GitHub profile under **Packages › anker-e5000dashboard › Package settings**.
-
-Another option is to build on the device. Use **Stacks › Add stack › Repository** with this repo's URL, and change `image:` to `build: .` in the compose file.
 
 ### Plain Docker
 
@@ -50,14 +54,18 @@ docker run -d --name solarbank-dashboard --restart unless-stopped \
 
 ### Settings
 
+Set these in Portainer's stack **Environment variables** (or a `.env` file next to the compose file).
+
 | Variable | Default | Meaning |
 |---|---|---|
+| `HOST_PORT` | `8080` | Port to open the dashboard on, from your browser |
 | `SOLARBANK_HOST` | *(unset)* | Optional. Sets the battery IP here instead of on the setup screen, which then shows it read-only |
 | `SOLARBANK_PORT` | `502` | Modbus TCP port |
 | `SOLARBANK_UNIT_ID` | `1` | Modbus unit id |
 | `POLL_SECONDS` | `5` | How often to read the battery |
 | `RETENTION_DAYS` | `365` | How long to keep history (`0` keeps everything) |
-| `TZ` | `UTC` | Timezone used for daily totals |
+| `PORT` | `8080` | Port the dashboard listens on inside the container (only needed with `docker-compose.host.yml`) |
+| `TZ` | `Europe/London` in the compose files, `UTC` otherwise | Timezone used for daily totals |
 | `LOG_LEVEL` | `INFO` | `DEBUG` for more detail |
 
 History is stored as one row per minute in `/data/solarbank.db`. That comes to roughly 50 MB a year.
