@@ -1,0 +1,21 @@
+# Paste this into Portainer (Stacks > Add stack > Web editor), or run
+# `docker compose up -d` next to it. Set SOLARBANK_HOST to the IP address
+# the Anker app shows under Three-Party Control Settings > Modbus TCP.
+services:
+  solarbank-dashboard:
+    image: ghcr.io/maffewem/anker-e5000dashboard:latest
+    container_name: solarbank-dashboard
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      SOLARBANK_HOST: "192.168.1.50"   # change me
+      TZ: "Europe/London"
+      # SOLARBANK_PORT: "502"
+      # POLL_SECONDS: "5"
+      # RETENTION_DAYS: "365"
+    volumes:
+      - solarbank-data:/data
+
+volumes:
+  solarbank-data:
