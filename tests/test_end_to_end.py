@@ -91,3 +91,44 @@ def test_meter_that_refuses_block_reads():
     assert found["grid_w"] == 420
     assert c.snapshot["grid_w"] == 420
     assert c.snapshot["firmware"] == "1.0.4.2"
+
+
+def test_setup_test_never_opens_a_second_connection():
+    # The Smart Meter accepts one Modbus client at a time and drops any other.
+    from app.registers import METER, METER_REGISTERS
+    from simulator.sim import METER_IMPLEMENTED, METER_STATIC, meter_values
+
+    async def run():
+        regs = Registers(METER_REGISTERS, METER_IMPLEMENTED)
+        regs.write(METER_STATIC)
+        regs.write(meter_values({"grid_power": 300}, 1000.0, 2000.0))
+        active = []
+
+        async def one_slot(reader, writer):
+            if active:
+                writer.close()
+                return
+            active.append(writer)
+            try:
+                await handle(regs, reader, writer)
+            finally:
+                active.remove(writer)
+
+        server = await asyncio.start_server(one_slot, "127.0.0.1", 0)
+        conn = Connection("127.0.0.1", server.sockets[0].getsockname()[1], 1)
+        settings = Settings(5, 365, ":memory:", "unused.json", "UTC")
+        collector = Collector(settings, None, conn, METER)
+        try:
+            await collector.poll_once()
+            same = await collector.test(conn)  # reuses the poller's connection
+            collector.connected = False  # e.g. mid-retry: the test must free the slot itself
+            again = await collector.test(conn)
+            await collector.poll_once()  # and polling reconnects afterwards
+        finally:
+            collector.close()
+            server.close()
+        return same, again, collector
+
+    same, again, c = asyncio.run(run())
+    assert same["serial"] == again["serial"] == METER_STATIC["meter_sn"]
+    assert c.snapshot["grid_w"] == 300

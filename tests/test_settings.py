@@ -95,3 +95,10 @@ def test_index_versions_assets(client):
     assert res.headers["cache-control"] == "no-cache"
     assert "{{version}}" not in res.text
     assert '/static/app.js?v=' in res.text
+
+
+def test_meter_cannot_reuse_the_solarbank_address(client):
+    client.post("/api/settings/battery?skip_test=true", json={"host": "192.168.0.40"})
+    res = client.post("/api/settings/meter?skip_test=true", json={"host": "192.168.0.40"})
+    assert res.status_code == 422
+    assert "Solarbank" in res.json()["detail"]

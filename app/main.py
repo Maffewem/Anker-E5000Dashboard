@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 
 from pydantic import BaseModel
 
-from .collector import Collector, probe
+from .collector import DEVICE_NAMES, Collector
 from .registers import BATTERY, METER
 from .config import Connection, ConnectionStore, Settings
 from .storage import Storage
@@ -121,17 +121,18 @@ def get_settings() -> dict:
 
 @app.post("/api/settings/{device}/test")
 async def test_settings(device: str, body: ConnectionIn) -> dict:
-    profile = _profile(device)
+    _profile(device)
     conn = _validated(body)
+    _check_not_other_device(device, conn)
     try:
-        return {"ok": True, "device": await probe(conn, profile)}
+        return {"ok": True, "device": await app.state.collectors[device].test(conn)}
     except Exception as err:
         raise HTTPException(status_code=422, detail=str(err)) from err
 
 
 @app.post("/api/settings/{device}")
 async def save_settings(device: str, body: ConnectionIn, skip_test: bool = False) -> dict:
-    profile = _profile(device)
+    _profile(device)
     store: ConnectionStore = app.state.connection_store
     if store.from_env(device):
         raise HTTPException(
@@ -143,9 +144,10 @@ async def save_settings(device: str, body: ConnectionIn, skip_test: bool = False
         conn = Connection()  # removing the optional meter
     else:
         conn = _validated(body)
+        _check_not_other_device(device, conn)
         if not skip_test:
             try:
-                found = await probe(conn, profile)
+                found = await app.state.collectors[device].test(conn)
             except Exception as err:
                 raise HTTPException(status_code=422, detail=str(err)) from err
     store.save(conn, device)
@@ -159,6 +161,18 @@ def _profile(device: str):
     if device not in DEVICES:
         raise HTTPException(status_code=404, detail="Unknown device")
     return DEVICES[device]
+
+
+def _check_not_other_device(device: str, conn: Connection) -> None:
+    """Catch the meter's address typed into the Solarbank tab, or the reverse."""
+    for other, collector in app.state.collectors.items():
+        theirs = collector.connection
+        if other != device and theirs.host and (theirs.host, theirs.port) == (conn.host, conn.port):
+            raise HTTPException(
+                status_code=422,
+                detail=f"{conn.host} is already set as the {DEVICE_NAMES[other]}'s address. "
+                f"Each device has its own IP in the Anker app.",
+            )
 
 
 def _validated(body: ConnectionIn) -> Connection:
