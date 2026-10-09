@@ -1,30 +1,33 @@
-# Paste this into Portainer (Stacks > Add stack > Web editor), or run
-# `docker compose up -d` next to it. Then open http://<this-host>:8080 and
-# enter the battery's IP address on the setup screen; it is saved in the
-# data volume.
+# Deploy with Portainer (Stacks > Add stack, either "Repository" pointing at
+# this repo or "Web editor" with this file pasted in), or `docker compose up -d`.
+# Then open http://<this-host>:8080 and enter the battery's IP address on the
+# setup screen; it is saved in the data volume.
+#
+# Every setting below can be changed without editing this file: add it under
+# "Environment variables" in the Portainer stack (or in a .env file next to
+# this file), e.g. HOST_PORT=8090 if port 8080 is already taken.
 services:
   solarbank-dashboard:
     image: ghcr.io/maffewem/anker-e5000dashboard:latest
     container_name: solarbank-dashboard
     restart: unless-stopped
     ports:
-      # host port : container port. If 8080 is taken on your machine, change
-      # the first number, e.g. "8090:8080", and open :8090 instead.
-      - "8080:8080"
+      # host port : container port
+      - "${HOST_PORT:-8080}:${PORT:-8080}"
     environment:
-      TZ: "Europe/London"
-      # PORT: "8080"   # port the dashboard listens on inside the container
-      # Optional: fix the battery address here instead of using the setup
-      # screen. When set, the setup screen shows it read-only.
-      # SOLARBANK_HOST: "192.168.0.42"
-      # POLL_SECONDS: "5"
-      # RETENTION_DAYS: "365"
+      PORT: "${PORT:-8080}"
+      TZ: "${TZ:-Europe/London}"
+      # Optional: fixes the battery address here instead of the setup screen.
+      SOLARBANK_HOST: "${SOLARBANK_HOST:-}"
+      SOLARBANK_PORT: "${SOLARBANK_PORT:-502}"
+      SOLARBANK_UNIT_ID: "${SOLARBANK_UNIT_ID:-1}"
+      POLL_SECONDS: "${POLL_SECONDS:-5}"
+      RETENTION_DAYS: "${RETENTION_DAYS:-365}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
     volumes:
       - solarbank-data:/data
-    # If the setup screen says there is no network route to the battery,
-    # remove the "ports" section above and uncomment this line instead.
-    # With host networking, choose the port with PORT in "environment".
-    # network_mode: host
+    # If the setup screen says there is no network route to the battery, use
+    # docker-compose.host.yml instead (host networking).
 
 volumes:
   solarbank-data:

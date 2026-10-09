@@ -1,0 +1,24 @@
+# Same as docker-compose.yml but on the host's network, for when the setup
+# screen reports "no network route" to the battery. In Portainer, set the
+# stack's "Compose path" to docker-compose.host.yml.
+# There is no port mapping here: the dashboard listens on PORT (default 8080).
+services:
+  solarbank-dashboard:
+    image: ghcr.io/maffewem/anker-e5000dashboard:latest
+    container_name: solarbank-dashboard
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      PORT: "${PORT:-8080}"
+      TZ: "${TZ:-Europe/London}"
+      SOLARBANK_HOST: "${SOLARBANK_HOST:-}"
+      SOLARBANK_PORT: "${SOLARBANK_PORT:-502}"
+      SOLARBANK_UNIT_ID: "${SOLARBANK_UNIT_ID:-1}"
+      POLL_SECONDS: "${POLL_SECONDS:-5}"
+      RETENTION_DAYS: "${RETENTION_DAYS:-365}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+    volumes:
+      - solarbank-data:/data
+
+volumes:
+  solarbank-data:
