@@ -391,6 +391,7 @@ $("open-costs").addEventListener("click", () => {
   $("cost-export").value = t.export_rate ?? "";
   const fromOctopus = Boolean(payback && payback.source === "octopus");
   $("costs-octopus").hidden = !fromOctopus;
+  $("costs-octopus-wait").hidden = fromOctopus || !(octopus && octopus.configured);
   for (const id of ["cost-peak", "cost-offpeak", "cost-from", "cost-to", "cost-export"]) $(id).disabled = fromOctopus;
   $("costs-msg").textContent = "";
   $("costs").showModal();
@@ -434,6 +435,10 @@ function renderOctopus(o) {
   $("tariff-empty").hidden = o.configured;
   $("tariff-error").hidden = !o.last_error;
   $("tariff-error").textContent = o.last_error ? `Couldn't update from Octopus: ${o.last_error}` : "";
+  $("tariff-diag").hidden = !(o.configured || o.last_error);
+  $("tariff-diag-text").textContent = JSON.stringify({ account: o.account, import: o.import && o.import.tariff,
+    export: o.export && o.export.tariff, last_sync: o.last_sync && new Date(o.last_sync * 1000).toISOString(),
+    error: o.last_error, ...o.diagnostics }, null, 2);
   const ready = o.configured && o.import;
   $("tariff-detail").hidden = !ready || !(o.prices && o.prices.length);
   if (!ready) { $("tariff-facts").replaceChildren(); return; }

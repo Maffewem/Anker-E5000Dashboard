@@ -194,3 +194,4 @@ dialog input:focus-visible { outline: 2px solid var(--solar); outline-offset: 1p
 .tips li.good { border-color: var(--good); }
 .tips b { display: block; font-size: 14px; }
 .tips span { color: var(--text-secondary); }
+.diag { font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-secondary); margin: 8px 0 0; }

@@ -65,14 +65,24 @@ OCTOPUS_DISPATCH_SECONDS = 5 * 60  # Intelligent Go slots change through the eve
 
 def _make_octopus(store: ConnectionStore, storage: Storage, api_key: str | None = None,
                   account: str | None = None) -> Octopus:
+    config_error = None
     if api_key is None:
         api_key, account = store.load_octopus()
+        if api_key and store.octopus_from_env():
+            try:
+                api_key, account = validate_octopus(api_key.strip("'\" "), (account or "").strip("'\" "))
+            except ValueError as err:
+                config_error = f"Check OCTOPUS_API_KEY and OCTOPUS_ACCOUNT in the container settings. {err}"
+                log.warning("Octopus: %s", config_error)
+                api_key = ""
 
     def offpeak() -> set[int]:
         rates = Tariff.from_dict(store.load_tariff()).slot_rates()
         return {i for i, r in enumerate(rates) if r == min(rates)} if len(set(rates)) > 1 else set(range(1, 15))
 
-    return Octopus(storage, api_key or "", account or "", offpeak=offpeak)
+    octopus = Octopus(storage, api_key or "", account or "", offpeak=offpeak)
+    octopus.config_error = config_error
+    return octopus
 
 
 def _make_controller(app: FastAPI, store: ConnectionStore, storage: Storage) -> Controller:

@@ -33,6 +33,7 @@
       <h2 id="costs-title">Battery costs</h2>
       <p class="dialog-intro">Prices in pence per kWh, as on your bill. For a single-rate tariff, use the same price for peak and off-peak.</p>
       <p class="locked-note" id="costs-octopus" hidden>Prices come from your Octopus account, so only the battery's price is used from here.</p>
+      <p class="locked-note" id="costs-octopus-wait" hidden>Octopus is connected but its prices haven't loaded yet, so these typed prices are used for now. See <b>Electricity prices</b> for why.</p>
       <label for="cost-battery">What you paid for the battery (£)</label>
       <input id="cost-battery" type="number" min="0" step="1" inputmode="decimal">
       <div class="row">
@@ -175,6 +176,10 @@
       <p class="note" id="tariff-empty">Connect your Octopus account to track your tariff's prices, use them for the battery payback, and see the cheapest times to charge. Agile, Go, Intelligent Go, Cosy, Flux and fixed tariffs all work.</p>
       <p class="setup-msg error" id="tariff-error" hidden></p>
       <dl class="facts" id="tariff-facts"></dl>
+      <details id="tariff-diag" hidden>
+        <summary>Details for troubleshooting</summary>
+        <pre class="diag" id="tariff-diag-text"></pre>
+      </details>
       <div id="tariff-detail" hidden>
         <div class="chart-box short"><canvas id="price-chart" aria-label="Upcoming electricity prices"></canvas></div>
         <h3>Suggested battery times</h3>
