@@ -139,6 +139,8 @@ class Settings:
     db_path: str
     settings_path: str
     timezone: str
+    relay_meter: bool = False
+    relay_port: int = 5020
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -149,4 +151,6 @@ class Settings:
             db_path=db_path,
             settings_path=os.environ.get("SETTINGS_PATH", str(Path(db_path).parent / "settings.json")),
             timezone=os.environ.get("TZ", "UTC"),
+            relay_meter=os.environ.get("RELAY_METER", "").strip().lower() in ("1", "true", "yes", "on"),
+            relay_port=_int("RELAY_PORT", 5020),
         )

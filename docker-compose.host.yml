@@ -23,6 +23,11 @@ services:
       OCTOPUS_API_KEY: "${OCTOPUS_API_KEY:-}"
       OCTOPUS_ACCOUNT: "${OCTOPUS_ACCOUNT:-}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      # Smart Meter relay: see docker-compose.yml. On host networking the
+      # container can't listen on 502 (it doesn't run as root), so the relay
+      # is on RELAY_PORT; use docker-compose.yml if Home Assistant needs 502.
+      RELAY_METER: "${RELAY_METER:-false}"
+      RELAY_PORT: "${RELAY_PORT:-5020}"
     volumes:
       - solarbank-data:/data
 
