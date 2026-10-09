@@ -16,13 +16,14 @@ from dataclasses import asdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from starlette.background import BackgroundTask
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from pydantic import BaseModel
 
+from .auth import COOKIE, SESSION_SECONDS, Auth, LockMiddleware
 from .collector import DEVICE_NAMES, Collector
 from .registers import BATTERY, METER
 from .battery_care import care
@@ -123,8 +124,12 @@ ENV_NAMES = {"battery": "SOLARBANK_HOST", "meter": "METER_HOST"}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    log.info("Solarbank dashboard version %s (commit %s, built %s)", APP_VERSION, APP_COMMIT[:7] or "unknown",
-             APP_BUILT or "unknown")
+    log.info("Solarbank dashboard version %s", APP_VERSION)
+    app.state.auth = auth = Auth.from_env()
+    if auth.read_only:
+        log.info("READ_ONLY is set: the dashboard can't change anything")
+    elif auth.password_set:
+        log.info("ADMIN_PASSWORD is set: changes need signing in")
     settings = Settings.from_env()
     storage = Storage(settings.db_path, settings.retention_days, settings.timezone)
     store = ConnectionStore(settings.settings_path)
@@ -175,6 +180,43 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Solarbank Dashboard", lifespan=lifespan)
+app.add_middleware(LockMiddleware)
+
+
+class LoginIn(BaseModel):
+    password: str = ""
+
+
+@app.get("/api/auth")
+def auth_status(request: Request) -> dict:
+    return app.state.auth.status(request)
+
+
+@app.post("/api/auth/login")
+async def login(body: LoginIn, request: Request) -> JSONResponse:
+    auth: Auth = app.state.auth
+    if not auth.password_set:
+        raise HTTPException(status_code=409, detail="No ADMIN_PASSWORD is set, so there's nothing to sign in to.")
+    client = request.client.host if request.client else "unknown"
+    if not auth.check_password(client, body.password[:1024]):
+        log.warning("Wrong dashboard password from %s", client)
+        await asyncio.sleep(1)  # slows guessing
+        raise HTTPException(status_code=401, detail="Wrong password")
+    token = auth.new_session()
+    out = {**auth.status(request), "signed_in": True, "can_edit": not auth.read_only, "csrf": auth.csrf_for(token)}
+    response = JSONResponse(out)
+    secure = request.url.scheme == "https" or request.headers.get("x-forwarded-proto", "").startswith("https")
+    response.set_cookie(COOKIE, token, max_age=SESSION_SECONDS, httponly=True, samesite="strict", secure=secure)
+    log.info("Signed in from %s", client)
+    return response
+
+
+@app.post("/api/auth/logout")
+def logout(request: Request) -> JSONResponse:
+    response = JSONResponse({**app.state.auth.status(request), "signed_in": False, "csrf": None,
+                             "can_edit": not app.state.auth.read_only and not app.state.auth.password_set})
+    response.delete_cookie(COOKIE, httponly=True, samesite="strict")
+    return response
 
 
 @app.get("/api/live")
@@ -276,15 +318,17 @@ class OctopusIn(BaseModel):
 
 
 @app.get("/api/octopus")
-def get_octopus() -> dict:
+def get_octopus(request: Request) -> dict:
     octopus: Octopus = app.state.octopus
     out = octopus.status(app.state.collectors["battery"].snapshot)
     out["locked"] = app.state.connection_store.octopus_from_env()
+    if out.get("account") and not app.state.auth.can_edit(request):
+        out["account"] = out["account"][:4] + "…"  # the API key is never sent; hide the account number from viewers too
     return out
 
 
 @app.post("/api/octopus")
-async def save_octopus(body: OctopusIn) -> dict:
+async def save_octopus(body: OctopusIn, request: Request) -> dict:
     store: ConnectionStore = app.state.connection_store
     storage: Storage = app.state.storage
     if store.octopus_from_env():
@@ -294,7 +338,7 @@ async def save_octopus(body: OctopusIn) -> dict:
         storage.clear_rates()
         app.state.octopus = _make_octopus(store, storage, "", "")
         log.info("Disconnected Octopus")
-        return get_octopus()
+        return get_octopus(request)
     try:
         api_key, account = validate_octopus(body.api_key, body.account)
     except ValueError as err:
@@ -306,7 +350,7 @@ async def save_octopus(body: OctopusIn) -> dict:
     store.save_octopus(api_key, account)
     app.state.octopus = octopus
     log.info("Connected Octopus account %s (%s)", account, octopus.info["import"]["name"])
-    return get_octopus()
+    return get_octopus(request)
 
 
 class ScheduleIn(BaseModel):
@@ -598,7 +642,11 @@ def export(
     return Response(out.getvalue(), media_type="text/csv", headers=headers)
 
 
-@app.get("/api/export/backup")
+def _admin(request: Request) -> None:
+    app.state.auth.require_admin(request)
+
+
+@app.get("/api/export/backup", dependencies=[Depends(_admin)])
 def export_backup() -> FileResponse:
     """The whole database as a SQLite file, everything recorded so far."""
     storage: Storage = app.state.storage

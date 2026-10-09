@@ -123,6 +123,11 @@ th { color: var(--text-secondary); font-weight: 600; }
 .icon-btn { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 999px; cursor: pointer;
   border: 1px solid var(--border); background: var(--surface); color: var(--text-secondary); }
 .icon-btn:hover { color: var(--text-primary); }
+#lock-btn .icon-unlocked, #lock-btn.open .icon-locked { display: none; }
+#lock-btn.open .icon-unlocked { display: block; }
+/* Signed out (with ADMIN_PASSWORD) or READ_ONLY: nothing that changes anything is shown. */
+body.locked .edit, body.locked [data-remove] { display: none !important; }
+fieldset.plain { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 8px; }
 .icon-sun { display: none; }
 .is-dark .icon-sun { display: block; }
 .is-dark .icon-moon { display: none; }
