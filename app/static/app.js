@@ -183,18 +183,23 @@ function timeAxis(opts) {
   opts.scales.x.type = "linear";
   opts.scales.x.min = Date.now() - span;
   opts.scales.x.max = Date.now();
-  // Put ticks on round local times (every N hours, or midnights).
-  const stepHours = hours <= 6 ? 1 : hours <= 24 ? 3 : hours <= 168 ? 24 : 120;
+  // Put ticks on round local times: the smallest step from this ladder (in
+  // minutes) that keeps the tick count readable, aligned to the clock.
+  const STEPS = [10, 15, 30, 60, 120, 180, 360, 720, 1440, 2880, 7200, 10080];
   const maxTicks = window.innerWidth < 600 ? 4 : 9;
   opts.scales.x.afterBuildTicks = (axis) => {
-    const ticks = [];
+    const spanMin = (axis.max - axis.min) / 60e3;
+    const step = STEPS.find((m) => spanMin / m <= maxTicks) || STEPS[STEPS.length - 1];
     const t = new Date(axis.min);
-    t.setMinutes(0, 0, 0);
-    if (stepHours >= 24) t.setHours(0);
-    else t.setHours(Math.ceil(t.getHours() / stepHours) * stepHours);
-    let step = stepHours;
-    while ((axis.max - axis.min) / (step * 3600e3) > maxTicks) step *= 2;
-    for (; t.getTime() <= axis.max; t.setHours(t.getHours() + step)) {
+    t.setSeconds(0, 0);
+    if (step >= 1440) t.setHours(0, 0);
+    else {
+      const minuteOfDay = t.getHours() * 60 + t.getMinutes();
+      const aligned = Math.ceil(minuteOfDay / step) * step;
+      t.setHours(0, aligned);
+    }
+    const ticks = [];
+    for (; t.getTime() <= axis.max; t.setMinutes(t.getMinutes() + step)) {
       if (t.getTime() >= axis.min) ticks.push({ value: t.getTime() });
     }
     axis.ticks = ticks;
@@ -306,6 +311,7 @@ async function refreshEnergy() {
 
 let setupShownOnce = false;
 let setupDevice = "battery";
+let meterPromptShown = false;
 let savedSettings = {};
 const DEVICE_LABEL = { battery: "Solarbank", meter: "Smart Meter" };
 const DEVICE_ENV = { battery: "SOLARBANK_HOST", meter: "METER_HOST" };
@@ -372,6 +378,7 @@ async function openSetup(device = "battery") {
   } catch (_) {}
   // The dialog can't be dismissed until the battery has an address.
   $("setup-cancel").hidden = !(savedSettings.battery && savedSettings.battery.host);
+  $("setup-cancel").textContent = "Cancel";
   showDevice(device);
   const dlg = $("setup");
   if (!dlg.open) dlg.showModal();
@@ -398,8 +405,31 @@ async function save(skipTest) {
   setupMessage("", skipTest ? "Saving…" : `Connecting to ${body.host}…`);
   try {
     const r = await postSettings(`/api/settings/${setupDevice}${skipTest ? "?skip_test=true" : ""}`, body);
-    setupMessage("ok", `${describeDevice(r.device)} Saved.`);
-    setTimeout(() => { $("setup").close(); refreshLive(); }, 900);
+    const device = setupDevice;
+    // First-time setup only: the battery had no address before this save.
+    const firstMeterPrompt = device === "battery" && !(savedSettings.battery && savedSettings.battery.host)
+      && !(savedSettings.meter && savedSettings.meter.host) && !meterPromptShown;
+    savedSettings[device] = { ...(savedSettings[device] || {}), ...body };
+    refreshLive();
+    if (skipTest) {
+      // Nothing was checked, so don't claim a connection; the status pill and
+      // banner show the real result once the dashboard tries to connect.
+      setupMessage("", `Saved ${body.host}. The dashboard will keep trying to connect; check the status at the top.`);
+    } else {
+      setupMessage("ok", `${describeDevice(r.device)} Saved.`);
+    }
+    if (firstMeterPrompt) {
+      // Offer the optional Smart Meter straight after the battery, once.
+      meterPromptShown = true;
+      setTimeout(() => {
+        $("setup-cancel").hidden = false;
+        showDevice("meter");
+        setupMessage("", "Solarbank saved. Got an Anker Smart Meter? Enter its IP to add it, or press Skip.");
+        $("setup-cancel").textContent = "Skip";
+      }, 1200);
+    } else {
+      setTimeout(() => { $("setup").close(); }, skipTest ? 2500 : 900);
+    }
   } catch (err) {
     setupMessage("error", err.message);
     // Let people save an address that is temporarily offline.
