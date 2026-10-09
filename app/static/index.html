@@ -136,7 +136,7 @@
       </article>
     </section>
 
-    <section class="card">
+    <section class="card" id="power-card" data-collapsible>
       <div class="card-head">
         <h2>Power</h2>
         <div class="range" role="group" aria-label="Time range">
@@ -155,7 +155,7 @@
       <div class="chart-box short"><canvas id="soc-chart" aria-label="Battery level over time"></canvas></div>
     </section>
 
-    <section class="card">
+    <section class="card" id="energy-card" data-collapsible>
       <div class="card-head">
         <h2>Daily energy</h2>
         <p class="today" id="today"></p>
@@ -181,7 +181,7 @@
       <ul class="tips" id="care-tips"></ul>
     </section>
 
-    <section class="card" id="tariff-card">
+    <section class="card" id="tariff-card" data-collapsible>
       <div class="card-head">
         <h2>Electricity prices</h2>
         <button type="button" class="secondary" id="open-octopus">Connect Octopus</button>
@@ -200,7 +200,7 @@
       </div>
     </section>
 
-    <section class="card" id="compare-card">
+    <section class="card" id="compare-card" data-collapsible>
       <div class="card-head">
         <h2>Compare tariffs</h2>
         <div class="compare-actions">
@@ -247,7 +247,7 @@
       </details>
     </section>
 
-    <section class="card" id="control-card">
+    <section class="card" id="control-card" data-collapsible>
       <div class="card-head">
         <h2>Battery control</h2>
         <span class="pill" id="control-mode"></span>
@@ -283,7 +283,7 @@
     </section>
 
 
-    <section class="card" id="payback-card">
+    <section class="card" id="payback-card" data-collapsible>
       <div class="card-head">
         <h2>Battery payback</h2>
         <button type="button" class="secondary" id="open-costs">Edit costs</button>
@@ -297,7 +297,7 @@
       </details>
     </section>
 
-    <section class="card" id="meter-card" hidden>
+    <section class="card" id="meter-card" data-collapsible hidden>
       <div class="card-head">
         <h2>Smart Meter</h2>
         <p class="device-state" id="meter-status"></p>
@@ -305,7 +305,7 @@
       <dl class="facts" id="meter-facts"></dl>
     </section>
 
-    <section class="card" id="solarbank-card">
+    <section class="card" id="solarbank-card" data-collapsible>
       <div class="card-head">
         <h2>Solarbank</h2>
         <p class="device-state" id="solarbank-status"></p>
@@ -313,7 +313,7 @@
       <dl class="facts" id="facts"></dl>
     </section>
 
-    <section class="card" id="events-card">
+    <section class="card" id="events-card" data-collapsible>
       <div class="card-head">
         <h2>Event log</h2>
         <select id="events-filter" aria-label="Show">
@@ -335,7 +335,7 @@
       <button type="button" class="link" id="events-more" hidden>Show older</button>
     </section>
 
-    <section class="card" id="export-card">
+    <section class="card" id="export-card" data-collapsible>
       <h2>Export data</h2>
       <form class="export" id="export-form">
         <label>Data

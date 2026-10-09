@@ -237,3 +237,10 @@ dialog input:disabled { opacity: 0.6; }
 .compare-rows li > small { grid-column: 1 / -1; color: var(--text-secondary); }
 .compare-rows li.best > div > b:first-child { color: var(--battery); }
 .control-form select.text { width: 100%; font: inherit; font-size: 16px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--page); color: var(--text-primary); box-sizing: border-box; }
+
+/* Collapsible cards (data-collapsible): the title becomes a toggle. */
+.collapse-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none;
+  font: inherit; color: inherit; cursor: pointer; text-align: left; }
+.collapse-toggle .chevron { width: 14px; height: 14px; color: var(--text-muted); transition: transform .15s; flex: none; }
+.collapsed .collapse-toggle .chevron { transform: rotate(-90deg); }
+.card.collapsed > :not(.card-head):not(h2), .card.collapsed .card-head > :not(h2) { display: none !important; }
