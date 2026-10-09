@@ -218,18 +218,55 @@ dialog .compare { display: flex; margin: 12px 0 0; }
 dialog .compare input { width: auto; padding: 0; }
 dialog input:disabled { opacity: 0.6; }
 
-.mode-row { margin-top: 8px; }
-.mode-row label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom: 4px; }
-.control-form h3 { margin: 10px 0 0; }
-.schedules { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
-.schedules li { border: 1px solid var(--border); border-radius: 10px; padding: 10px; display: grid; gap: 8px; }
-.schedules .sched-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
-.schedules select, .schedules input[type=time], .schedules input[type=number] { width: 100%; font: inherit; font-size: 16px; padding: 8px 10px;
-  border-radius: 8px; border: 1px solid var(--border); background: var(--page); color: var(--text-primary); box-sizing: border-box; }
-.schedules .days { display: flex; flex-wrap: wrap; gap: 6px; font-size: 13px; }
-.schedules .days label { display: inline-flex; align-items: center; gap: 4px; color: var(--text-secondary); font-size: 13px; margin: 0; }
-.schedules .sched-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* Battery control: a state banner, then labelled sections. */
+.control-state { margin-top: 10px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border);
+  border-left: 4px solid var(--text-muted); display: grid; gap: 2px; }
+.control-state b { font-size: 15px; }
+.control-state span { font-size: 13px; color: var(--text-secondary); }
+.control-state.active { border-left-color: var(--battery); }
+.control-state.idle { border-left-color: var(--good); }
+.control-state.dry { border-left-color: var(--gridpower); }
+.control-section { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 12px; }
+.control-section h3 { margin: 0; font-size: 14px; }
+.control-section .hint { font-size: 13px; color: var(--text-secondary); margin: 4px 0 8px; }
+.control-section .section-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; }
+.control-section .section-head .hint { margin-bottom: 0; }
+#control-card .control-form { margin-top: 0; }
+
+.switch { position: relative; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; flex: none; font-size: 14px; }
+.switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.switch span { width: 40px; height: 22px; border-radius: 999px; background: var(--axis); position: relative; transition: background .15s; }
+.switch span::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--surface); transition: transform .15s; }
+.switch input:checked + span { background: var(--good); }
+.switch input:checked + span::after { transform: translateX(18px); }
+.switch input:focus-visible + span { outline: 2px solid var(--solar); outline-offset: 2px; }
+.switch input:disabled + span { opacity: .5; }
+
+.schedules { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.schedules li { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; display: flex; align-items: center; gap: 12px; }
+.schedules li.off .sched-main { opacity: .55; }
+.schedules .sched-main { flex: 1; min-width: 0; }
+.schedules .sched-time { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.schedules .sched-time b { font-size: 15px; font-variant-numeric: tabular-nums; }
+.schedules .tag { font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-secondary); }
+.schedules .tag.charge { color: var(--battery); border-color: var(--battery); }
+.schedules .tag.discharge { color: var(--export); border-color: var(--export); }
+.schedules .state { font-size: 12px; color: var(--good); }
+.schedules li.off .state { color: var(--text-muted); }
+.schedules .sched-what { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
 .schedules .empty { border: 0; padding: 0; font-size: 13px; color: var(--text-muted); }
+.schedules button { padding: 4px 12px; min-height: 32px; }
+
+#schedule-dialog select { width: 100%; font: inherit; font-size: 16px; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--axis); background: var(--page); color: var(--text-primary); }
+#schedule-dialog .days { display: flex; flex-wrap: wrap; gap: 6px 12px; }
+#schedule-dialog .days label { display: inline-flex; align-items: center; gap: 4px; margin: 0; }
+#schedule-dialog .days input { width: auto; }
+#schedule-dialog .spacer { flex: 1; }
+#schedule-dialog .danger { color: var(--critical); padding: 0; }
+#schedule-dialog .dialog-actions { align-items: center; }
+#control-saved { margin: 0; align-self: center; min-height: 0; }
 .footer { text-align: center; font-size: 12px; color: var(--text-muted); padding: 8px 16px 24px; }
 
 .device-state { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); margin: 0; }
@@ -259,3 +296,4 @@ dialog input:disabled { opacity: 0.6; }
 .collapse-toggle .chevron { width: 14px; height: 14px; color: var(--text-muted); transition: transform .15s; flex: none; }
 .collapsed .collapse-toggle .chevron { transform: rotate(-90deg); }
 .card.collapsed > :not(.card-head):not(h2), .card.collapsed .card-head > :not(h2) { display: none !important; }
+#sd-amounts[hidden] { display: none; }
