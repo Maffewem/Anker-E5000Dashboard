@@ -190,6 +190,8 @@ function renderFacts(d, status) {
     ["Max charge / discharge", d.max_charge_w != null ? `${watts(d.max_charge_w)} / ${watts(d.max_discharge_w)}` : null],
     ["Lifetime charged", d.charged_total_kwh != null ? kwh(d.charged_total_kwh) : null],
     ["Lifetime discharged", d.discharged_total_kwh != null ? kwh(d.discharged_total_kwh) : null],
+    ["Charge cycles", d.rated_kwh && d.discharged_total_kwh != null
+      ? `About ${(Math.round(d.discharged_total_kwh / d.rated_kwh * 10) / 10).toLocaleString()}` : null],
   ].filter(([, v]) => v);
   const dl = $("facts");
   dl.replaceChildren(...rows.map(([k, v]) => {
@@ -782,11 +784,20 @@ $("control-form").addEventListener("submit", async (e) => {
   }
 });
 
+// Battery care is a notice: only tips worth acting on, and once dismissed it
+// stays hidden until a different tip comes up.
+const CARE_KEY = "care-dismissed";
+let careKey = "";
+
 async function refreshCare() {
   let c;
   try { c = await (await fetch("/api/battery-care", { cache: "no-store" })).json(); } catch (_) { return; }
-  $("care-cycles").textContent = c.cycles != null ? `${c.cycles} cycles` : "";
-  $("care-tips").replaceChildren(...c.tips.map((t) => {
+  const tips = c.tips.filter((t) => t.level === "suggest");
+  careKey = tips.map((t) => t.title).join("|");
+  let dismissed = "";
+  try { dismissed = localStorage.getItem(CARE_KEY) || ""; } catch (_) {}
+  $("care-card").hidden = !tips.length || dismissed === careKey;
+  $("care-tips").replaceChildren(...tips.map((t) => {
     const li = document.createElement("li"); li.className = t.level;
     const b = document.createElement("b"); b.textContent = t.title;
     const span = document.createElement("span"); span.textContent = t.text;
@@ -794,6 +805,11 @@ async function refreshCare() {
     return li;
   }));
 }
+
+$("care-dismiss").addEventListener("click", () => {
+  try { localStorage.setItem(CARE_KEY, careKey); } catch (_) {}
+  $("care-card").hidden = true;
+});
 
 // ---------- Tariff comparison ----------
 
@@ -832,14 +848,28 @@ $("custom-form").addEventListener("submit", (e) => {
     export_rate: n("custom-export"), standing_p: n("custom-standing") }]);
 });
 
+let presetList = [];
+
 function renderPresets(presets) {
-  $("custom-presets").replaceChildren(...(presets || []).map((p) => {
-    const b = document.createElement("button"); b.type = "button"; b.className = "secondary"; b.textContent = p.name;
-    b.title = `Fills in the off-peak hours (${p.offpeak_start}–${p.offpeak_end}); enter the prices from your bill or quote.`;
-    b.addEventListener("click", () => { $("custom-name").value = p.name; $("custom-from").value = p.offpeak_start; $("custom-to").value = p.offpeak_end; $("custom-peak").focus(); });
-    return b;
-  }));
+  presetList = presets || [];
+  const sel = $("custom-preset");
+  const keep = sel.value;
+  sel.replaceChildren(...presetList.map((p, i) => new Option(p.name, String(i))), new Option("Other (enter your own)", "other"));
+  sel.value = [...sel.options].some((o) => o.value === keep) ? keep : "other";
 }
+
+$("custom-preset").addEventListener("change", () => {
+  const p = presetList[Number($("custom-preset").value)];
+  if (p) {
+    $("custom-name").value = p.name;
+    $("custom-from").value = p.offpeak_start;
+    $("custom-to").value = p.offpeak_end;
+    $("custom-peak").focus();
+  } else {
+    $("custom-name").value = "";
+    $("custom-name").focus();
+  }
+});
 
 $("compare-run").addEventListener("click", async () => {
   $("compare-msg").className = "setup-msg";
@@ -860,15 +890,35 @@ $("compare-run").addEventListener("click", async () => {
   $("compare-msg").textContent = r.message || (r.problems && r.problems.length ? `Some tariffs were skipped: ${r.problems.join("; ")}` : "");
   $("compare-result").hidden = !r.rows.length;
   $("compare-assumptions").hidden = !r.rows.length;
-  $("compare-table").tBodies[0].replaceChildren(...r.rows.map((row, i) => {
-    const tr = document.createElement("tr");
-    if (i === 0) tr.className = "best";
-    if (row.key === "current") tr.classList.add("current");
-    const vs = row.vs_current == null || row.key === "current" ? "" : `${row.vs_current < 0 ? "−" : "+"}${pounds(Math.abs(row.vs_current))}`;
-    for (const v of [row.name, pounds(row.annual), vs, row.export || "", row.note || ""]) {
-      const td = document.createElement("td"); td.textContent = v; tr.append(td);
+  $("compare-result").replaceChildren(...r.rows.map((row, i) => {
+    const li = document.createElement("li");
+    if (i === 0) li.className = "best";
+    if (row.key === "current") li.classList.add("current");
+    const info = document.createElement("div");
+    const strong = document.createElement("b"); strong.textContent = row.name;
+    const extra = [
+      row.charge_window ? `Battery charges ${row.charge_window}, about ${row.daily.grid_charge_kwh} kWh a day from the grid`
+        : "Battery runs on solar only (grid charging doesn't pay)",
+      row.export ? `Export: ${row.export}` : "", row.note || "",
+    ].filter(Boolean);
+    info.append(strong, ...extra.map((t) => { const sm = document.createElement("small"); sm.textContent = t; return sm; }));
+    const money = document.createElement("div");
+    money.className = "money";
+    const total = document.createElement("b"); total.textContent = `${pounds(row.annual)} a year`;
+    money.append(total);
+    if (row.vs_current != null && row.key !== "current") {
+      const vs = document.createElement("small");
+      vs.className = row.vs_current < 0 ? "cheaper" : "dearer";
+      vs.textContent = `${pounds(Math.abs(row.vs_current))} ${row.vs_current < 0 ? "less" : "more"} than now`;
+      money.append(vs);
     }
-    return tr;
+    const b = row.breakdown || {};
+    const parts = [["House", b.home], ["Battery charging", b.battery_charging], ["Standing charge", b.standing], ["Export credit", b.export, true]]
+      .filter(([label, v]) => v != null && (v || label === "House"))
+      .map(([label, v, minus]) => `${label} ${minus ? "−" : ""}${pounds(v)}`);
+    const split = document.createElement("small"); split.textContent = parts.join(" · ");
+    li.append(info, money, split);
+    return li;
   }));
   const best = r.rows[0];
   const cur = r.rows.find((x) => x.key === "current");
@@ -876,7 +926,9 @@ $("compare-run").addEventListener("click", async () => {
   if (best && cur && best.key !== "current" && best.vs_current < 0) summary = `${best.name} looks about ${pounds(-best.vs_current)} a year cheaper than what you pay now. `;
   else if (best && cur && best.key === "current") summary = "Your current tariff already looks the cheapest. ";
   if (r.without_battery && cur) summary += `On your tariff the battery saves about ${pounds(r.without_battery.annual - cur.annual)} a year. `;
-  if (r.days) summary += `Based on ${r.days} day${r.days === 1 ? "" : "s"} of history.`;
+  if (r.days) summary += `Based on ${r.days} day${r.days === 1 ? "" : "s"} of history`
+    + (r.daily_use_kwh != null ? `: your home uses about ${r.daily_use_kwh} kWh a day` : "")
+    + (r.battery ? `, with a ${r.battery.kwh} kWh battery charging at up to ${r.battery.kw} kW.` : ".");
   $("compare-summary").textContent = summary;
   $("compare-assumption-list").replaceChildren(...(r.assumptions || []).map((a) => { const li = document.createElement("li"); li.textContent = a; return li; }));
 });
