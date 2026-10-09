@@ -86,6 +86,14 @@ class ConnectionStore:
         except (ValueError, TypeError):
             return Connection()
 
+    def load_tariff(self) -> dict:
+        return self._read().get("tariff") or {}
+
+    def save_tariff(self, tariff: dict) -> None:
+        data = self._read()
+        data["tariff"] = tariff
+        self._write(data)
+
     def save(self, conn: Connection, device: str = "battery") -> None:
         data = self._read()
         fields = asdict(conn)
@@ -96,6 +104,9 @@ class ConnectionStore:
                 data.pop("meter", None)
         else:
             data.update(fields)
+        self._write(data)
+
+    def _write(self, data: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=2))

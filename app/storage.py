@@ -25,6 +25,16 @@ CREATE TABLE IF NOT EXISTS minutes (
     ts INTEGER PRIMARY KEY,  -- unix seconds, start of the minute (UTC)
     {", ".join(f"{f} REAL" for f in POWER_FIELDS + ENERGY_FIELDS)}
 );
+-- Battery energy per local half hour, kept for good (not pruned), so the
+-- payback can be worked out over the battery's whole life for any tariff.
+CREATE TABLE IF NOT EXISTS slots (
+    day TEXT NOT NULL,       -- local date
+    slot INTEGER NOT NULL,   -- half hour of the local day, 0-47
+    discharge_wh REAL NOT NULL DEFAULT 0,
+    grid_charge_wh REAL NOT NULL DEFAULT 0,
+    solar_charge_wh REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, slot)
+);
 """
 
 
@@ -88,6 +98,7 @@ class Storage:
             self.tz = ZoneInfo(timezone)
         except Exception:
             self.tz = ZoneInfo("UTC")
+        self._backfill_slots()
 
     def write_minute(self, row: dict) -> None:
         cols = ["ts", *POWER_FIELDS, *ENERGY_FIELDS]
@@ -97,7 +108,41 @@ class Storage:
                 f"VALUES ({','.join('?' * len(cols))})",
                 [row.get(c) for c in cols],
             )
+            self._add_slot(row)
             self._db.commit()
+
+    def _add_slot(self, row: dict) -> None:
+        charge = row.get("charge_wh") or 0.0
+        discharge = row.get("discharge_wh") or 0.0
+        if not charge and not discharge:
+            return
+        # Charging while importing is counted as grid charging; the rest came from solar.
+        grid_charge = min(charge, row.get("import_wh") or 0.0)
+        local = datetime.fromtimestamp(row["ts"], self.tz)
+        self._db.execute(
+            "INSERT INTO slots (day, slot, discharge_wh, grid_charge_wh, solar_charge_wh) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT (day, slot) DO UPDATE SET discharge_wh = discharge_wh + excluded.discharge_wh, "
+            "grid_charge_wh = grid_charge_wh + excluded.grid_charge_wh, "
+            "solar_charge_wh = solar_charge_wh + excluded.solar_charge_wh",
+            (local.date().isoformat(), (local.hour * 60 + local.minute) // 30, discharge, grid_charge, charge - grid_charge),
+        )
+
+    def _backfill_slots(self) -> None:
+        """Fill the half-hour table from minute history recorded before it existed."""
+        with self._lock:
+            if self._db.execute("SELECT 1 FROM slots LIMIT 1").fetchone():
+                return
+            rows = self._db.execute("SELECT ts, import_wh, charge_wh, discharge_wh FROM minutes").fetchall()
+            for r in rows:
+                self._add_slot(dict(r))
+            self._db.commit()
+
+    def battery_slots(self) -> list[dict]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT day, slot, discharge_wh, grid_charge_wh, solar_charge_wh FROM slots"
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def prune(self) -> None:
         if self.retention_days <= 0:
