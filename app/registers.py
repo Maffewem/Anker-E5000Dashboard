@@ -5,7 +5,8 @@ integration (MIT licensed):
 https://github.com/anker-charging/ha-anker-solix-official
 (custom_components/anker_solix_official/config/58f0132b...yaml)
 
-Everything here is read-only. This project never writes to the device.
+Reading is the default. The only writes are the WRITABLE registers below,
+made by app/control.py when battery control is switched on.
 """
 
 from __future__ import annotations
@@ -66,6 +67,15 @@ READ_BLOCKS: list[tuple[str, int, int]] = [
     (HOLDING, 10064, 10064),
     (HOLDING, 60000, 60002),
 ]
+
+# Registers battery control may write. The setpoint is only obeyed in
+# third-party control mode (operating_mode 3): negative charges, positive
+# discharges, 0 holds. The official integration never reads it back.
+WRITABLE = {
+    "operating_mode": (10064, "UINT16"),
+    "battery_power_setpoint": (10071, "INT32"),
+}
+THIRD_PARTY_MODE = 3
 
 BATTERY_STATUS = {0: "standby", 1: "charging", 2: "discharging", 3: "sleep"}
 

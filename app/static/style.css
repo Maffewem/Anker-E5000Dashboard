@@ -169,6 +169,11 @@ dialog input:focus-visible { outline: 2px solid var(--solar); outline-offset: 1p
 .export input, .export select { font: inherit; font-size: 14px; padding: 6px 8px; min-height: 36px; border-radius: 8px;
   border: 1px solid var(--axis); background: var(--page); color: var(--text-primary); }
 .note a { color: var(--text-secondary); }
+#events-filter { font: inherit; font-size: 13px; padding: 4px 8px; min-height: 32px; border-radius: 8px;
+  border: 1px solid var(--axis); background: var(--page); color: var(--text-primary); max-width: 100%; }
+#events-table th, #events-table td { text-align: left; }
+#events-table td:last-child { white-space: normal; min-width: 140px; }
+#events-table td:first-child { color: var(--text-secondary); white-space: normal; min-width: 64px; }
 .windows { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 6px; }
 .windows li { display: flex; gap: 10px; align-items: baseline; font-size: 14px; flex-wrap: wrap; }
 .windows .tag { font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-secondary); }
@@ -176,3 +181,35 @@ dialog input:focus-visible { outline: 2px solid var(--solar); outline-offset: 1p
 .windows .tag.avoid { color: var(--gridpower); border-color: var(--gridpower); }
 .windows .tag.export { color: var(--export); border-color: var(--export); }
 .windows .why { color: var(--text-muted); font-size: 12px; }
+
+.control-now { font-size: 15px; margin-top: 8px; }
+.control-form { display: grid; gap: 8px; margin-top: 8px; }
+.control-form .compare { margin-top: 0; align-items: flex-start; }
+.control-form .compare input { margin-top: 3px; }
+.control-form label[for] { font-size: 12px; color: var(--text-muted); display: block; margin-bottom: 4px; }
+.control-form input[type=number] { width: 100%; font: inherit; font-size: 16px; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--page); color: var(--text-primary); }
+.control-form input:disabled { opacity: 0.5; }
+.pill { font-size: 12px; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-secondary); }
+.pill.live { color: var(--critical); border-color: var(--critical); }
+.activity, .tips { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 8px; font-size: 13px; }
+.activity time { color: var(--text-muted); margin-right: 8px; }
+.tips li { border-left: 3px solid var(--border); padding-left: 10px; }
+.tips li.suggest { border-color: var(--gridpower); }
+.tips li.good { border-color: var(--good); }
+.tips b { display: block; font-size: 14px; }
+.tips span { color: var(--text-secondary); }
+.diag { font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-secondary); margin: 8px 0 0; }
+.compare-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+.compare-actions select { font: inherit; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--page); color: var(--text-primary); }
+#compare-table tr.best td { font-weight: 600; color: var(--battery); }
+#compare-table tr.current td:first-child::after { content: " (now)"; color: var(--text-muted); font-weight: 400; }
+#compare-table td:last-child { color: var(--text-muted); font-size: 12px; min-width: 200px; }
+#compare-table td:nth-child(4), #compare-table td:last-child, #compare-table th:nth-child(4), #compare-table th:last-child { text-align: left; white-space: normal; }
+.control-form input.text, .control-form input[type=time] { width: 100%; font: inherit; font-size: 16px; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--page); color: var(--text-primary); }
+.preset-row { display: flex; gap: 8px; flex-wrap: wrap; }
+#custom-list li { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+dialog .compare { display: flex; margin: 12px 0 0; }
+dialog .compare input { width: auto; padding: 0; }
+dialog input:disabled { opacity: 0.6; }

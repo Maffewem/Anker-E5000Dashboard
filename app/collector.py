@@ -13,7 +13,8 @@ from pymodbus.client import AsyncModbusTcpClient
 from pymodbus.exceptions import ModbusException
 
 from .config import Connection, Settings
-from .registers import BATTERY, HOLDING, Profile, extract
+from .events import EventWatcher
+from .registers import BATTERY, HOLDING, WRITABLE, Profile, encode, extract
 from .storage import MeterBucket, MinuteBucket, Storage
 
 log = logging.getLogger("solarbank.collector")
@@ -37,6 +38,7 @@ class Collector:
         self.profile = profile
         self._changed = asyncio.Event()
         self.storage = storage
+        self.watcher = EventWatcher(storage, profile.name) if storage is not None else None
         self.client: AsyncModbusTcpClient | None = None
         self.snapshot: dict[str, Any] = {}
         self.raw: dict[str, Any] = {}
@@ -66,6 +68,12 @@ class Collector:
 
     def reconfigure(self, connection: Connection) -> None:
         """Switch to a different device address; takes effect immediately."""
+        if connection.host != self.connection.host or connection.port != self.connection.port:
+            self._event(
+                "connection",
+                f"Address set to {connection.host}:{connection.port}" if connection.host else "Removed from the dashboard",
+                source="dashboard",
+            )
         self.connection = connection
         self._mark_offline(None)
         self.snapshot, self.raw, self.words = {}, {}, {}
@@ -86,6 +94,20 @@ class Collector:
                 self.client.close()
                 self.client = None
             return await probe(conn, self.profile)
+
+    async def write(self, key: str, value: int) -> None:
+        """Write one of the WRITABLE registers over the poller's own connection."""
+        address, data_type = WRITABLE[key]
+        words = encode(data_type, value, 2 if data_type == "INT32" else 1)
+        async with self.io_lock:
+            client = await self._ensure_client()
+            if len(words) == 1:
+                result = await client.write_register(address, words[0], device_id=self.connection.unit_id)
+            else:
+                result = await client.write_registers(address, words, device_id=self.connection.unit_id)
+        if result.isError():
+            raise ConnectionError(f"{DEVICE_NAMES[self.profile.name]} refused writing {key}={value}: {result}")
+        log.info("Wrote %s = %s to %s", key, value, DEVICE_NAMES[self.profile.name])
 
     async def _wait(self, seconds: float | None) -> None:
         """Sleep, but wake early if the connection settings change."""
@@ -113,6 +135,9 @@ class Collector:
             except Exception as err:  # keep polling whatever happens
                 if self.connection is not conn:
                     continue  # address changed mid-poll; start over with the new one
+                if self.connected:
+                    reason = (str(err) or err.__class__.__name__).removeprefix("lost connection: ")
+                    self._event("connection", f"Lost connection ({reason})")
                 self._mark_offline(str(err) or err.__class__.__name__)
                 backoff = min(backoff * 2, 60)
                 log.warning("%s poll failed (%s); retrying in %ss", DEVICE_NAMES[self.profile.name], self.last_error, backoff)
@@ -161,10 +186,17 @@ class Collector:
         if not self.connected:
             log.info("%s connected at %s:%s (model %s, serial %s)", DEVICE_NAMES[self.profile.name], conn.host,
                      conn.port, self.snapshot.get("model"), self.snapshot.get("serial"))
+            self._event("connection", f"Connected at {conn.host}:{conn.port}", ts=now)
+        if self.watcher is not None:
+            self.watcher.observe(self.snapshot, now)
         self.connected = True
         self.last_update = now
         self.last_error = None
         self._record(now)
+
+    def _event(self, kind: str, message: str, **kwargs: Any) -> None:
+        if self.storage is not None:
+            self.storage.record_event(kind, message, device=self.profile.name, **kwargs)
 
     def _note_unavailable(self, kind: str, start: int, reason: str) -> None:
         if (kind, start) not in self._unavailable_blocks:

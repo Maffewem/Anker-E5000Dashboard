@@ -13,5 +13,7 @@ services:
       SOLARBANK_PORT: "5020"
       METER_HOST: simulator
       METER_PORT: "5021"
+      # The simulator is safe to control, so battery control writes for real here.
+      CONTROL_LIVE: "1"
     depends_on:
       - simulator

@@ -22,6 +22,9 @@ services:
       # Optional: Octopus Energy account, instead of entering it on the dashboard.
       OCTOPUS_API_KEY: "${OCTOPUS_API_KEY:-}"
       OCTOPUS_ACCOUNT: "${OCTOPUS_ACCOUNT:-}"
+      # Battery control only writes to the battery when this is 1. Leave it 0 to
+      # try control as a dry run first.
+      CONTROL_LIVE: "${CONTROL_LIVE:-0}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
       # Smart Meter relay: see docker-compose.yml. On host networking the
       # container can't listen on 502 (it doesn't run as root), so the relay

@@ -94,6 +94,23 @@ class ConnectionStore:
         data["tariff"] = tariff
         self._write(data)
 
+    def load_section(self, name: str) -> dict:
+        value = self._read().get(name)
+        return value if isinstance(value, dict) else {}
+
+    def save_section(self, name: str, value: dict) -> None:
+        data = self._read()
+        data[name] = value
+        self._write(data)
+
+    def load_lifetime(self) -> dict | None:
+        return self._read().get("lifetime") or None
+
+    def save_lifetime(self, totals: dict) -> None:
+        data = self._read()
+        data["lifetime"] = totals
+        self._write(data)
+
     def octopus_from_env(self) -> bool:
         return bool(os.environ.get("OCTOPUS_API_KEY", "").strip())
 

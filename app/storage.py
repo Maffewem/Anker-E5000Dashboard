@@ -52,7 +52,36 @@ CREATE TABLE IF NOT EXISTS rates (
     export_p REAL,
     PRIMARY KEY (day, slot)
 );
+-- What happened and when: battery mode, charging and settings changes,
+-- devices connecting and dropping, and actions taken on the battery.
+-- Kept for good (it only grows on changes).
+CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts INTEGER NOT NULL,     -- unix seconds
+    device TEXT NOT NULL,    -- battery, meter
+    kind TEXT NOT NULL,      -- see EVENT_KINDS
+    field TEXT,              -- the reading that changed, if any
+    old TEXT,
+    new TEXT,
+    message TEXT NOT NULL,   -- one readable line
+    source TEXT NOT NULL     -- who did it: "device" (seen while polling), "dashboard", ...
+);
+CREATE INDEX IF NOT EXISTS events_ts ON events (ts);
+-- The last value seen for each watched reading, so a change made while the
+-- dashboard was stopped still shows up when it starts again.
+CREATE TABLE IF NOT EXISTS event_state (
+    device TEXT NOT NULL,
+    field TEXT NOT NULL,
+    value TEXT,
+    PRIMARY KEY (device, field)
+);
 """
+
+# charging: started/stopped charging or discharging. mode: operating mode.
+# setting: SOC limits, reserve, power limits. connection: online/offline or a
+# new address. firmware: a firmware update. control: something the dashboard
+# itself asked the battery to do.
+EVENT_KINDS = ("charging", "mode", "setting", "connection", "firmware", "control")
 
 METER_FIELDS = ("grid_w", "voltage", "import_total_kwh", "export_total_kwh")
 
@@ -135,6 +164,7 @@ class MeterBucket:
 EXPORTS = {
     "minutes": ("minutes", "ts", ("ts", *POWER_FIELDS, *ENERGY_FIELDS)),
     "meter": ("meter_minutes", "ts", ("ts", *METER_FIELDS)),
+    "events": ("events", "ts", ("ts", "device", "kind", "field", "old", "new", "message", "source")),
     "slots": ("slots", "day", ("day", "slot", "discharge_wh", "grid_charge_wh", "solar_charge_wh")),
 }
 
@@ -172,6 +202,55 @@ class Storage:
             self._db.execute(
                 f"INSERT OR REPLACE INTO meter_minutes ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
                 [row.get(c) for c in cols],
+            )
+            self._db.commit()
+
+    def record_event(
+        self,
+        kind: str,
+        message: str,
+        *,
+        device: str = "battery",
+        field: str | None = None,
+        old: object = None,
+        new: object = None,
+        source: str = "device",
+        ts: float | None = None,
+    ) -> None:
+        """Add one line to the event log. Anything that changes the battery should call this."""
+        if kind not in EVENT_KINDS:
+            raise ValueError(f"unknown event kind {kind!r}")
+        text = lambda v: None if v is None else str(v)  # noqa: E731
+        with self._lock:
+            self._db.execute(
+                "INSERT INTO events (ts, device, kind, field, old, new, message, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (int(ts if ts is not None else time.time()), device, kind, field, text(old), text(new), message, source),
+            )
+            self._db.commit()
+
+    def events(self, limit: int = 100, before: int | None = None, kinds: list[str] | None = None) -> list[dict]:
+        """Newest first; `before` (an event id) pages back through older ones."""
+        where, args = [], []
+        if before is not None:
+            where.append("id < ?")
+            args.append(before)
+        if kinds:
+            where.append(f"kind IN ({','.join('?' * len(kinds))})")
+            args.extend(kinds)
+        sql = "SELECT * FROM events" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY id DESC LIMIT ?"
+        with self._lock:
+            return [dict(r) for r in self._db.execute(sql, (*args, limit)).fetchall()]
+
+    def event_state(self, device: str) -> dict[str, str | None]:
+        with self._lock:
+            rows = self._db.execute("SELECT field, value FROM event_state WHERE device = ?", (device,)).fetchall()
+        return {r["field"]: r["value"] for r in rows}
+
+    def save_event_state(self, device: str, field: str, value: object) -> None:
+        with self._lock:
+            self._db.execute(
+                "INSERT OR REPLACE INTO event_state (device, field, value) VALUES (?, ?, ?)",
+                (device, field, None if value is None else str(value)),
             )
             self._db.commit()
 
@@ -214,6 +293,44 @@ class Storage:
                 "SELECT day, slot, discharge_wh, grid_charge_wh, solar_charge_wh FROM slots"
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def usage_slots(self, days: int = 365) -> list[dict]:
+        """Home use and solar per local half hour, for comparing tariffs.
+
+        These don't depend on what the battery did, so they can be replayed
+        against any tariff and battery schedule.
+        """
+        since = int(time.time()) - days * 86400
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT ts, home_wh, solar_wh FROM minutes WHERE ts >= ? ORDER BY ts", (since,)
+            ).fetchall()
+        out: dict[tuple[str, int], dict] = {}
+        for r in rows:
+            local = datetime.fromtimestamp(r["ts"], self.tz)
+            key = (local.date().isoformat(), (local.hour * 60 + local.minute) // 30)
+            slot = out.setdefault(key, {"day": key[0], "slot": key[1], "home_wh": 0.0, "solar_wh": 0.0, "minutes": 0})
+            slot["home_wh"] += r["home_wh"] or 0.0
+            slot["solar_wh"] += r["solar_wh"] or 0.0
+            slot["minutes"] += 1
+        return list(out.values())
+
+    def soc_stats(self, days: int = 30) -> dict:
+        """Minutes spent nearly full and nearly empty, for battery care tips."""
+        since = int(time.time()) - days * 86400
+        with self._lock:
+            r = self._db.execute(
+                "SELECT COUNT(soc) AS n, SUM(soc >= 98) AS full, SUM(soc <= 7) AS empty, AVG(soc) AS avg, "
+                "MIN(ts) AS first FROM minutes WHERE ts >= ? AND soc IS NOT NULL", (since,)
+            ).fetchone()
+        n = r["n"] or 0
+        return {
+            "minutes": n,
+            "days": round((time.time() - r["first"]) / 86400, 1) if r["first"] else 0,
+            "full_share": (r["full"] or 0) / n if n else None,
+            "empty_share": (r["empty"] or 0) / n if n else None,
+            "avg_soc": round(r["avg"], 1) if r["avg"] is not None else None,
+        }
 
     def first_slot_day(self) -> str | None:
         with self._lock:

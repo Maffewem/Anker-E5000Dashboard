@@ -223,6 +223,51 @@ def test_api_connects_fills_payback_and_disconnects(tmp_path, monkeypatch):
         pb = c.get("/api/payback").json()
         assert pb["source"] == "octopus" and pb["tariff_name"] == "Octopus Go"
         assert pb["tariff"]["offpeak_rate"] == 8.5
+        manual = c.post("/api/tariff", json={"battery_cost": 3000, "peak_rate": 30, "offpeak_rate": 7, "use_manual": True}).json()
+        assert manual["source"] == "manual" and manual["use_manual"] and manual["tariff"]["peak_rate"] == 30
+        back = c.post("/api/tariff", json={**manual["manual"], "use_manual": False}).json()
+        assert back["source"] == "octopus" and back["manual"]["peak_rate"] == 30  # typed prices kept
         c.post("/api/octopus", json={"api_key": ""})
         assert c.get("/api/octopus").json()["configured"] is False
         assert c.get("/api/payback").json()["source"] == "manual"
+
+
+def test_no_price_for_now_is_an_error_not_silence(storage):
+    fake = FakeOctopus()
+
+    def no_rates(url, headers, body):
+        if "standard-unit-rates" in url:
+            return {"results": [], "next": None}
+        return fake(url, headers, body)
+
+    o = make(storage, no_rates)
+    o.sync(NOW)
+    assert "no price for now" in o.last_error
+    assert o.status({}, NOW)["diagnostics"]["prices_stored"] == 0
+
+
+def test_dispatch_failure_keeps_prices(storage):
+    fake = FakeOctopus("E-1R-INTELLI-VAR-24-10-29-C")
+
+    def broken_graphql(url, headers, body):
+        if url.endswith("/graphql/"):
+            return {"errors": [{"message": "Unauthorized"}]}
+        return fake(url, headers, body)
+
+    o = make(storage, broken_graphql)
+    o.sync(NOW)
+    assert o.status({}, NOW)["current_p"] == 27.0
+    assert "Intelligent Go" in o.last_error
+
+
+def test_env_without_account_says_so(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "solarbank.db"))
+    monkeypatch.setenv("OCTOPUS_API_KEY", "sk_live_abcdefghij")
+    monkeypatch.delenv("OCTOPUS_ACCOUNT", raising=False)
+    from app.main import app
+
+    with TestClient(app) as c:
+        body = c.get("/api/octopus").json()
+        assert body["configured"] is False and "OCTOPUS_ACCOUNT" in body["last_error"]

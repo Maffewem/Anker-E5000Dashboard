@@ -37,6 +37,7 @@ You don't need to edit the compose file. Set any of these as **Environment varia
 | `POLL_SECONDS` | `5` | How often to read the devices |
 | `SOLARBANK_HOST`, `METER_HOST` | – | Set an address here instead of on the setup screen. The setup screen then shows it read-only |
 | `OCTOPUS_API_KEY`, `OCTOPUS_ACCOUNT` | – | Your Octopus Energy API key and account number, instead of entering them with **Connect Octopus** on the dashboard |
+| `CONTROL_LIVE` | `0` | Set to `1` to let **Battery control** write to the battery. Until then it's a dry run that only logs what it would do |
 | `PORT` | `8080` | Port inside the container. Only needed with `docker-compose.host.yml` |
 | `RELAY_METER` | `false` | `true` shares the Smart Meter with Home Assistant (see below) |
 | `RELAY_HOST_PORT` | `502` | Port the Smart Meter relay is published on |
@@ -60,10 +61,22 @@ The Smart Meter accepts only one Modbus TCP connection at a time, so the dashboa
 
 The relay is read-only: it never sends anything to the meter, and Home Assistant gets an error if it tries to change a setting. If the dashboard loses the meter, Home Assistant shows it unavailable until the dashboard reconnects. Its readings are as fresh as the dashboard's last poll (`POLL_SECONDS`). Use the normal `docker-compose.yml` for this; with `docker-compose.host.yml` the relay can only listen on `RELAY_PORT` (5020), which Home Assistant's add screen doesn't accept. The Solarbank itself accepts several connections, so it doesn't need a relay.
 
+## Battery control
+
+Off by default. When switched on in **Battery control**, the dashboard takes over the battery during cheap hours (your Octopus cheap windows and Intelligent Go slots, or the off-peak hours in **Edit costs**):
+
+- **Hold:** the battery doesn't discharge, so the house runs on cheap grid power and the stored energy is kept for the dear hours.
+- **Grid charge (optional):** charges at the power you choose until it reaches your stop level (90% by default).
+
+To do this it puts the battery in Anker's third-party control mode. Outside cheap hours, when you switch control off, or when the container stops, it writes back the mode the battery was in before (Smart, Self-consumption and so on). If you change the mode in the Anker app, the dashboard stands back until the next cheap window. Nothing is written unless `CONTROL_LIVE=1` is set; without it, the **Activity** list shows what it would have done.
+
+**Battery care** gives tips from the battery's limits and history: time spent full or empty, charge and discharge limits, and cycles so far.
+
 ## More
 
+- **Event log:** the dashboard logs when the Solarbank starts or stops charging or discharging (once the new state has lasted a minute), changes mode, charge or discharge limit, backup reserve or firmware, and when either device connects, drops or gets a new address. Changes made while the dashboard was stopped are logged when it starts again.
 - **Export:** the Export data card at the bottom of the dashboard downloads readings as CSV or JSON for any date range, or a full backup of the database. Smart Meter readings are recorded from this version on.
 - **Try it without hardware:** `docker compose -f docker-compose.demo.yml up --build` runs simulated devices.
-- **API:** `/api/live`, `/api/history?hours=24`, `/api/energy?days=14`, `/api/payback`, `/api/runtime` (when the battery is expected to reach its discharge limit or be full), `/api/export?data=minutes&start=2026-01-01&end=2026-01-31` (also `daily`, `meter`, `slots`; add `&format=json` for JSON), `/api/export/backup` (the whole SQLite database), `/api/raw` (every register, for troubleshooting) and `/healthz`.
+- **API:** `/api/live`, `/api/history?hours=24`, `/api/energy?days=14`, `/api/payback`, `/api/export?data=minutes&start=2026-01-01&end=2026-01-31` (also `daily`, `meter`, `slots`, `events`; add `&format=json` for JSON), `/api/export/backup` (the whole SQLite database), `/api/events?kind=charging,mode` (the event log, newest first), `/api/raw` (every register, for troubleshooting) and `/healthz`.
 - **Development:** `pip install -r requirements-dev.txt && python -m pytest`, then `python -m simulator.sim --meter-port 5021` and `python -m app`.
 - The register maps come from Anker's MIT-licensed [official Home Assistant integration](https://github.com/anker-charging/ha-anker-solix-official). See [NOTICE.md](NOTICE.md).
