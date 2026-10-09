@@ -94,8 +94,11 @@ def live() -> dict:
 
 
 @app.get("/api/history")
-def history(hours: int = Query(24, ge=1, le=24 * 366)) -> dict:
-    return app.state.storage.history(hours)
+def history(
+    hours: int = Query(24, ge=1, le=24 * 366),
+    offset_hours: int = Query(0, ge=0, le=24 * 366),
+) -> dict:
+    return app.state.storage.history(hours, offset_hours=offset_hours)
 
 
 @app.get("/api/energy")

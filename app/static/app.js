@@ -3,7 +3,11 @@
 const LIVE_MS = 5000;
 const HISTORY_MS = 30000;
 let hours = 24;
-try { hours = Number(localStorage.getItem("hours")) || 24; } catch (_) {}
+let compare = false;
+try {
+  hours = Number(localStorage.getItem("hours")) || 24;
+  compare = localStorage.getItem("compare") === "1";
+} catch (_) {}
 
 const $ = (id) => document.getElementById(id);
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -230,33 +234,47 @@ function line(label, color, data) {
     pointHoverRadius: 4, pointHoverBorderWidth: 2, pointHoverBorderColor: css("--surface"), tension: 0.25, spanGaps: false };
 }
 
-// Insert nulls where buckets are missing so outages show as gaps, not ramps.
-function withGaps(points, key, bucketMs) {
+// One value per bucket across the whole window, null where nothing was
+// recorded: outages show as gaps, and every series (including the previous
+// period, moved forward by `shiftMs`) lines up for the tooltip.
+function series(points, key, bucketMs, shiftMs = 0) {
+  const byX = new Map(points.map((p) => [p.t * 1000 + shiftMs, p[key]]));
+  const end = Date.now();
   const out = [];
-  let prev = null;
-  for (const p of points) {
-    const x = p.t * 1000;
-    if (prev !== null && x - prev > bucketMs * 1.5) out.push({ x: prev + bucketMs, y: null });
-    out.push({ x, y: p[key] == null ? null : Math.round(p[key]) });
-    prev = x;
+  for (let x = Math.floor((end - hours * 3600e3) / bucketMs) * bucketMs; x <= end; x += bucketMs) {
+    const v = byX.get(x);
+    out.push({ x, y: v == null ? null : Math.round(v) });
   }
   return out;
 }
 
+// The previous period: same colour, dashed and lighter.
+function previousLine(label, color, data) {
+  return { ...line(`${label} · previous`, `${color}80`, data), borderDash: [5, 4], borderWidth: 1.5 };
+}
+
+const PERIOD_NAMES = { 1: "hour", 3: "3 hours", 6: "6 hours", 24: "day", 168: "7 days", 720: "30 days" };
+
+async function getHistory(offsetHours) {
+  const res = await fetch(`/api/history?hours=${hours}&offset_hours=${offsetHours}`, { cache: "no-store" });
+  return res.json();
+}
+
 async function refreshHistory() {
-  let body;
+  let body, prev = null;
   try {
-    body = await (await fetch(`/api/history?hours=${hours}`, { cache: "no-store" })).json();
+    [body, prev] = await Promise.all([getHistory(0), compare ? getHistory(hours) : null]);
   } catch (_) { return; }
   const bucketMs = body.bucket_seconds * 1000;
   const pts = body.points;
+  const shiftMs = hours * 3600e3;
 
-  const powerSets = [
-    line("Solar", css("--solar"), withGaps(pts, "solar_w", bucketMs)),
-    line("Home", css("--home"), withGaps(pts, "home_w", bucketMs)),
-    line("Battery", css("--battery"), withGaps(pts, "battery_w", bucketMs)),
-    line("Grid", css("--gridpower"), withGaps(pts, "grid_w", bucketMs)),
-  ];
+  const SERIES = [["Solar", "--solar", "solar_w"], ["Home", "--home", "home_w"],
+    ["Battery", "--battery", "battery_w"], ["Grid", "--gridpower", "grid_w"]];
+  const powerSets = SERIES.map(([label, color, key]) => line(label, css(color), series(pts, key, bucketMs)));
+  if (prev) {
+    for (const [label, color, key] of SERIES) powerSets.push(previousLine(label, css(color), series(prev.points, key, bucketMs, shiftMs)));
+  }
   const powerOpts = timeAxis(baseOptions());
   powerOpts.scales.y.ticks.callback = (v) => (Math.abs(v) >= 1000 ? `${v / 1000} kW` : `${v} W`);
   powerOpts.plugins.tooltip.callbacks.label = (c) => `${c.dataset.label}: ${c.parsed.y < 0 ? "−" : ""}${watts(c.parsed.y)}`;
@@ -270,9 +288,10 @@ async function refreshHistory() {
   socOpts.scales.y.max = 100;
   socOpts.scales.y.ticks.stepSize = 50;
   socOpts.scales.y.ticks.callback = (v) => `${v}%`;
-  socOpts.plugins.tooltip.callbacks.label = (c) => `Battery: ${c.parsed.y}%`;
+  socOpts.plugins.tooltip.callbacks.label = (c) => `${c.datasetIndex ? "Previous" : "Battery"}: ${c.parsed.y}%`;
   socChart?.destroy();
-  socChart = new Chart($("soc-chart"), { type: "line", data: { datasets: [line("Battery level", css("--battery"), withGaps(pts, "soc", bucketMs))] }, options: socOpts });
+  socChart = new Chart($("soc-chart"), { type: "line", data: { datasets: [line("Battery level", css("--battery"), series(pts, "soc", bucketMs)),
+    ...(prev ? [previousLine("Battery level", css("--battery"), series(prev.points, "soc", bucketMs, shiftMs))] : [])] }, options: socOpts });
 }
 
 async function refreshEnergy() {
@@ -477,9 +496,18 @@ for (const btn of document.querySelectorAll(".range button[data-hours]")) {
     hours = Number(btn.dataset.hours);
     try { localStorage.setItem("hours", String(hours)); } catch (_) {}
     for (const b of document.querySelectorAll(".range button[data-hours]")) b.setAttribute("aria-pressed", String(b === btn));
+    $("compare-span").textContent = PERIOD_NAMES[hours] || `${hours} hours`;
     refreshHistory();
   });
 }
+
+$("compare").checked = compare;
+$("compare-span").textContent = PERIOD_NAMES[hours] || `${hours} hours`;
+$("compare").addEventListener("change", () => {
+  compare = $("compare").checked;
+  try { localStorage.setItem("compare", compare ? "1" : "0"); } catch (_) {}
+  refreshHistory();
+});
 
 // ---------- Theme ----------
 

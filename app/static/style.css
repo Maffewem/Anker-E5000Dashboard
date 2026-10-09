@@ -100,6 +100,8 @@ main { display: grid; gap: 16px; padding-bottom: 32px; }
   padding: 4px 12px; cursor: pointer; min-height: 32px; }
 .range button + button { border-left: 1px solid var(--border); }
 .range button[aria-pressed="true"] { background: var(--grid); color: var(--text-primary); font-weight: 600; }
+.compare { display: inline-flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 13px; color: var(--text-secondary); cursor: pointer; }
+.compare input { accent-color: var(--text-primary); margin: 0; }
 
 .chart-box { position: relative; height: 280px; margin-top: 12px; }
 .chart-box.short { height: 140px; margin-top: 8px; }

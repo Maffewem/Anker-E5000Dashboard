@@ -107,17 +107,21 @@ class Storage:
             self._db.execute("DELETE FROM minutes WHERE ts < ?", (cutoff,))
             self._db.commit()
 
-    def history(self, hours: int, max_points: int = 720) -> dict:
-        """Average power over evenly sized buckets covering the last `hours`."""
-        now = int(time.time())
-        start = now - hours * 3600
+    def history(self, hours: int, max_points: int = 720, offset_hours: int = 0) -> dict:
+        """Average power over evenly sized buckets covering the last `hours`.
+
+        `offset_hours` moves the window back in time, e.g. the previous day
+        for comparison; timestamps stay the real ones.
+        """
+        end = int(time.time()) - offset_hours * 3600
+        start = end - hours * 3600
         bucket = max(60, (hours * 3600 // max_points) // 60 * 60)
         avgs = ", ".join(f"AVG({f}) AS {f}" for f in POWER_FIELDS)
         with self._lock:
             rows = self._db.execute(
                 f"SELECT (ts / ?) * ? AS t, {avgs} FROM minutes "
-                "WHERE ts >= ? GROUP BY t ORDER BY t",
-                (bucket, bucket, start),
+                "WHERE ts >= ? AND ts <= ? GROUP BY t ORDER BY t",
+                (bucket, bucket, start, end),
             ).fetchall()
         return {"bucket_seconds": bucket, "points": [dict(r) for r in rows]}
 
