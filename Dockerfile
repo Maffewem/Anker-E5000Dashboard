@@ -1,4 +1,5 @@
-FROM python:3.12-slim
+# Docker Hub's official image via Google's mirror: CI kept hitting Docker Hub pull limits.
+FROM mirror.gcr.io/library/python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
