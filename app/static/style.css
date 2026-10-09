@@ -177,9 +177,17 @@ dialog input:focus-visible { outline: 2px solid var(--solar); outline-offset: 1p
 #events-filter { font: inherit; font-size: 13px; padding: 4px 8px; min-height: 32px; border-radius: 8px;
   border: 1px solid var(--axis); background: var(--page); color: var(--text-primary); max-width: 100%; }
 #events-table th, #events-table td { text-align: left; }
-#events-table td:last-child { white-space: normal; min-width: 140px; }
-#events-table td:first-child { color: var(--text-secondary); white-space: normal; min-width: 64px; }
-.pager { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 10px; font-size: 13px; }
+/* Fixed columns so paging between today's times and older dates doesn't shift them. */
+#events-table { table-layout: fixed; }
+#events-table col.when { width: 9.5em; }
+#events-table col.device { width: 8em; }
+#events-table td { white-space: normal; overflow-wrap: anywhere; }
+#events-table td:first-child { color: var(--text-secondary); }
+@media (max-width: 520px) {
+  #events-table col.when { width: 6.5em; }
+  #events-table col.device { width: 6em; }
+}
+.pager { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; margin-top: 10px; font-size: 13px; }
 .pager button { font: inherit; min-width: 32px; min-height: 32px; padding: 0 8px; border-radius: 8px; cursor: pointer;
   border: 1px solid var(--border); background: none; color: var(--text-primary); }
 .pager button[aria-current="page"] { background: var(--text-primary); color: var(--surface); border-color: var(--text-primary); }

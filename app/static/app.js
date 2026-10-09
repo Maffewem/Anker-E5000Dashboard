@@ -1164,6 +1164,7 @@ let savedSettings = {};
 
 const EVENT_PAGE = 10;
 let eventsPage = 1;
+let eventsHeight = 0;
 
 function eventTime(ts) {
   const d = new Date(ts * 1000);
@@ -1186,13 +1187,21 @@ function renderEvents(events) {
   }));
   $("events-empty").hidden = events.length > 0;
   $("events-table").hidden = events.length === 0;
+  // Hold the tallest page seen (a short last page, or messages wrapping on a
+  // phone) so the card and its page buttons don't jump about.
+  const wrap = $("events-table").parentElement;
+  wrap.style.minHeight = "";
+  eventsHeight = Math.max(eventsHeight, wrap.offsetHeight);
+  wrap.style.minHeight = `${eventsHeight}px`;
 }
 
 // Page numbers to show: the first, the last, and two either side of the
-// current one, with null where a run is left out.
+// current one (one on a phone, so the buttons fit on one line), with null
+// where a run is left out.
 function pageList(current, pages) {
+  const near = window.matchMedia("(max-width: 520px)").matches ? 1 : 2;
   const keep = new Set([1, pages]);
-  for (let p = current - 2; p <= current + 2; p++) if (p >= 1 && p <= pages) keep.add(p);
+  for (let p = current - near; p <= current + near; p++) if (p >= 1 && p <= pages) keep.add(p);
   const out = [];
   [...keep].sort((a, b) => a - b).forEach((p, i, all) => {
     if (i && p - all[i - 1] > 1) out.push(p - all[i - 1] === 2 ? p - 1 : null);
@@ -1241,7 +1250,8 @@ async function refreshEvents() {
   renderPager(pages);
 }
 
-$("events-filter").addEventListener("change", () => { eventsPage = 1; refreshEvents(); });
+$("events-filter").addEventListener("change", () => { eventsPage = 1; eventsHeight = 0; refreshEvents(); });
+window.addEventListener("resize", () => { eventsHeight = 0; });
 
 // Export: dates default to the last 7 days, in the browser's local time.
 function isoDay(d) {
