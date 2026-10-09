@@ -27,7 +27,11 @@ Give the Solarbank a fixed IP address in your router (a DHCP reservation) so it 
 
 ### Portainer
 
-Go to **Stacks › Add stack › Web editor**, paste in [`docker-compose.yml`](docker-compose.yml), set `SOLARBANK_HOST` to the battery's IP, and deploy. Then open `http://<your-pi-or-nas>:8080`.
+Go to **Stacks › Add stack › Web editor**, paste in [`docker-compose.yml`](docker-compose.yml) and deploy. Then open `http://<your-pi-or-nas>:8080`.
+
+The first time you open it, a setup screen asks for the battery's IP address. It tests the connection, shows the model and serial it finds, and saves the address in the data volume. To change it later, use the gear button at the top right.
+
+If the setup screen says there's **no network route** to the battery, the container can't see your home network from Docker's default bridge network. Switch the stack to host networking: remove the `ports:` section and add `network_mode: host`.
 
 The image is built for `linux/amd64` and `linux/arm64`, which covers a 64-bit Raspberry Pi OS and most NASes. It is published to `ghcr.io/maffewem/anker-e5000dashboard`. This repository is private, so the image is private too. You have two options:
 
@@ -40,7 +44,7 @@ Another option is to build on the device. Use **Stacks › Add stack › Reposit
 
 ```sh
 docker run -d --name solarbank-dashboard --restart unless-stopped \
-  -p 8080:8080 -e SOLARBANK_HOST=192.168.1.50 -e TZ=Europe/London \
+  -p 8080:8080 -e TZ=Europe/London \
   -v solarbank-data:/data ghcr.io/maffewem/anker-e5000dashboard:latest
 ```
 
@@ -48,7 +52,7 @@ docker run -d --name solarbank-dashboard --restart unless-stopped \
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `SOLARBANK_HOST` | *(required)* | IP address of the Solarbank |
+| `SOLARBANK_HOST` | *(unset)* | Optional. Sets the battery IP here instead of on the setup screen, which then shows it read-only |
 | `SOLARBANK_PORT` | `502` | Modbus TCP port |
 | `SOLARBANK_UNIT_ID` | `1` | Modbus unit id |
 | `POLL_SECONDS` | `5` | How often to read the battery |
@@ -74,11 +78,15 @@ This starts a simulated Solarbank next to the dashboard, at http://localhost:808
 | `GET /api/history?hours=24` | Average power and battery level over time |
 | `GET /api/energy?days=14` | kWh per day |
 | `GET /api/raw` | Every decoded register, for troubleshooting |
+| `GET/POST /api/settings` | The saved battery address (POST tests it, then saves it) |
 | `GET /healthz` | `200` when connected to the battery, otherwise `503` |
 
 ## Troubleshooting
 
-- **"Can't reach battery"**: check that Modbus TCP is on in the app, the IP is right, and the container's host can reach port 502 on the battery. To test from the host, run `nc -vz <ip> 502`.
+- **"Can't reach battery"**: the red banner gives the reason.
+  - *No network route*: the address isn't on a network the container can reach. Check the IP, or use `network_mode: host`.
+  - *Port 502 is closed*: the device is there, but Modbus TCP is off in the Anker app.
+  - *No answer*: the IP is probably wrong, or the battery is offline.
 - **Some values show "–"**: your firmware may not expose every register. `GET /api/raw` shows what was read.
 - **Daily totals start from when the dashboard first ran**: they are worked out from the 5-second power readings. The lifetime totals on the device card come straight from the battery.
 
