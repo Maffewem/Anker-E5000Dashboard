@@ -71,6 +71,15 @@ class FakeProducts:
             start = datetime.fromisoformat(q["period_from"][0].replace("Z", "+00:00"))
             if "OUTGOING" in url:
                 return {"results": [{"value_inc_vat": 15.0, "valid_from": "2024-01-01T00:00:00Z", "valid_to": None}], "next": None}
+            if "INTELLI-VAR" in url:
+                # Not in the product list; only the newer code has prices.
+                if "INTELLI-VAR-24-10-29-B" not in url:
+                    return {"results": [], "next": None}
+                return {"results": [
+                    {"value_inc_vat": 7.0 if (s % 48 < 11 or s % 48 >= 47) else 27.0,
+                     "valid_from": (start + timedelta(minutes=30 * s)).isoformat(),
+                     "valid_to": (start + timedelta(minutes=30 * (s + 1))).isoformat()}
+                    for s in range(48 * 8)], "next": None}
             if "GO-VAR" in url:
                 assert "GO-VAR-22-10-14-B" in url  # newest version, user's region
                 return {"results": go_rows(start, 12), "next": None}
@@ -85,13 +94,16 @@ def test_candidates_from_octopus_products():
         {"name": "E.ON Next Drive", "peak_rate": 27, "offpeak_rate": 7, "offpeak_start": "00:00",
          "offpeak_end": "07:00", "export_rate": 16, "standing_p": 45}])
     names = [c.name for c in cands]
-    assert names == ["Octopus Go", "Flexible Octopus", "E.ON Next Drive"]
+    assert names == ["Octopus Go", "Intelligent Octopus Go", "Flexible Octopus", "E.ON Next Drive"]
     assert problems == []
     go = cands[0]
     assert go.standing_p == 50.0 and go.export_name == "Outgoing Octopus"
     assert go.import_p("2026-10-02", 2) == 8.5  # 01:00 UTC
+    iog = cands[1]
+    assert iog.import_p("2026-10-02", 47) == 7.0 and iog.import_p("2026-10-02", 20) == 27.0
+    assert simulate(iog, usage_by_day(usage()), 5, 2.4)["charge_window"] == "23:30-05:30"
     out = compare(cands, usage(), 5, 2.5)
-    assert out["best"] in ("Octopus Go", "E.ON Next Drive")
+    assert out["best"] in ("Octopus Go", "Intelligent Octopus Go", "E.ON Next Drive")
 
 
 def test_api_compare_and_custom(tmp_path, monkeypatch):
@@ -160,3 +172,68 @@ def test_without_solar_the_battery_grid_charges_to_cover_the_peak():
     assert simulate(flat(25), days, 5, 2.5)["battery_mode"] == "flat"
     close = Candidate("close", "Close", 50.0, import_profile=fixed_profile(25, 24, "00:30", "05:30"), export_profile=[15.0] * 48)
     assert simulate(close, days, 5, 2.5)["battery_mode"] == "small_gap"
+
+
+def _three_rate(cheap_p, mid_p, peak_p, cheap, peak):
+    """A profile from half-hour ranges: cheap and peak slots, mid rate otherwise."""
+    prices = [mid_p] * 48
+    for a, b in cheap:
+        for s in range(a, b):
+            prices[s % 48] = cheap_p
+    for a, b in peak:
+        for s in range(a, b):
+            prices[s] = peak_p
+    return prices
+
+
+TIME_OF_USE = [
+    ("Octopus Go", fixed_profile(27, 8.5, "00:30", "05:30"), "00:30-05:30"),
+    ("Intelligent Octopus Go", fixed_profile(27, 7, "23:30", "05:30"), "23:30-05:30"),
+    ("Cosy Octopus", _three_rate(13, 26, 39, [(8, 14), (26, 32), (44, 48)], [(32, 38)]), "04:00-07:00, 13:00-16:00, 22:00-00:00"),
+    ("Octopus Flux", _three_rate(16, 27, 38, [(4, 10)], [(32, 38)]), "02:00-05:00"),
+    ("Economy 7", fixed_profile(30, 12, "00:00", "07:00"), "00:00-07:00"),
+    ("E.ON Next Drive", fixed_profile(27, 7, "00:00", "07:00"), "00:00-07:00"),
+    ("EDF GoElectric Overnight", fixed_profile(27, 8, "00:00", "05:00"), "00:00-05:00"),
+]
+
+
+def test_every_time_of_use_tariff_charges_in_its_off_peak_window():
+    # Whatever the battery size or charging speed, the off-peak window is the
+    # cheap one; Go once came out as "one price all day" when it was too short
+    # to fill the battery.
+    days = usage_by_day(usage())
+    for name, prices, window in TIME_OF_USE:
+        c = Candidate("x", name, 50.0, import_profile=prices, export_profile=[15.0] * 48)
+        for cap, kw in ((5, 2.4), (5, 0.8), (15, 0.8), (15, 2.4)):
+            r = simulate(c, days, cap, kw)
+            assert r["battery_mode"] == "grid", (name, cap, kw, r["battery_mode"])
+            assert r["charge_window"] == window, (name, cap, kw, r["charge_window"])
+            assert r["daily"]["grid_charge_kwh"] > 0 and r["daily"]["from_battery_kwh"] > 0, (name, cap, kw)
+            assert r["cost"] < simulate(c, days, cap, kw, battery=False)["cost"], (name, cap, kw)
+
+
+def test_octopus_go_from_price_list_charges_overnight_with_a_big_battery():
+    comparer = Comparer(FakeProducts())
+    start = datetime(2026, 10, 1, tzinfo=UTC)
+    cands, _ = comparer.candidates("B", start, start + timedelta(days=7), UTC, None, [])
+    go = next(c for c in cands if c.name == "Octopus Go")
+    r = simulate(go, usage_by_day(usage()), 15, 0.8)
+    assert r["battery_mode"] == "grid" and r["charge_window"] == "00:30-05:30"
+
+
+def test_agile_still_picks_the_cheapest_half_hours():
+    prices = [20 + (s % 12) for s in range(48)]  # no two the same
+    c = Candidate("agile", "Agile", 50.0, import_profile=prices, export_profile=[15.0] * 48)
+    r = simulate(c, usage_by_day(usage()), 5, 2.4)
+    assert r["battery_mode"] == "grid"
+
+
+def test_agile_charges_in_negative_and_cheapest_slots():
+    prices = [22.0 + (s % 5) * 0.7 for s in range(48)]
+    prices[6:10] = [-2.0, -1.5, 3.0, 4.0]  # a windy night
+    prices[32:38] = [35.0] * 6
+    c = Candidate("agile", "Agile", 50.0, import_profile=prices, export_profile=[15.0] * 48)
+    r = simulate(c, usage_by_day(usage()), 5, 2.4)
+    assert r["battery_mode"] == "grid" and r["charge_window"] == "03:00-05:00"
+    assert r["avg_import_p"] < 22.0
+    assert r["cost"] < simulate(c, usage_by_day(usage()), 5, 2.4, battery=False)["cost"]

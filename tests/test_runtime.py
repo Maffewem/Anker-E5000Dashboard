@@ -31,11 +31,17 @@ def test_without_history_it_uses_the_current_power():
     assert e["empty_at"] == "2026-10-09T20:00:00+01:00"
 
 
+def test_without_history_running_empty_over_a_day_away_is_not_reported():
+    e = estimate(snap(soc=100, power=150), [None] * 48, 2, NOW)
+    # 4.5 kWh at 150 W is 30 hours
+    assert e["empty_at"] is None
+
+
 def test_pattern_runs_out_during_the_evening():
     e = estimate(snap(soc=40, power=1000), evening_pattern(), 14 * 24, NOW)
     # 1.5 kWh above the floor at 1 kW from 18:00
     assert e["method"] == "pattern" and e["empty_at"] == "2026-10-09T19:30:00+01:00"
-    assert e["recharges_at"] is None
+    assert e["recharges_at"] == "2026-10-10T00:30:00+01:00"  # sits at the floor until off-peak
 
 
 def test_pattern_lasts_until_off_peak_charging():
@@ -56,7 +62,7 @@ def test_charging_now_then_discharging_reports_full_then_empty():
     e = estimate(snap(soc=50, power=-2000), evening_pattern(), 14 * 24, night)
     assert e["full_at"] == "2026-10-10T02:15:00+01:00"  # 2.5 kWh of room at 2 kW
     assert e["empty_at"] == "2026-10-10T21:30:00+01:00"  # 4.5 kWh at 1 kW from 17:00
-    assert e["recharges_at"] is None
+    assert e["recharges_at"] == "2026-10-11T00:30:00+01:00"
 
 
 def test_charging_now_reports_when_full():

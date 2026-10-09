@@ -100,13 +100,20 @@ function atTime(iso) {
   return days === 0 ? time : days === 1 ? `${time} tomorrow` : `${d.toLocaleDateString([], { weekday: "short" })} ${time}`;
 }
 
+// Running down to the floor only counts if it happens a while before the next
+// charge; reaching it just as off-peak charging starts is lasting, not a warning.
+const RUNTIME_MARGIN_MS = 60 * 60 * 1000;
+
 function runtimeText(r) {
   const charging = $("battery-detail").textContent.startsWith("Charging");
-  if (r.soc <= r.floor_soc + 0.5 && !charging) return `At its ${Math.round(r.floor_soc)}% discharge limit`;
-  const low = r.empty_at ? `down to ${Math.round(r.floor_soc)}% around ${atTime(r.empty_at)}` : null;
+  const floor = Math.round(r.floor_soc);
+  const next = r.recharges_at ? ` until it charges at ${atTime(r.recharges_at)}` : "";
+  if (r.soc <= r.floor_soc + 0.5 && !charging) return `At its ${floor}% discharge limit${next}`;
+  const short = r.empty_at && !(r.recharges_at && new Date(r.recharges_at) - new Date(r.empty_at) < RUNTIME_MARGIN_MS);
+  const low = short ? `down to ${floor}% around ${atTime(r.empty_at)}` : null;
   if (charging && r.full_at) return `Full around ${atTime(r.full_at)}${low ? `, then ${low}` : ""}`;
-  if (low) return low[0].toUpperCase() + low.slice(1);
-  if (r.recharges_at) return `Lasts until it charges at ${atTime(r.recharges_at)}`;
+  if (low) return `Down to ${floor}% around ${atTime(r.empty_at)}${r.recharges_at ? `, before it charges at ${atTime(r.recharges_at)}` : ""}`;
+  if (r.recharges_at) return `Lasts${next}`;
   if (r.full_at) return `Full around ${atTime(r.full_at)}`;
   return r.method === "pattern" ? "Lasts beyond the next 2 days" : "";
 }
@@ -1029,6 +1036,7 @@ $("compare-run").addEventListener("click", async () => {
     const parts = [["House", b.home], ["Battery charging", b.battery_charging], ["Standing charge", b.standing], ["Export credit", b.export, true]]
       .filter(([label, v]) => v != null && (v || label === "House"))
       .map(([label, v, minus]) => `${label} ${minus ? "−" : ""}${pounds(v)}`);
+    if (row.avg_import_p != null) parts.push(`average ${pence(row.avg_import_p)}/kWh from the grid`);
     const more = document.createElement("div"); more.className = "more";
     for (const t of [batteryPlan(row), parts.join(" · "), row.export ? `Export: ${row.export}` : "", row.note || ""].filter(Boolean)) {
       const p = document.createElement("p"); p.textContent = t; more.append(p);

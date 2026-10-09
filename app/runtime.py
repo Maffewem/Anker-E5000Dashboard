@@ -5,7 +5,9 @@ couple of weeks is its usage pattern: it captures evening discharge,
 overnight off-peak charging and daytime solar charging alike. Starting from
 the current charge, the next half hour uses the current power (it says the
 most about the next few minutes) and every half hour after that the
-pattern, until the charge reaches the discharge floor or the top.
+pattern, up to the next time it starts charging. Running down to the floor
+before then is what's worth a warning; if the charge lasts until it next
+charges, that's all there is to say.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ HORIZON_HOURS = 48
 PATTERN_DAYS = 14
 MIN_PATTERN_HOURS = 24  # less history than this and only the current power is used
 CHARGING_W = 50  # below -this an average half hour counts as charging
+CURRENT_EMPTY_HOURS = 24  # without a pattern, only report running empty this soon
 
 
 def battery_size(snap: dict[str, Any]) -> tuple[float, float]:
@@ -60,11 +63,13 @@ def estimate(snap: dict[str, Any], pattern: list[float | None], hours_of_history
         "pattern_days": round(hours_of_history / 24, 1),
         "empty_at": None,
         "full_at": None,
-        "recharges_at": None,  # when it next starts charging, if that comes before running out
+        "recharges_at": None,  # when it next starts charging (after empty_at, if it runs out first)
     }
     if not use_pattern:
-        # Only the current power to go on: straight-line at that rate.
-        if power > 5 and stored_wh > 0:
+        # Only the current power to go on: straight-line at that rate. With no
+        # pattern there's no telling when it next charges, so running empty more
+        # than a day away isn't worth a warning.
+        if power > 5 and 0 < stored_wh / power <= CURRENT_EMPTY_HOURS:
             out["empty_at"] = (now + timedelta(hours=stored_wh / power)).isoformat()
         elif power < -5 and room_wh > 0:
             out["full_at"] = (now + timedelta(hours=room_wh / -power)).isoformat()
@@ -81,20 +86,21 @@ def estimate(snap: dict[str, Any], pattern: list[float | None], hours_of_history
         hours = (slot_end - t).total_seconds() / 3600
         watts = power if first else pattern[(t.hour * 60 + t.minute) // 30]
         first = False
-        if watts and watts > 0 and level - watts * hours <= 0:
+        if out["empty_at"] is None and watts and watts > 0 and level - watts * hours <= 0:
             out["empty_at"] = (t + timedelta(hours=max(0.0, level) / watts)).isoformat()
-            break
+            level = 0.0  # it sits at the floor until it next charges
         charging = bool(watts and watts < -CHARGING_W)
         if charging and not was_charging:
-            # It starts charging again before running out; what happens
-            # after that is the next cycle's story.
+            # It starts charging again (after running out, if empty_at is
+            # set); what happens after that is the next cycle's story.
             out["recharges_at"] = t.isoformat()
             break
         was_charging = charging
         if charging:
             if out["full_at"] is None and level < top <= level - watts * hours:
                 out["full_at"] = (t + timedelta(hours=(top - level) / -watts)).isoformat()
-        level = min(top, level - (watts or 0) * hours)
+        if out["empty_at"] is None:
+            level = min(top, level - (watts or 0) * hours)
         t = slot_end
     return out
 
