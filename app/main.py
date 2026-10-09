@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from pydantic import BaseModel
@@ -26,6 +27,22 @@ logging.basicConfig(
 )
 
 STATIC = Path(__file__).parent / "static"
+
+
+def _asset_version() -> str:
+    """A hash of the front-end files, so each new image gets fresh URLs.
+
+    Without it a browser can keep running a cached app.js from an older
+    image against the new API.
+    """
+    digest = hashlib.sha256()
+    for path in sorted(STATIC.rglob("*")):
+        if path.is_file():
+            digest.update(path.read_bytes())
+    return digest.hexdigest()[:12]
+
+
+INDEX_HTML = (STATIC / "index.html").read_text().replace("{{version}}", _asset_version())
 
 
 DEVICES = {"battery": BATTERY, "meter": METER}
@@ -161,8 +178,8 @@ def healthz():
 
 
 @app.get("/")
-def index() -> FileResponse:
-    return FileResponse(STATIC / "index.html")
+def index() -> HTMLResponse:
+    return HTMLResponse(INDEX_HTML, headers={"Cache-Control": "no-cache"})
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")

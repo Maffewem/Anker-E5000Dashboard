@@ -121,6 +121,9 @@ th { color: var(--text-secondary); font-weight: 600; }
 .icon-btn { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 999px; cursor: pointer;
   border: 1px solid var(--border); background: var(--surface); color: var(--text-secondary); }
 .icon-btn:hover { color: var(--text-primary); }
+.icon-sun { display: none; }
+.is-dark .icon-sun { display: block; }
+.is-dark .icon-moon { display: none; }
 
 .banner { max-width: 1088px; margin: 0 auto 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px;
   flex-wrap: wrap; padding: 12px 16px; border-radius: 12px; border: 1px solid var(--critical);
