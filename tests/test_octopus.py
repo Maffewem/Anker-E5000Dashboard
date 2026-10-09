@@ -223,6 +223,10 @@ def test_api_connects_fills_payback_and_disconnects(tmp_path, monkeypatch):
         pb = c.get("/api/payback").json()
         assert pb["source"] == "octopus" and pb["tariff_name"] == "Octopus Go"
         assert pb["tariff"]["offpeak_rate"] == 8.5
+        manual = c.post("/api/tariff", json={"battery_cost": 3000, "peak_rate": 30, "offpeak_rate": 7, "use_manual": True}).json()
+        assert manual["source"] == "manual" and manual["use_manual"] and manual["tariff"]["peak_rate"] == 30
+        back = c.post("/api/tariff", json={**manual["manual"], "use_manual": False}).json()
+        assert back["source"] == "octopus" and back["manual"]["peak_rate"] == 30  # typed prices kept
         c.post("/api/octopus", json={"api_key": ""})
         assert c.get("/api/octopus").json()["configured"] is False
         assert c.get("/api/payback").json()["source"] == "manual"
