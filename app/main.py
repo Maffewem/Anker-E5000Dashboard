@@ -598,13 +598,16 @@ def events(
     limit: int = Query(100, ge=1, le=1000),
     before: int | None = Query(None, description="an event id; returns older events"),
     kind: str = Query("", description="comma-separated kinds, e.g. charging,mode"),
-) -> list[dict]:
-    """The event log, newest first."""
+    offset: int = Query(0, ge=0, description="skip this many of the newest; for numbered pages"),
+) -> JSONResponse:
+    """The event log, newest first. X-Total-Count says how many match the filter."""
     kinds = [k for k in kind.split(",") if k]
     unknown = set(kinds) - set(EVENT_KINDS)
     if unknown:
         raise HTTPException(status_code=422, detail=f"Unknown kind: {', '.join(sorted(unknown))}")
-    return app.state.storage.events(limit, before, kinds)
+    storage = app.state.storage
+    return JSONResponse(storage.events(limit, before, kinds, offset),
+                        headers={"X-Total-Count": str(storage.count_events(kinds))})
 
 
 @app.get("/api/export")

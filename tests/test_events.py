@@ -56,3 +56,12 @@ def test_missing_readings_are_not_changes_and_paging_works():
     newest = s.events(limit=2)
     assert [e["message"] for e in newest] == ["action 4", "action 3"]
     assert [e["message"] for e in s.events(limit=2, before=newest[-1]["id"])] == ["action 2", "action 1"]
+
+
+def test_events_page_by_offset_and_count_by_kind(tmp_path):
+    s = Storage(str(tmp_path / "t.db"), 30, "Europe/London")
+    for i in range(1, 6):
+        s.record_event("control", f"action {i}", ts=i)
+    s.record_event("setting", "a setting", ts=6)
+    assert [e["message"] for e in s.events(limit=2, offset=1, kinds=["control"])] == ["action 4", "action 3"]
+    assert s.count_events() == 6 and s.count_events(["control"]) == 5
