@@ -53,6 +53,7 @@ async function refreshLive() {
   showBanner(status, stale, meter);
   if (!status.configured && !meterOn && !setupShownOnce) { setupShownOnce = true; openSetup(); }
   $("solarbank-card").hidden = !status.configured;
+  if (status.configured) showDeviceState($("solarbank-status"), status, stale);
 
   if (!data || !Object.keys(data).length) {
     // Nothing read yet from the current address: don't leave old numbers up.
@@ -145,12 +146,24 @@ function factList(el, rows) {
   }));
 }
 
+// "Live · 192.168.0.40" with a green dot, or why it isn't live, in a device card's header.
+function showDeviceState(el, s, stale = false) {
+  const live = s.connected && !stale;
+  el.className = `device-state ${live ? "live" : s.last_update || s.last_error ? "offline" : ""}`;
+  const dot = document.createElement("span");
+  dot.className = "dot";
+  dot.setAttribute("aria-hidden", "true");
+  el.replaceChildren(dot, live ? `Live · ${s.host}` : s.last_update ? `Offline · ${s.host} · last data ${timeAgo(s.last_update)}`
+    : s.last_error ? `Can't reach ${s.host}` : `Connecting to ${s.host}`);
+  el.title = live ? "" : s.last_error || "";
+}
+
 function renderMeter(meter) {
   const card = $("meter-card");
   if (!meter || !meter.status.configured) { card.hidden = true; return; }
   card.hidden = false;
   const s = meter.status, d = meter.data || {};
-  $("meter-status").textContent = s.connected ? `Live · ${s.host}` : s.last_update ? `Offline · last data ${timeAgo(s.last_update)}` : `Waiting for ${s.host}`;
+  showDeviceState($("meter-status"), s);
   const fixed = (v, n, unit) => (v == null ? null : `${v.toFixed(n)} ${unit}`);
   const rows = [
     ["Grid power", d.grid_w == null ? null : `${watts(d.grid_w)} ${d.grid_w > 5 ? "importing" : d.grid_w < -5 ? "exporting" : ""}`.trim()],

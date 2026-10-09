@@ -227,3 +227,7 @@ dialog input:disabled { opacity: 0.6; }
 .schedules .sched-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
 .schedules .empty { border: 0; padding: 0; font-size: 13px; color: var(--text-muted); }
 .footer { text-align: center; font-size: 12px; color: var(--text-muted); padding: 8px 16px 24px; }
+
+.device-state { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); margin: 0; }
+.device-state.live .dot { background: var(--good); }
+.device-state.offline .dot { background: var(--critical); }
