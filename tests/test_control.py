@@ -166,3 +166,23 @@ def test_battery_care_tips():
     assert "Often sitting full" in titles
     assert "Discharge limit 0%" in titles
     assert "Grid charging to 100%" in titles
+
+
+def test_live_actions_go_to_the_event_log(monkeypatch):
+    monkeypatch.setenv("CONTROL_LIVE", "1")
+    events = []
+
+    class Store:
+        def record_event(self, kind, message, **kw):
+            events.append((kind, kw["field"], kw["old"], kw["new"], kw["source"]))
+
+    c = FakeCollector(mode=6)
+    c.storage = Store()
+    ctl = make(c, {"enabled": True}, {})
+    asyncio.run(ctl.tick(IN))
+    asyncio.run(ctl.tick(OUT))
+    assert events == [
+        ("control", "operating_mode", "Smart", "Third-party control", "octopus"),
+        ("control", "battery_power_setpoint", None, 0, "octopus"),
+        ("control", "operating_mode", "Third-party control", "Smart", "dashboard"),
+    ]

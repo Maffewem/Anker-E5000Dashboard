@@ -66,6 +66,7 @@ class Window:
     start: datetime
     end: datetime
     why: str
+    source: str = "octopus"  # for the event log: "octopus" or "schedule" (typed off-peak hours)
 
 
 def _utc(iso: str) -> datetime:
@@ -94,7 +95,7 @@ def cheap_windows(octopus_status: dict | None, offpeak: tuple[str, str] | None, 
             end = datetime(base.year, base.month, base.day, h2, m2, tzinfo=tz)
             if end <= start:
                 end += timedelta(days=1)
-            out.append(Window(start.astimezone(timezone.utc), end.astimezone(timezone.utc), "Off-peak hours"))
+            out.append(Window(start.astimezone(timezone.utc), end.astimezone(timezone.utc), "Off-peak hours", "schedule"))
     return out
 
 
@@ -138,6 +139,7 @@ class Controller:
         self.last_error: str | None = None
         self.took_control_at = 0.0
         self.stand_back_until: datetime | None = None
+        self._source = "dashboard"
         self.log: deque = deque(maxlen=50)
         self._wake = asyncio.Event()
         self._lock = asyncio.Lock()  # one tick at a time, whether from the loop or a settings change
@@ -154,6 +156,16 @@ class Controller:
     def _note(self, text: str) -> None:
         self.log.appendleft({"ts": time.time(), "text": text})
         log.info("Control: %s", text)
+
+    def _event(self, message: str, field: str, old, new, source: str) -> None:
+        """Add a line to the dashboard's battery event log, when it has one."""
+        storage = getattr(self.collector, "storage", None)
+        if not self.live or storage is None or not hasattr(storage, "record_event"):
+            return
+        try:
+            storage.record_event("control", message, field=field, old=old, new=new, source=source)
+        except Exception as err:  # the log must never stop control
+            log.warning("Couldn't record control event: %s", err)
 
     def _persist(self) -> None:
         self._save_state({"saved_mode": self.saved_mode, "in_control": self.in_control})
@@ -185,12 +197,16 @@ class Controller:
         if self.stand_back_until and now < self.stand_back_until and action != APP:
             action, setpoint, reason = APP, 0, "Standing back: the mode was changed in the Anker app"
         self.reason, self.window = reason, window
+        self._source = window.source if window else "dashboard"
         try:
             if action == APP:
                 if self.in_control:
                     mode = self.saved_mode if self.saved_mode is not None else 0
                     await self._write("operating_mode", mode)
                     self._note(f"Gave control back to the Anker app ({OPERATING_MODES.get(mode, mode)})")
+                    self._event(f"Gave control back to the Anker app: {reason}", "operating_mode",
+                                OPERATING_MODES[THIRD_PARTY_MODE], OPERATING_MODES.get(mode, mode),
+                                "dashboard" if not self.settings.enabled else self._source)
                     self.in_control, self.saved_mode, self.last_setpoint = False, None, None
                     self._persist()
                 self.action = APP
@@ -208,11 +224,17 @@ class Controller:
                         self._persist()
                         raise
                     self._note(f"Took control from the Anker app (was {OPERATING_MODES.get(self.saved_mode, self.saved_mode)})")
+                    self._event(f"Took control for a cheap window: {window.why if window else reason}", "operating_mode",
+                                OPERATING_MODES.get(self.saved_mode, self.saved_mode), OPERATING_MODES[THIRD_PARTY_MODE],
+                                window.source if window else "dashboard")
                 due = time.monotonic() - self.last_write > REASSERT_SECONDS
                 if setpoint != self.last_setpoint or due:
                     await self._write("battery_power_setpoint", setpoint)
                     if setpoint != self.last_setpoint:
                         self._note("Holding at 0 W" if action == HOLD else f"Charging at {-setpoint} W")
+                        self._event("Holding the battery (no discharge)" if action == HOLD
+                                    else f"Charging from the grid at {-setpoint} W", "battery_power_setpoint",
+                                    self.last_setpoint, setpoint, window.source if window else "dashboard")
                     self.last_setpoint, self.last_write = setpoint, time.monotonic()
                 self.action = action
             self.last_error = None
