@@ -409,6 +409,27 @@ let setupShownOnce = false;
 let setupDevice = "battery";
 let meterPromptShown = false;
 let savedSettings = {};
+// Export: dates default to the last 7 days, in the browser's local time.
+function isoDay(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+{
+  const today = new Date();
+  $("export-end").value = isoDay(today);
+  $("export-start").value = isoDay(new Date(today.getFullYear(), today.getMonth(), today.getDate() - 6));
+}
+$("export-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const [start, end] = [$("export-start").value, $("export-end").value].sort();
+  const params = new URLSearchParams({
+    data: $("export-data").value,
+    start,
+    end,
+    format: $("export-format").value,
+  });
+  window.location.href = `/api/export?${params}`;
+});
+
 const DEVICE_LABEL = { battery: "Solarbank", meter: "Smart Meter" };
 const DEVICE_ENV = { battery: "SOLARBANK_HOST", meter: "METER_HOST" };
 

@@ -111,3 +111,17 @@ def test_tariff_saved_and_payback_returned(client):
     assert res.status_code == 200
     assert client.get("/api/payback").json()["tariff"]["battery_cost"] == 2500
     assert client.post("/api/tariff", json={"offpeak_start": "nope"}).status_code == 422
+
+
+def test_export_downloads(client):
+    r = client.get("/api/export?data=daily&start=2026-07-01&end=2026-07-03")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/csv")
+    assert 'filename="solarbank-daily-2026-07-01-to-2026-07-03.csv"' in r.headers["content-disposition"]
+    lines = r.text.splitlines()
+    assert lines[0].startswith("date,solar_kwh") and len(lines) == 4
+    assert client.get("/api/export?data=meter&format=json").json() == []
+    assert client.get("/api/export?data=minutes&start=2026-07-03&end=2026-07-01").status_code == 422
+    assert client.get("/api/export?data=secrets").status_code == 422
+    backup = client.get("/api/export/backup")
+    assert backup.status_code == 200 and backup.content.startswith(b"SQLite format 3")
