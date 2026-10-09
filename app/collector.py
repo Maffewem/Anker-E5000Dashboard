@@ -93,7 +93,7 @@ class Collector:
                     continue  # address changed mid-poll; start over with the new one
                 self._mark_offline(str(err) or err.__class__.__name__)
                 backoff = min(backoff * 2, 60)
-                log.warning("%s poll failed (%s); retrying in %ss", self.profile.name, self.last_error, backoff)
+                log.warning("%s poll failed (%s); retrying in %ss", DEVICE_NAMES[self.profile.name], self.last_error, backoff)
                 await self._wait(backoff)
                 continue
             elapsed = time.monotonic() - started
@@ -131,6 +131,9 @@ class Collector:
         self.raw = extract(blocks, self.profile.registers)
         self.snapshot = self.profile.derive(self.raw)
         now = time.time()
+        if not self.connected:
+            log.info("%s connected at %s:%s (model %s, serial %s)", DEVICE_NAMES[self.profile.name], conn.host,
+                     conn.port, self.snapshot.get("model"), self.snapshot.get("serial"))
         self.connected = True
         self.last_update = now
         self.last_error = None
@@ -172,7 +175,7 @@ class Collector:
         if self.client is None:
             self.client = AsyncModbusTcpClient(conn.host, port=conn.port, timeout=5, retries=1)
         if not self.client.connected:
-            log.info("Connecting to %s %s:%s", self.profile.name, conn.host, conn.port)
+            log.info("Connecting to %s at %s:%s", DEVICE_NAMES[self.profile.name], conn.host, conn.port)
             if not await self.client.connect():
                 # Only now open a plain socket, to explain the failure. Doing
                 # it first would use up the slot on devices that accept just
