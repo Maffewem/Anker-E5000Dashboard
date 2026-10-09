@@ -28,7 +28,7 @@ log = logging.getLogger("solarbank.octopus")
 
 # Octopus answers on both; the second is the newer Kraken host.
 API_HOSTS = ("https://api.octopus.energy", "https://api.oegb-kraken.energy")
-ACCOUNT_RE = re.compile(r"^A-[0-9A-F]{8}$")
+ACCOUNT_RE = re.compile(r"^A-[0-9A-Z]{6,10}$")
 KEY_RE = re.compile(r"^sk_live_[A-Za-z0-9]{8,64}$")
 TARIFF_RE = re.compile(r"^(?P<energy>[EG])-(?P<rates>[0-9]R)-(?P<product>[A-Z0-9-]+)-(?P<region>[A-P])$")
 
@@ -110,7 +110,10 @@ class Client:
                 if err.code in (401, 403):
                     raise OctopusError("Octopus refused the API key. Check it under Personal details > API access.") from err
                 if err.code == 404:
-                    raise OctopusError("Octopus doesn't recognise that account number.") from err
+                    path = urllib.parse.urlparse(err.filename or "").path if isinstance(err.filename, str) else ""
+                    if "/accounts/" in path:
+                        raise OctopusError("Octopus doesn't recognise that account number.") from err
+                    raise OctopusError(f"Octopus has nothing at {path or 'that address'} (404).") from err
                 last = err
                 if err.code < 500:
                     break
@@ -340,7 +343,10 @@ class Octopus:
         self.storage = storage
         self.offpeak = offpeak  # local half hours of an Economy 7 night (default 00:30-07:30)
         self.client = Client(api_key, account, fetch) if api_key and account else None
+        # Shown on the card when the settings themselves are wrong (e.g. OCTOPUS_ACCOUNT missing).
+        self.config_error: str | None = None
         self.info: dict = {}
+        self.diagnostics: dict = {}
         self.dispatch_slots: dict = {"planned": [], "completed": []}
         self.last_sync: float | None = None
         self.last_error: str | None = None
@@ -355,23 +361,48 @@ class Octopus:
         if not self.client:
             return
         now = now or datetime.now(timezone.utc)
+        acct = self.client.account
         try:
+            log.info("Octopus: reading account %s", acct)
             self._agreements = agreements(self.client.account_info())
+            log.info("Octopus: %s electricity agreement(s): %s", len(self._agreements),
+                     ", ".join(f"{a.tariff} ({'export' if a.export else 'import'}, from {a.valid_from:%Y-%m-%d} "
+                               f"to {a.valid_to:%Y-%m-%d})" if a.valid_from and a.valid_to else
+                               f"{a.tariff} ({'export' if a.export else 'import'})" for a in self._agreements) or "none")
             imp, exp = current(self._agreements, False, now), current(self._agreements, True, now)
             if not imp:
-                raise OctopusError("No active electricity tariff found on this Octopus account.")
+                raise OctopusError("Octopus didn't list an active electricity tariff for this account. "
+                                   "Check the account number, and that the account has electricity with Octopus.")
             self.info = {
                 "import": self._describe(imp),
                 "export": self._describe(exp) if exp else None,
             }
-            self._fill_prices(now)
+            log.info("Octopus: import tariff %s (%s), export tariff %s", imp.tariff, self.info["import"]["name"],
+                     exp.tariff if exp else "none")
+            stored = self._fill_prices(now)
+            dispatch_error = None
             if tariff_kind(imp.product) == "intelligent_go":
-                self.dispatch_slots = self.client.dispatches()
-                self._apply_dispatches()
+                try:
+                    self.dispatch_slots = self.client.dispatches()
+                    self._apply_dispatches()
+                    log.info("Octopus: %s planned and %s completed smart-charge slot(s)",
+                             len(self.dispatch_slots["planned"]), len(self.dispatch_slots["completed"]))
+                except OctopusError as err:  # prices still work without them
+                    dispatch_error = f"Couldn't read Intelligent Go slots: {err}"
+                    log.warning("Octopus: %s", dispatch_error)
             else:
                 self.dispatch_slots = {"planned": [], "completed": []}
+            current_price = self.upcoming(now)[0]
+            self.diagnostics = {"host": self.client._host, "prices_stored": stored, "price_days": self.storage.rate_days(),
+                                "agreements": [{"tariff": a.tariff, "export": a.export,
+                                                "from": a.valid_from.isoformat() if a.valid_from else None,
+                                                "to": a.valid_to.isoformat() if a.valid_to else None} for a in self._agreements]}
+            if not current_price:
+                raise OctopusError(f"Octopus returned no price for now for {imp.tariff} ({stored} half hours stored). "
+                                   "Please share the 'Octopus:' lines from the container log.")
             self.last_sync = now.timestamp()
-            self.last_error = None
+            self.last_error = dispatch_error
+            log.info("Octopus: price now %.2fp, %s upcoming half hours known", current_price[0][1], len(current_price))
         except OctopusError as err:
             self.last_error = str(err)
             log.warning("Octopus: %s", err)
@@ -395,7 +426,7 @@ class Octopus:
         return {"name": name, "product": a.product, "tariff": a.tariff, "kind": tariff_kind(a.product),
                 "standing_charge_p": round(sc, 2) if sc is not None else None}
 
-    def _fill_prices(self, now: datetime) -> None:
+    def _fill_prices(self, now: datetime) -> int:
         """Prices from the start of recorded history (or the last day already
         stored) to as far ahead as Octopus has published."""
         tz = self.storage.tz
@@ -416,10 +447,12 @@ class Octopus:
                 prices = self._two_rate(a, a_start, a_end)
             else:
                 prices = half_hours(self.client.unit_rates(a.product, a.tariff, a_start, a_end), a_start, a_end)
+            log.info("Octopus: %s prices for %s from %s to %s", len(prices), a.tariff, _iso(a_start), _iso(a_end))
             col = 1 if a.export else 0
             for ts, p in prices.items():
                 rows.setdefault(local_slot(ts, tz), [None, None])[col] = p
         self.storage.save_rates([(d, s, v[0], v[1]) for (d, s), v in rows.items()])
+        return len(rows)
 
     def _two_rate(self, a: Agreement, start: datetime, end: datetime) -> dict[datetime, float]:
         """Economy 7 style: Octopus gives a day and a night price but not the
@@ -481,8 +514,9 @@ class Octopus:
 
     def status(self, battery: dict | None = None, now: datetime | None = None) -> dict:
         now = now or datetime.now(timezone.utc)
-        out = {"configured": self.configured, "last_sync": self.last_sync, "last_error": self.last_error,
-               "account": self.client.account if self.client else None, **self.info}
+        out = {"configured": self.configured, "last_sync": self.last_sync,
+               "last_error": self.config_error or self.last_error,
+               "account": self.client.account if self.client else None, "diagnostics": self.diagnostics, **self.info}
         if not self.configured or not self.info:
             return out
         imp, exp = self.upcoming(now)

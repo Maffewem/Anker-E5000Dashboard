@@ -35,7 +35,8 @@ STATIC = {
 
 
 class Battery:
-    def __init__(self) -> None:
+    def __init__(self, regs: "Registers | None" = None) -> None:
+        self.regs = regs  # to see what a controller wrote
         self.soc = 55.0
         self.pv_total = 12345.0  # Wh
         self.charged = 4321.0
@@ -51,7 +52,16 @@ class Battery:
         solar = round(3200 * sun * random.uniform(0.85, 1.0))
         home = round(350 + 250 * random.random() + (900 if 17 <= hour <= 20 else 0))
         surplus = solar - home
-        if surplus > 0 and self.soc < 100:
+        mode = self.regs.words.get((3, 10064), 6) if self.regs else 6
+        if mode == 3:  # third-party control: follow the setpoint, within the SOC limits
+            hi, lo = self.regs.words.get((3, 10071), 0), self.regs.words.get((3, 10072), 0)
+            setpoint = (hi << 16 | lo) - (1 << 32 if hi & 0x8000 else 0)
+            battery = max(-2500, min(2500, setpoint))
+            limit_hi = self.regs.words.get((3, 60000), 100)
+            limit_lo = self.regs.words.get((3, 60001), 5)
+            if (battery < 0 and self.soc >= limit_hi) or (battery > 0 and self.soc <= limit_lo):
+                battery = 0
+        elif surplus > 0 and self.soc < 100:
             battery = -min(surplus, 2500)  # charging
         elif surplus < 0 and self.soc > 5:
             battery = min(-surplus, 2500)  # discharging
@@ -95,6 +105,16 @@ class Registers:
                 for i, word in enumerate(encode(reg.data_type, values[reg.key], reg.count)):
                     self.words[(fc, reg.address + i)] = word
 
+    def store(self, address: int, values: list[int]) -> bool:
+        """A write from a client; only implemented holding registers accept one."""
+        implemented = self.implemented.get(3, set())
+        if not all(a in implemented for a in range(address, address + len(values))):
+            return False
+        for i, v in enumerate(values):
+            self.words[(3, address + i)] = v
+        print(f"Write {address} = {values}", flush=True)
+        return True
+
     def read(self, fc: int, address: int, count: int) -> list[int] | None:
         """Mimic the device: implemented ranges read as zero-filled, others fail."""
         implemented = self.implemented.get(fc, set())
@@ -134,7 +154,7 @@ def meter_values(battery: dict, imported: float, exported: float) -> dict:
 
 
 async def handle(regs: Registers, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-    """Minimal Modbus TCP: function codes 3 and 4 only."""
+    """Minimal Modbus TCP: reads (3, 4) and holding-register writes (6, 16)."""
     try:
         while True:
             header = await reader.readexactly(7)
@@ -148,6 +168,15 @@ async def handle(regs: Registers, reader: asyncio.StreamReader, writer: asyncio.
                     body = bytes([fc | 0x80, 2])  # illegal data address
                 else:
                     body = bytes([fc, count * 2]) + struct.pack(f">{count}H", *words)
+            elif fc == 6 and len(pdu) >= 5:
+                address, value = struct.unpack(">HH", pdu[1:5])
+                ok = regs.store(address, [value])
+                body = pdu[:5] if ok else bytes([fc | 0x80, 2])
+            elif fc == 16 and len(pdu) >= 6:
+                address, count = struct.unpack(">HH", pdu[1:5])
+                values = list(struct.unpack(f">{count}H", pdu[6:6 + count * 2]))
+                ok = regs.store(address, values)
+                body = pdu[:5] if ok else bytes([fc | 0x80, 2])
             else:
                 body = bytes([(fc | 0x80) & 0xFF, 1])  # illegal function
             writer.write(struct.pack(">HHHB", tid, pid, len(body) + 1, unit) + body)
@@ -177,7 +206,7 @@ async def update_loop(regs: Registers, meter: Registers, battery: Battery) -> No
 async def main(port: int, meter_port: int | None) -> None:
     regs = Registers()
     meter = Registers(METER_REGISTERS, METER_IMPLEMENTED)
-    battery = Battery()
+    battery = Battery(regs)
     regs.write(STATIC)
     meter.write(METER_STATIC)
     asyncio.create_task(update_loop(regs, meter, battery))

@@ -349,6 +349,16 @@ function duration(days) {
   return m ? `${y} years ${m} months` : `${y} years`;
 }
 
+// "8 to 12 years": a range, since savings per day vary with the seasons.
+function durationRange(low, high) {
+  if (high >= 730) {
+    const [a, b] = [Math.round(low / 365.25), Math.round(high / 365.25)];
+    return a === b ? `${a} years` : `${a} to ${b} years`;
+  }
+  const [a, b] = [Math.max(1, Math.round(low / 30.44)), Math.max(1, Math.round(high / 30.44))];
+  return a === b ? `${a} month${a === 1 ? "" : "s"}` : `${a} to ${b} months`;
+}
+
 function renderPayback(p) {
   payback = p;
   const set = p.tariff.battery_cost > 0;
@@ -358,15 +368,27 @@ function renderPayback(p) {
     : "Enter what you paid for the battery and your electricity prices to see how long it takes to pay for itself.";
   if (!set) { $("payback-facts").replaceChildren(); return; }
   const date = (iso) => new Date(`${iso}T12:00:00`).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" });
+  const year = (iso) => iso.slice(0, 4);
   let eta;
   if (p.payback_days === 0) eta = "Paid back";
-  else if (p.payback_days != null) eta = `About ${duration(p.payback_days)} (${date(p.payback_date)})`;
-  else eta = p.days ? "Not saving yet" : "Waiting for data";
+  else if (p.payback_days != null) {
+    const [a, b] = [year(p.payback_date_low), year(p.payback_date_high)];
+    eta = `About ${durationRange(p.payback_days_low, p.payback_days_high)} (${a === b ? a : `${a} to ${b}`})`;
+  } else if (p.payback_too_long) {
+    eta = "More than 50 years at this rate";
+  } else if (p.days < p.min_days) {
+    eta = `Collecting data: ${p.days} of ${p.min_days} days${p.tariff.installed ? "" : ". Add the install date to count the battery's history"}`;
+  } else eta = "Not saving yet";
   $("payback-source").hidden = p.source !== "octopus";
   $("payback-source").textContent = p.source === "octopus"
     ? `Using your actual ${p.tariff_name || "Octopus"} prices for each half hour since they were fetched, and the prices you typed before that.` : "";
+  if (p.use_manual) {
+    $("payback-source").hidden = false;
+    $("payback-source").textContent = "Using your own prices (set in Edit costs) instead of Octopus.";
+  }
   factList($("payback-facts"), [
-    ["Saved so far", p.since ? `${money(p.saved)} over ${p.days} day${p.days === 1 ? "" : "s"}` : money(0)],
+    ["Saved so far", p.since ? `${money(p.saved)} since ${date(p.since)}` : money(0)],
+    ...(p.saved_before_recording != null ? [["Of which before recording", `${money(p.saved_before_recording)} (estimated)`]] : []),
     ["Average per day", money(p.per_day)],
     ["Battery cost", money(p.tariff.battery_cost)],
     ["Left to pay back", money(p.remaining)],
@@ -384,24 +406,50 @@ async function refreshPayback() {
 $("open-costs").addEventListener("click", () => {
   const t = (payback && payback.tariff) || {};
   $("cost-battery").value = t.battery_cost || "";
+  $("cost-installed").value = t.installed || "";
+  $("cost-installed").max = isoDay(new Date());
   $("cost-peak").value = t.peak_rate ?? "";
   $("cost-offpeak").value = t.offpeak_rate ?? "";
   $("cost-from").value = t.offpeak_start || "00:30";
   $("cost-to").value = t.offpeak_end || "05:30";
   $("cost-export").value = t.export_rate ?? "";
-  const fromOctopus = Boolean(payback && payback.source === "octopus");
-  $("costs-octopus").hidden = !fromOctopus;
-  for (const id of ["cost-peak", "cost-offpeak", "cost-from", "cost-to", "cost-export"]) $(id).disabled = fromOctopus;
+  const connected = Boolean(payback && payback.octopus_connected);
+  $("costs-manual-row").hidden = !connected;
+  $("cost-manual").checked = Boolean(payback && payback.use_manual);
+  if (payback && payback.use_manual && payback.manual) {
+    // Show the typed prices, not the Octopus ones they override.
+    const m = payback.manual;
+    $("cost-peak").value = m.peak_rate; $("cost-offpeak").value = m.offpeak_rate;
+    $("cost-from").value = m.offpeak_start; $("cost-to").value = m.offpeak_end; $("cost-export").value = m.export_rate;
+  }
+  syncCostInputs();
   $("costs-msg").textContent = "";
   $("costs").showModal();
 });
 $("costs-cancel").addEventListener("click", () => $("costs").close());
+const KEYS = { "cost-battery": "battery_cost", "cost-peak": "peak_rate", "cost-offpeak": "offpeak_rate",
+  "cost-from": "offpeak_start", "cost-to": "offpeak_end", "cost-export": "export_rate" };
+function syncCostInputs() {
+  const connected = Boolean(payback && payback.octopus_connected);
+  const manual = $("cost-manual").checked;
+  const fromOctopus = connected && !manual && payback.source === "octopus";
+  $("costs-octopus").hidden = !fromOctopus;
+  $("costs-octopus-wait").hidden = !(connected && !manual && payback.source !== "octopus");
+  for (const id of ["cost-peak", "cost-offpeak", "cost-from", "cost-to", "cost-export"]) $(id).disabled = fromOctopus;
+}
+$("cost-manual").addEventListener("change", syncCostInputs);
 $("costs-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const num = (id) => Number($(id).value) || 0;
+  const typed = (payback && payback.manual) || {};
+  // While Octopus prices are shown (read-only), keep the typed prices as they were.
+  const num = (id) => ($(id).disabled && typed[KEYS[id]] != null ? typed[KEYS[id]] : Number($(id).value) || 0);
+  const time = (id, fallback) => ($(id).disabled && typed[KEYS[id]] ? typed[KEYS[id]] : $(id).value || fallback);
   try {
     const p = await postSettings("/api/tariff", {
       battery_cost: num("cost-battery"), peak_rate: num("cost-peak"), offpeak_rate: num("cost-offpeak"),
+      offpeak_start: time("cost-from", "00:00"), offpeak_end: time("cost-to", "00:00"), export_rate: num("cost-export"),
+      use_manual: $("cost-manual").checked,
+      battery_cost: num("cost-battery"), installed: $("cost-installed").value, peak_rate: num("cost-peak"), offpeak_rate: num("cost-offpeak"),
       offpeak_start: $("cost-from").value || "00:00", offpeak_end: $("cost-to").value || "00:00", export_rate: num("cost-export"),
     });
     renderPayback(p);
@@ -434,6 +482,10 @@ function renderOctopus(o) {
   $("tariff-empty").hidden = o.configured;
   $("tariff-error").hidden = !o.last_error;
   $("tariff-error").textContent = o.last_error ? `Couldn't update from Octopus: ${o.last_error}` : "";
+  $("tariff-diag").hidden = !(o.configured || o.last_error);
+  $("tariff-diag-text").textContent = JSON.stringify({ account: o.account, import: o.import && o.import.tariff,
+    export: o.export && o.export.tariff, last_sync: o.last_sync && new Date(o.last_sync * 1000).toISOString(),
+    error: o.last_error, ...o.diagnostics }, null, 2);
   const ready = o.configured && o.import;
   $("tariff-detail").hidden = !ready || !(o.prices && o.prices.length);
   if (!ready) { $("tariff-facts").replaceChildren(); return; }
@@ -521,6 +573,167 @@ $("octopus-form").addEventListener("submit", (e) => {
   sendOctopus({ api_key: key, account: $("octopus-account").value.trim() }, "Checking with Octopus and fetching prices…");
 });
 $("octopus-remove").addEventListener("click", () => sendOctopus({ api_key: "" }, "Disconnecting…"));
+
+// ---------- Battery control ----------
+
+let controlLoaded = false;
+
+function renderControl(c) {
+  const live = c.live;
+  $("control-mode").textContent = live ? "Live" : "Dry run";
+  $("control-mode").className = `pill${live ? " live" : ""}`;
+  $("control-mode").title = live ? "Writes to the battery are allowed (CONTROL_LIVE=1)"
+    : "Nothing is written to the battery. Set CONTROL_LIVE=1 on the container to allow it.";
+  let now = c.reason;
+  if (c.window && c.action === "app") now += `. Next cheap window: ${when(c.window.start, c.window.end)}.`;
+  else if (c.window) now += `. Until ${clock(c.window.end)}.`;
+  $("control-now").textContent = now;
+  $("control-error").hidden = !c.last_error;
+  $("control-error").textContent = c.last_error || "";
+  if (!controlLoaded || !$("control-card").contains(document.activeElement)) {
+    const t = c.settings;
+    $("control-enabled").checked = t.enabled;
+    $("control-hold").checked = t.hold_cheap;
+    $("control-charge").checked = t.grid_charge;
+    $("control-power").value = t.charge_power_w;
+    $("control-target").value = t.charge_target_soc;
+    controlLoaded = true;
+  }
+  syncControlInputs();
+  $("control-log").replaceChildren(...(c.log.length ? c.log : [{ text: "Nothing yet." }]).map((e) => {
+    const li = document.createElement("li");
+    if (e.ts) { const t = document.createElement("time"); t.textContent = new Date(e.ts * 1000).toLocaleString(); li.append(t); }
+    li.append(e.text);
+    return li;
+  }));
+}
+
+function syncControlInputs() {
+  const on = $("control-enabled").checked;
+  $("control-hold").disabled = !on;
+  $("control-charge").disabled = !on;
+  const charging = on && $("control-charge").checked;
+  $("control-power").disabled = !charging;
+  $("control-target").disabled = !charging;
+}
+for (const id of ["control-enabled", "control-charge"]) $(id).addEventListener("change", syncControlInputs);
+
+async function refreshControl() {
+  try { renderControl(await (await fetch("/api/control", { cache: "no-store" })).json()); } catch (_) {}
+}
+
+$("control-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    renderControl(await postSettings("/api/control", {
+      enabled: $("control-enabled").checked, hold_cheap: $("control-hold").checked, grid_charge: $("control-charge").checked,
+      charge_power_w: Number($("control-power").value) || 1500, charge_target_soc: Number($("control-target").value) || 90,
+    }));
+    document.activeElement?.blur();
+  } catch (err) {
+    $("control-error").hidden = false;
+    $("control-error").textContent = err.message;
+  }
+});
+
+async function refreshCare() {
+  let c;
+  try { c = await (await fetch("/api/battery-care", { cache: "no-store" })).json(); } catch (_) { return; }
+  $("care-cycles").textContent = c.cycles != null ? `${c.cycles} cycles` : "";
+  $("care-tips").replaceChildren(...c.tips.map((t) => {
+    const li = document.createElement("li"); li.className = t.level;
+    const b = document.createElement("b"); b.textContent = t.title;
+    const span = document.createElement("span"); span.textContent = t.text;
+    li.append(b, span);
+    return li;
+  }));
+}
+
+// ---------- Tariff comparison ----------
+
+let customTariffs = [];
+const pounds = (v) => (v == null ? "–" : `£${Math.round(v).toLocaleString()}`);
+
+function renderCustom(list) {
+  customTariffs = list || [];
+  $("custom-list").replaceChildren(...customTariffs.map((t, i) => {
+    const li = document.createElement("li");
+    const text = document.createElement("span");
+    text.textContent = `${t.name}: ${t.peak_rate}p, ${t.offpeak_rate}p ${t.offpeak_start}–${t.offpeak_end}, export ${t.export_rate}p, standing ${t.standing_p}p`;
+    const del = document.createElement("button"); del.type = "button"; del.className = "link"; del.textContent = "Remove";
+    del.addEventListener("click", () => saveCustom(customTariffs.filter((_, j) => j !== i)));
+    li.append(text, del);
+    return li;
+  }));
+}
+
+async function saveCustom(list) {
+  try {
+    renderCustom((await postSettings("/api/compare/custom", list)).custom);
+    $("compare-msg").className = "setup-msg ok";
+    $("compare-msg").textContent = "Saved. Press Compare to include it.";
+  } catch (err) {
+    $("compare-msg").className = "setup-msg error";
+    $("compare-msg").textContent = err.message;
+  }
+}
+
+$("custom-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const n = (id) => Number($(id).value) || 0;
+  saveCustom([...customTariffs, { name: $("custom-name").value.trim(), peak_rate: n("custom-peak"), offpeak_rate: n("custom-offpeak"),
+    offpeak_start: $("custom-from").value || "00:00", offpeak_end: $("custom-to").value || "00:00",
+    export_rate: n("custom-export"), standing_p: n("custom-standing") }]);
+});
+
+function renderPresets(presets) {
+  $("custom-presets").replaceChildren(...(presets || []).map((p) => {
+    const b = document.createElement("button"); b.type = "button"; b.className = "secondary"; b.textContent = p.name;
+    b.title = `Fills in the off-peak hours (${p.offpeak_start}–${p.offpeak_end}); enter the prices from your bill or quote.`;
+    b.addEventListener("click", () => { $("custom-name").value = p.name; $("custom-from").value = p.offpeak_start; $("custom-to").value = p.offpeak_end; $("custom-peak").focus(); });
+    return b;
+  }));
+}
+
+$("compare-run").addEventListener("click", async () => {
+  $("compare-msg").className = "setup-msg";
+  $("compare-msg").textContent = "Fetching tariffs and replaying your history…";
+  $("compare-run").disabled = true;
+  let r;
+  try {
+    const res = await fetch(`/api/compare?region=${encodeURIComponent($("compare-region").value)}`, { cache: "no-store" });
+    r = await res.json();
+    if (!res.ok) throw new Error(r.detail || `Request failed (${res.status})`);
+  } catch (err) {
+    $("compare-msg").className = "setup-msg error";
+    $("compare-msg").textContent = err.message;
+    return;
+  } finally { $("compare-run").disabled = false; }
+  renderCustom(r.custom);
+  renderPresets(r.presets);
+  $("compare-msg").textContent = r.message || (r.problems && r.problems.length ? `Some tariffs were skipped: ${r.problems.join("; ")}` : "");
+  $("compare-result").hidden = !r.rows.length;
+  $("compare-assumptions").hidden = !r.rows.length;
+  $("compare-table").tBodies[0].replaceChildren(...r.rows.map((row, i) => {
+    const tr = document.createElement("tr");
+    if (i === 0) tr.className = "best";
+    if (row.key === "current") tr.classList.add("current");
+    const vs = row.vs_current == null || row.key === "current" ? "" : `${row.vs_current < 0 ? "−" : "+"}${pounds(Math.abs(row.vs_current))}`;
+    for (const v of [row.name, pounds(row.annual), vs, row.export || "", row.note || ""]) {
+      const td = document.createElement("td"); td.textContent = v; tr.append(td);
+    }
+    return tr;
+  }));
+  const best = r.rows[0];
+  const cur = r.rows.find((x) => x.key === "current");
+  let summary = "";
+  if (best && cur && best.key !== "current" && best.vs_current < 0) summary = `${best.name} looks about ${pounds(-best.vs_current)} a year cheaper than what you pay now. `;
+  else if (best && cur && best.key === "current") summary = "Your current tariff already looks the cheapest. ";
+  if (r.without_battery && cur) summary += `On your tariff the battery saves about ${pounds(r.without_battery.annual - cur.annual)} a year. `;
+  if (r.days) summary += `Based on ${r.days} day${r.days === 1 ? "" : "s"} of history.`;
+  $("compare-summary").textContent = summary;
+  $("compare-assumption-list").replaceChildren(...(r.assumptions || []).map((a) => { const li = document.createElement("li"); li.textContent = a; return li; }));
+});
 
 // ---------- Setup ----------
 
@@ -803,6 +1016,11 @@ refreshEnergy();
 refreshPayback();
 refreshEvents();
 refreshOctopus();
+refreshControl();
+refreshCare();
+fetch("/api/compare/custom", { cache: "no-store" }).then((r) => r.json()).then((r) => { renderCustom(r.custom); renderPresets(r.presets); }).catch(() => {});
+setInterval(refreshControl, 15000);
+setInterval(refreshCare, 10 * 60 * 1000);
 setInterval(refreshPayback, 5 * 60 * 1000);
 setInterval(refreshOctopus, 5 * 60 * 1000);
 setInterval(refreshLive, LIVE_MS);

@@ -14,7 +14,7 @@ from pymodbus.exceptions import ModbusException
 
 from .config import Connection, Settings
 from .events import EventWatcher
-from .registers import BATTERY, HOLDING, Profile, extract
+from .registers import BATTERY, HOLDING, WRITABLE, Profile, encode, extract
 from .storage import MeterBucket, MinuteBucket, Storage
 
 log = logging.getLogger("solarbank.collector")
@@ -94,6 +94,20 @@ class Collector:
                 self.client.close()
                 self.client = None
             return await probe(conn, self.profile)
+
+    async def write(self, key: str, value: int) -> None:
+        """Write one of the WRITABLE registers over the poller's own connection."""
+        address, data_type = WRITABLE[key]
+        words = encode(data_type, value, 2 if data_type == "INT32" else 1)
+        async with self.io_lock:
+            client = await self._ensure_client()
+            if len(words) == 1:
+                result = await client.write_register(address, words[0], device_id=self.connection.unit_id)
+            else:
+                result = await client.write_registers(address, words, device_id=self.connection.unit_id)
+        if result.isError():
+            raise ConnectionError(f"{DEVICE_NAMES[self.profile.name]} refused writing {key}={value}: {result}")
+        log.info("Wrote %s = %s to %s", key, value, DEVICE_NAMES[self.profile.name])
 
     async def _wait(self, seconds: float | None) -> None:
         """Sleep, but wake early if the connection settings change."""

@@ -12,7 +12,7 @@ import os
 import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -24,8 +24,11 @@ from pydantic import BaseModel
 
 from .collector import DEVICE_NAMES, Collector
 from .registers import BATTERY, METER
+from .battery_care import care
+from .compare import PRESETS, Candidate, Comparer, compare, fixed_profile, profile as price_profile
 from .config import Connection, ConnectionStore, Settings
-from .octopus import Octopus, OctopusError, validate as validate_octopus
+from .control import ControlSettings, Controller, cheap_windows
+from .octopus import Octopus, OctopusError, tariff_parts, validate as validate_octopus
 from .relay import Relay
 from .storage import EVENT_KINDS, Storage
 from .tariff import Tariff, payback
@@ -63,14 +66,42 @@ OCTOPUS_DISPATCH_SECONDS = 5 * 60  # Intelligent Go slots change through the eve
 
 def _make_octopus(store: ConnectionStore, storage: Storage, api_key: str | None = None,
                   account: str | None = None) -> Octopus:
+    config_error = None
     if api_key is None:
         api_key, account = store.load_octopus()
+        if api_key and store.octopus_from_env():
+            try:
+                api_key, account = validate_octopus(api_key.strip("'\" "), (account or "").strip("'\" "))
+            except ValueError as err:
+                config_error = f"Check OCTOPUS_API_KEY and OCTOPUS_ACCOUNT in the container settings. {err}"
+                log.warning("Octopus: %s", config_error)
+                api_key = ""
 
     def offpeak() -> set[int]:
         rates = Tariff.from_dict(store.load_tariff()).slot_rates()
         return {i for i, r in enumerate(rates) if r == min(rates)} if len(set(rates)) > 1 else set(range(1, 15))
 
-    return Octopus(storage, api_key or "", account or "", offpeak=offpeak)
+    octopus = Octopus(storage, api_key or "", account or "", offpeak=offpeak)
+    octopus.config_error = config_error
+    return octopus
+
+
+def _make_controller(app: FastAPI, store: ConnectionStore, storage: Storage) -> Controller:
+    def windows(now):
+        octopus: Octopus = app.state.octopus
+        battery = app.state.collectors["battery"]
+        t = Tariff.from_dict(store.load_tariff())
+        status = (octopus.status(battery.snapshot, now)
+                  if octopus.configured and octopus.info and not t.use_manual else None)
+        offpeak = (t.offpeak_start, t.offpeak_end) if t.peak_rate != t.offpeak_rate else None
+        return cheap_windows(status, offpeak, storage.tz, now)
+
+    return Controller(
+        app.state.collectors["battery"],
+        load=lambda: {"settings": store.load_section("control"), "state": store.load_section("control_state")},
+        save_state=lambda state: store.save_section("control_state", state),
+        windows=windows,
+    )
 
 
 async def _octopus_loop(app: FastAPI) -> None:
@@ -98,6 +129,9 @@ async def lifespan(app: FastAPI):
     app.state.connection_store = store
     app.state.storage = storage
     app.state.octopus = _make_octopus(store, storage)
+    app.state.comparer = Comparer()
+    controller = _make_controller(app, store, storage)
+    app.state.controller = controller
     tasks = [asyncio.create_task(c.run()) for c in collectors.values()]
     tasks.append(asyncio.create_task(_octopus_loop(app)))
     relay = None
@@ -109,9 +143,15 @@ async def lifespan(app: FastAPI):
             log.error("Can't start the Smart Meter relay on port %s: %s", settings.relay_port, err)
             relay = None
     app.state.relay = relay
+    control_task = asyncio.create_task(controller.run())
     try:
         yield
     finally:
+        control_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await control_task
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(controller.restore(), 10)  # hand the battery back before stopping
         if relay is not None:
             await relay.close()
         for task in tasks:
@@ -157,6 +197,8 @@ class TariffIn(BaseModel):
     offpeak_start: str = "00:30"
     offpeak_end: str = "05:30"
     export_rate: float = 15.0
+    use_manual: bool = False
+    installed: str = ""
 
 
 @app.get("/api/payback")
@@ -165,15 +207,36 @@ def get_payback() -> dict:
     storage: Storage = app.state.storage
     octopus: Octopus = app.state.octopus
     tariff = Tariff.from_dict(store.load_tariff())
-    profile = octopus.profile() if octopus.configured else None
+    use_octopus = octopus.configured and not tariff.use_manual
+    profile = octopus.profile() if use_octopus else None
     if profile:
         # Octopus prices stand in for the typed ones; only the battery cost is kept.
         tariff = Tariff.from_dict({**{k: v for k, v in profile.items() if v is not None}, "battery_cost": tariff.battery_cost})
-    prices = storage.rates() if octopus.configured else None
+    prices = storage.rates() if use_octopus else None
     out = payback(tariff, storage.battery_slots(), datetime.now(storage.tz).date(), prices)
+        tariff = Tariff.from_dict({**{k: v for k, v in profile.items() if v is not None},
+                                   "battery_cost": tariff.battery_cost, "installed": tariff.installed})
+    prices = storage.rates() if octopus.configured else None
+    out = payback(tariff, storage.battery_slots(), datetime.now(storage.tz).date(), prices, _lifetime())
     out["source"] = "octopus" if profile else "manual"
+    out["octopus_connected"] = octopus.configured
+    typed = Tariff.from_dict(store.load_tariff())
+    out["use_manual"] = typed.use_manual
+    out["manual"] = asdict(typed)  # what was typed, even while Octopus prices are shown
     out["tariff_name"] = (octopus.info.get("import") or {}).get("name") if profile else None
     return out
+
+
+def _lifetime() -> dict | None:
+    """The battery's lifetime charge/discharge totals, remembered while it's offline."""
+    store: ConnectionStore = app.state.connection_store
+    snap = app.state.collectors["battery"].snapshot
+    now = {"charged_kwh": snap.get("charged_total_kwh"), "discharged_kwh": snap.get("discharged_total_kwh")}
+    if None in now.values():
+        return store.load_lifetime()
+    if now != store.load_lifetime():
+        store.save_lifetime(now)
+    return now
 
 
 @app.post("/api/tariff")
@@ -223,6 +286,131 @@ async def save_octopus(body: OctopusIn) -> dict:
     app.state.octopus = octopus
     log.info("Connected Octopus account %s (%s)", account, octopus.info["import"]["name"])
     return get_octopus()
+
+
+class ControlIn(BaseModel):
+    enabled: bool = False
+    hold_cheap: bool = True
+    grid_charge: bool = False
+    charge_power_w: int = 1500
+    charge_target_soc: int = 90
+
+
+@app.get("/api/control")
+def get_control() -> dict:
+    return app.state.controller.status()
+
+
+@app.post("/api/control")
+async def save_control(body: ControlIn) -> dict:
+    try:
+        settings = ControlSettings(**body.model_dump()).validate()
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+    app.state.connection_store.save_section("control", asdict(settings))
+    controller: Controller = app.state.controller
+    controller.update_settings(settings)
+    await controller.tick()
+    return controller.status()
+
+
+REGIONS = "ABCDEFGHJKLMNP"
+
+
+def _current_candidate() -> Candidate:
+    """What you pay now: Octopus's stored prices, or the typed ones."""
+    store: ConnectionStore = app.state.connection_store
+    octopus: Octopus = app.state.octopus
+    typed = Tariff.from_dict(store.load_tariff())
+    if octopus.configured and octopus.info and not typed.use_manual:
+        rates = app.state.storage.rates()
+        imp = {k: v[0] for k, v in rates.items() if v[0] is not None}
+        exp = {k: v[1] for k, v in rates.items() if v[1] is not None}
+        info = octopus.info
+        c = Candidate("current", f"Your tariff: {info['import']['name']}", info["import"].get("standing_charge_p"),
+                      imp, price_profile(imp), exp, price_profile(exp), source="current")
+        c.export_name = info["export"]["name"] if info.get("export") else None
+        if not exp:
+            c.export_profile = [0.0] * 48
+        return c
+    c = Candidate("current", "Your tariff (prices from Edit costs)", None,
+                  import_profile=fixed_profile(typed.peak_rate, typed.offpeak_rate, typed.offpeak_start, typed.offpeak_end),
+                  export_profile=[typed.export_rate] * 48, source="current",
+                  note="No standing charge included: it isn't in Edit costs.")
+    c.export_name = f"{typed.export_rate:g}p export"
+    return c
+
+
+@app.get("/api/compare")
+async def get_compare(region: str = Query("", max_length=1), days: int = Query(365, ge=1, le=366)) -> dict:
+    octopus: Octopus = app.state.octopus
+    store: ConnectionStore = app.state.connection_store
+    storage: Storage = app.state.storage
+    if not region:
+        imp = (octopus.info.get("import") or {}).get("tariff") if octopus.info else None
+        region = (tariff_parts(imp) or {}).get("region") or "C"
+    region = region.upper()
+    if region not in REGIONS:
+        raise HTTPException(status_code=422, detail="Unknown region")
+    custom = store.load_section("compare").get("custom") or []
+    snap = app.state.collectors["battery"].snapshot
+    cap = snap.get("rated_kwh") or 5.0
+    kw = (snap.get("max_charge_w") or 2400) / 1000
+    usage = storage.usage_slots(days)
+    if not usage:
+        return {"days": 0, "rows": [], "region": region, "custom": custom, "presets": PRESETS,
+                "message": "No home-use history yet. Come back after a day or two of recording."}
+    first = min(u["day"] for u in usage)
+    start = datetime.fromisoformat(first).replace(tzinfo=storage.tz).astimezone(timezone.utc)
+    end = datetime.now(timezone.utc)
+    comparer: Comparer = app.state.comparer
+
+    def run():
+        candidates, problems = comparer.candidates(region, start, end, storage.tz, _current_candidate(), custom)
+        out = compare(candidates, usage, cap, kw)
+        out["problems"] = problems
+        return out
+
+    out = await asyncio.to_thread(run)
+    out.update({"region": region, "custom": custom, "presets": PRESETS})
+    return out
+
+
+class CustomTariff(BaseModel):
+    name: str
+    peak_rate: float
+    offpeak_rate: float
+    offpeak_start: str = "00:00"
+    offpeak_end: str = "07:00"
+    export_rate: float = 0.0
+    standing_p: float = 0.0
+
+
+@app.get("/api/compare/custom")
+def get_custom() -> dict:
+    return {"custom": app.state.connection_store.load_section("compare").get("custom") or [], "presets": PRESETS}
+
+
+@app.post("/api/compare/custom")
+def save_custom(body: list[CustomTariff]) -> dict:
+    rows = []
+    for t in body[:10]:
+        try:
+            Tariff(peak_rate=t.peak_rate, offpeak_rate=t.offpeak_rate, offpeak_start=t.offpeak_start,
+                   offpeak_end=t.offpeak_end, export_rate=t.export_rate).validate()
+        except ValueError as err:
+            raise HTTPException(status_code=422, detail=f"{t.name}: {err}") from err
+        if not t.name.strip() or len(t.name) > 60:
+            raise HTTPException(status_code=422, detail="Give each tariff a name")
+        rows.append({**t.model_dump(), "name": t.name.strip()})
+    app.state.connection_store.save_section("compare", {"custom": rows})
+    return {"custom": rows}
+
+
+@app.get("/api/battery-care")
+def battery_care() -> dict:
+    snapshot = app.state.collectors["battery"].snapshot
+    return care(snapshot, app.state.storage.soc_stats(), asdict(app.state.controller.settings))
 
 
 @app.get("/api/energy")
