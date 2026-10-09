@@ -116,3 +116,40 @@ th { color: var(--text-secondary); font-weight: 600; }
 .facts div { min-width: 0; }
 .facts dt { font-size: 12px; color: var(--text-muted); }
 .facts dd { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+
+.top-actions { display: flex; align-items: center; gap: 8px; }
+.icon-btn { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-secondary); }
+.icon-btn:hover { color: var(--text-primary); }
+
+.banner { max-width: 1088px; margin: 0 auto 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  flex-wrap: wrap; padding: 12px 16px; border-radius: 12px; border: 1px solid var(--critical);
+  background: var(--surface); font-size: 14px; }
+@media (max-width: 1120px) { .banner { margin-left: 16px; margin-right: 16px; } }
+.banner[hidden] { display: none; }
+.banner p::before { content: "⚠ "; color: var(--critical); }
+
+button.primary, button.secondary, .banner button { font: inherit; font-size: 14px; border-radius: 8px; padding: 8px 14px;
+  cursor: pointer; min-height: 36px; }
+button.primary { background: var(--text-primary); color: var(--surface); border: 1px solid var(--text-primary); font-weight: 600; }
+button.secondary, .banner button { background: transparent; color: var(--text-primary); border: 1px solid var(--axis); }
+button:disabled { opacity: .5; cursor: default; }
+button.link { background: none; border: 0; color: var(--text-secondary); text-decoration: underline; font: inherit;
+  font-size: 13px; padding: 8px 0 0; cursor: pointer; }
+
+dialog { border: 1px solid var(--border); border-radius: 14px; padding: 24px; width: min(460px, calc(100vw - 32px));
+  background: var(--surface); color: var(--text-primary); }
+dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
+dialog h2 { font-size: 18px; }
+.dialog-intro { font-size: 13px; color: var(--text-secondary); margin: 8px 0 16px; }
+dialog label { display: block; font-size: 13px; color: var(--text-secondary); margin: 10px 0 4px; }
+dialog input { width: 100%; font: inherit; font-size: 16px; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--axis); background: var(--page); color: var(--text-primary); }
+dialog input:focus-visible { outline: 2px solid var(--solar); outline-offset: 1px; }
+.advanced { margin-top: 12px; }
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.locked-note { font-size: 13px; color: var(--text-secondary); margin-top: 12px; }
+.setup-msg { font-size: 13px; margin-top: 12px; min-height: 1.4em; }
+.setup-msg.ok { color: var(--good); }
+.setup-msg.error { color: var(--critical); }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; flex-wrap: wrap; }

@@ -1,6 +1,7 @@
 # Paste this into Portainer (Stacks > Add stack > Web editor), or run
-# `docker compose up -d` next to it. Set SOLARBANK_HOST to the IP address
-# the Anker app shows under Three-Party Control Settings > Modbus TCP.
+# `docker compose up -d` next to it. Then open http://<this-host>:8080 and
+# enter the battery's IP address on the setup screen; it is saved in the
+# data volume.
 services:
   solarbank-dashboard:
     image: ghcr.io/maffewem/anker-e5000dashboard:latest
@@ -9,13 +10,17 @@ services:
     ports:
       - "8080:8080"
     environment:
-      SOLARBANK_HOST: "192.168.1.50"   # change me
       TZ: "Europe/London"
-      # SOLARBANK_PORT: "502"
+      # Optional: fix the battery address here instead of using the setup
+      # screen. When set, the setup screen shows it read-only.
+      # SOLARBANK_HOST: "192.168.0.42"
       # POLL_SECONDS: "5"
       # RETENTION_DAYS: "365"
     volumes:
       - solarbank-data:/data
+    # If the setup screen says there is no network route to the battery,
+    # remove the "ports" section above and uncomment this line instead:
+    # network_mode: host
 
 volumes:
   solarbank-data:

@@ -3,7 +3,7 @@
 import asyncio
 
 from app.collector import Collector
-from app.config import Settings
+from app.config import Connection, Settings
 from app.storage import Storage
 from simulator.sim import STATIC, Battery, Registers, handle
 
@@ -15,8 +15,8 @@ def test_collector_reads_simulator():
         regs.write(Battery().step())
         server = await asyncio.start_server(lambda r, w: handle(regs, r, w), "127.0.0.1", 0)
         port = server.sockets[0].getsockname()[1]
-        settings = Settings("127.0.0.1", port, 1, 5, 365, ":memory:", "UTC")
-        collector = Collector(settings, Storage(":memory:", 365))
+        settings = Settings(5, 365, ":memory:", "unused.json", "UTC")
+        collector = Collector(settings, Storage(":memory:", 365), Connection("127.0.0.1", port, 1))
         try:
             await collector.poll_once()
         finally:

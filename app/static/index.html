@@ -13,10 +13,44 @@
       <h1>Solarbank</h1>
       <p class="sub" id="device-name">Connecting…</p>
     </div>
-    <div class="status" id="status" role="status">
-      <span class="dot" aria-hidden="true"></span><span id="status-text">Connecting</span>
+    <div class="top-actions">
+      <div class="status" id="status" role="status">
+        <span class="dot" aria-hidden="true"></span><span id="status-text">Connecting</span>
+      </div>
+      <button class="icon-btn" id="open-setup" type="button" aria-label="Connection settings" title="Connection settings">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3.3h-4l-.4 2.6a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1l.4 2.6h4l.4-2.6c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5L19.4 13ZM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z" transform="translate(-1 0)"/></svg>
+      </button>
     </div>
   </header>
+
+  <div class="banner" id="banner" role="alert" hidden>
+    <p id="banner-text"></p>
+    <button type="button" id="banner-setup">Change connection</button>
+  </div>
+
+  <dialog id="setup" aria-labelledby="setup-title">
+    <form id="setup-form" method="dialog" novalidate>
+      <h2 id="setup-title">Connect to your Solarbank</h2>
+      <p class="dialog-intro">In the Anker app, open your Solarbank, tap the gear icon, then <b>Three-Party Control Settings</b>. Turn on <b>Modbus TCP</b> and enter the IP address it shows.</p>
+      <label for="setup-host">Battery IP address</label>
+      <input id="setup-host" name="host" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="e.g. 192.168.0.42" required>
+      <details class="advanced">
+        <summary>Advanced</summary>
+        <div class="row">
+          <div><label for="setup-port">Port</label><input id="setup-port" name="port" type="number" min="1" max="65535" value="502"></div>
+          <div><label for="setup-unit">Unit id</label><input id="setup-unit" name="unit_id" type="number" min="0" max="247" value="1"></div>
+        </div>
+      </details>
+      <p class="locked-note" id="setup-locked" hidden>This address is set by <code>SOLARBANK_HOST</code> in the container settings. Remove that variable from your stack to change it here.</p>
+      <p class="setup-msg" id="setup-msg" role="status" aria-live="polite"></p>
+      <div class="dialog-actions">
+        <button type="button" class="secondary" id="setup-cancel">Cancel</button>
+        <button type="button" class="secondary" id="setup-test">Test connection</button>
+        <button type="submit" class="primary" id="setup-save">Save</button>
+      </div>
+      <button type="button" class="link" id="setup-force" hidden>Save without a successful test</button>
+    </form>
+  </dialog>
 
   <main>
     <section class="tiles" aria-label="Live power">

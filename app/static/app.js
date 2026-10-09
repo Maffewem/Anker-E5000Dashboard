@@ -35,13 +35,23 @@ async function refreshLive() {
   const { status, data } = body;
   const stale = status.last_update && Date.now() / 1000 - status.last_update > status.poll_seconds * 4;
 
-  if (!status.configured) setStatus("offline", "SOLARBANK_HOST not set");
+  if (!status.configured) setStatus("offline", "Not set up");
   else if (status.connected && !stale) setStatus("live", `Live · ${timeAgo(status.last_update)}`);
   else if (status.last_update) setStatus("offline", `Offline · last data ${timeAgo(status.last_update)}`);
   else setStatus("offline", status.last_error ? "Can't reach battery" : "Connecting");
   $("status").title = status.last_error || "";
+  showBanner(status, stale);
+  if (!status.configured && !setupShownOnce) { setupShownOnce = true; openSetup(); }
 
-  if (!data || !Object.keys(data).length) return;
+  if (!data || !Object.keys(data).length) {
+    // Nothing read yet from the current address: don't leave old numbers up.
+    for (const id of ["solar", "home", "soc", "grid"]) $(id).textContent = "–";
+    for (const id of ["solar-detail", "home-detail", "battery-detail", "grid-detail"]) $(id).textContent = "\u00a0";
+    $("soc-bar").style.width = "0";
+    $("device-name").textContent = status.configured ? `Waiting for ${status.host}` : "Not set up yet";
+    $("facts").replaceChildren();
+    return;
+  }
 
   $("device-name").textContent = [data.model ? "Solarbank 4 E5000" : null, data.operating_mode ? `${data.operating_mode} mode` : null]
     .filter(Boolean).join(" · ") || status.host;
@@ -63,6 +73,12 @@ async function refreshLive() {
   $("grid-detail").textContent = g == null ? " " : g > 5 ? "Importing" : g < -5 ? "Exporting" : "Balanced";
 
   renderFacts(data, status);
+}
+
+function showBanner(status, stale) {
+  const offline = status.configured && (!status.connected || stale) && status.last_error;
+  $("banner").hidden = !offline;
+  if (offline) $("banner-text").textContent = status.last_error;
 }
 
 function setStatus(kind, text) {
@@ -244,6 +260,99 @@ async function refreshEnergy() {
     return tr;
   }));
 }
+
+// ---------- Setup ----------
+
+let setupShownOnce = false;
+
+function setupValues() {
+  return {
+    host: $("setup-host").value.trim(),
+    port: Number($("setup-port").value) || 502,
+    unit_id: Number($("setup-unit").value) || 1,
+  };
+}
+
+function setupMessage(kind, text) {
+  const el = $("setup-msg");
+  el.className = `setup-msg ${kind}`;
+  el.textContent = text;
+}
+
+function describeDevice(d) {
+  if (!d) return "Connected.";
+  const bits = [d.model && `model ${d.model}`, d.serial && `serial ${d.serial}`, d.soc != null && `battery at ${Math.round(d.soc)}%`].filter(Boolean);
+  return bits.length ? `Found your Solarbank: ${bits.join(", ")}.` : "Connected.";
+}
+
+async function postSettings(path, body) {
+  const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  let data = {};
+  try { data = await res.json(); } catch (_) {}
+  if (!res.ok) {
+    const detail = Array.isArray(data.detail) ? "Check the values you entered." : data.detail;
+    throw new Error(detail || `Request failed (${res.status})`);
+  }
+  return data;
+}
+
+function setBusy(busy) {
+  for (const id of ["setup-test", "setup-save", "setup-force"]) $(id).disabled = busy || $("setup").dataset.locked === "1";
+}
+
+async function openSetup() {
+  const dlg = $("setup");
+  setupMessage("", "");
+  $("setup-force").hidden = true;
+  try {
+    const s = await (await fetch("/api/settings", { cache: "no-store" })).json();
+    $("setup-host").value = s.host || "";
+    $("setup-port").value = s.port;
+    $("setup-unit").value = s.unit_id;
+    dlg.dataset.locked = s.locked ? "1" : "0";
+    $("setup-locked").hidden = !s.locked;
+    for (const id of ["setup-host", "setup-port", "setup-unit"]) $(id).disabled = s.locked;
+    $("setup-cancel").hidden = !s.host;
+  } catch (_) {}
+  setBusy(false);
+  if (!dlg.open) dlg.showModal();
+  if (!$("setup-host").disabled) $("setup-host").focus();
+}
+
+$("setup-test").addEventListener("click", async () => {
+  const body = setupValues();
+  if (!body.host) return setupMessage("error", "Enter the battery's IP address.");
+  setBusy(true);
+  setupMessage("", `Trying ${body.host}…`);
+  try {
+    const r = await postSettings("/api/settings/test", body);
+    setupMessage("ok", describeDevice(r.device));
+  } catch (err) {
+    setupMessage("error", err.message);
+  } finally { setBusy(false); }
+});
+
+async function save(skipTest) {
+  const body = setupValues();
+  if (!body.host) return setupMessage("error", "Enter the battery's IP address.");
+  setBusy(true);
+  setupMessage("", skipTest ? "Saving…" : `Connecting to ${body.host}…`);
+  try {
+    const r = await postSettings(`/api/settings${skipTest ? "?skip_test=true" : ""}`, body);
+    setupMessage("ok", `${describeDevice(r.device)} Saved.`);
+    setTimeout(() => { $("setup").close(); refreshLive(); }, 900);
+  } catch (err) {
+    setupMessage("error", err.message);
+    // Let people save an address that is temporarily offline.
+    $("setup-force").hidden = false;
+  } finally { setBusy(false); }
+}
+
+$("setup-form").addEventListener("submit", (e) => { e.preventDefault(); save(false); });
+$("setup-force").addEventListener("click", () => save(true));
+$("setup-cancel").addEventListener("click", () => $("setup").close());
+$("open-setup").addEventListener("click", openSetup);
+$("banner-setup").addEventListener("click", openSetup);
 
 // ---------- Wiring ----------
 
