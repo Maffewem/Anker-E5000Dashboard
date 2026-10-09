@@ -37,6 +37,7 @@ You don't need to edit the compose file. Set any of these as **Environment varia
 | `POLL_SECONDS` | `5` | How often to read the devices |
 | `SOLARBANK_HOST`, `METER_HOST` | – | Set an address here instead of on the setup screen. The setup screen then shows it read-only |
 | `OCTOPUS_API_KEY`, `OCTOPUS_ACCOUNT` | – | Your Octopus Energy API key and account number, instead of entering them with **Connect Octopus** on the dashboard |
+| `CONTROL_LIVE` | `0` | Set to `1` to let **Battery control** write to the battery. Until then it's a dry run that only logs what it would do |
 | `PORT` | `8080` | Port inside the container. Only needed with `docker-compose.host.yml` |
 | `RELAY_METER` | `false` | `true` shares the Smart Meter with Home Assistant (see below) |
 | `RELAY_HOST_PORT` | `502` | Port the Smart Meter relay is published on |
@@ -59,6 +60,17 @@ The Smart Meter accepts only one Modbus TCP connection at a time, so the dashboa
 3. In Home Assistant, add the Anker SOLIX integration again and enter **this host's IP address** instead of the meter's. It's recognised as the Smart Meter.
 
 The relay is read-only: it never sends anything to the meter, and Home Assistant gets an error if it tries to change a setting. If the dashboard loses the meter, Home Assistant shows it unavailable until the dashboard reconnects. Its readings are as fresh as the dashboard's last poll (`POLL_SECONDS`). Use the normal `docker-compose.yml` for this; with `docker-compose.host.yml` the relay can only listen on `RELAY_PORT` (5020), which Home Assistant's add screen doesn't accept. The Solarbank itself accepts several connections, so it doesn't need a relay.
+
+## Battery control
+
+Off by default. When switched on in **Battery control**, the dashboard takes over the battery during cheap hours (your Octopus cheap windows and Intelligent Go slots, or the off-peak hours in **Edit costs**):
+
+- **Hold:** the battery doesn't discharge, so the house runs on cheap grid power and the stored energy is kept for the dear hours.
+- **Grid charge (optional):** charges at the power you choose until it reaches your stop level (90% by default).
+
+To do this it puts the battery in Anker's third-party control mode. Outside cheap hours, when you switch control off, or when the container stops, it writes back the mode the battery was in before (Smart, Self-consumption and so on). If you change the mode in the Anker app, the dashboard stands back until the next cheap window. Nothing is written unless `CONTROL_LIVE=1` is set; without it, the **Activity** list shows what it would have done.
+
+**Battery care** gives tips from the battery's limits and history: time spent full or empty, charge and discharge limits, and cycles so far.
 
 ## More
 

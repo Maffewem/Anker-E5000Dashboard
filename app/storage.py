@@ -208,6 +208,44 @@ class Storage:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def usage_slots(self, days: int = 365) -> list[dict]:
+        """Home use and solar per local half hour, for comparing tariffs.
+
+        These don't depend on what the battery did, so they can be replayed
+        against any tariff and battery schedule.
+        """
+        since = int(time.time()) - days * 86400
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT ts, home_wh, solar_wh FROM minutes WHERE ts >= ? ORDER BY ts", (since,)
+            ).fetchall()
+        out: dict[tuple[str, int], dict] = {}
+        for r in rows:
+            local = datetime.fromtimestamp(r["ts"], self.tz)
+            key = (local.date().isoformat(), (local.hour * 60 + local.minute) // 30)
+            slot = out.setdefault(key, {"day": key[0], "slot": key[1], "home_wh": 0.0, "solar_wh": 0.0, "minutes": 0})
+            slot["home_wh"] += r["home_wh"] or 0.0
+            slot["solar_wh"] += r["solar_wh"] or 0.0
+            slot["minutes"] += 1
+        return list(out.values())
+
+    def soc_stats(self, days: int = 30) -> dict:
+        """Minutes spent nearly full and nearly empty, for battery care tips."""
+        since = int(time.time()) - days * 86400
+        with self._lock:
+            r = self._db.execute(
+                "SELECT COUNT(soc) AS n, SUM(soc >= 98) AS full, SUM(soc <= 7) AS empty, AVG(soc) AS avg, "
+                "MIN(ts) AS first FROM minutes WHERE ts >= ? AND soc IS NOT NULL", (since,)
+            ).fetchone()
+        n = r["n"] or 0
+        return {
+            "minutes": n,
+            "days": round((time.time() - r["first"]) / 86400, 1) if r["first"] else 0,
+            "full_share": (r["full"] or 0) / n if n else None,
+            "empty_share": (r["empty"] or 0) / n if n else None,
+            "avg_soc": round(r["avg"], 1) if r["avg"] is not None else None,
+        }
+
     def first_slot_day(self) -> str | None:
         with self._lock:
             return self._db.execute("SELECT MIN(day) FROM slots").fetchone()[0]

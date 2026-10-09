@@ -32,7 +32,11 @@
     <form id="costs-form" method="dialog" novalidate>
       <h2 id="costs-title">Battery costs</h2>
       <p class="dialog-intro">Prices in pence per kWh, as on your bill. For a single-rate tariff, use the same price for peak and off-peak.</p>
+      <label class="compare" id="costs-manual-row" hidden><input type="checkbox" id="cost-manual"> Use my own prices below instead of Octopus (for the payback and battery control)</label>
       <p class="locked-note" id="costs-octopus" hidden>Prices come from your Octopus account, so only the battery's price is used from here.</p>
+      <p class="locked-note" id="costs-octopus-wait" hidden>Octopus is connected but its prices haven't loaded yet, so these typed prices are used for now. See <b>Electricity prices</b> for why.</p>
+      <label for="cost-battery">What you paid for the battery (£)</label>
+      <input id="cost-battery" type="number" min="0" step="1" inputmode="decimal">
       <div class="row">
         <div><label for="cost-battery">What you paid (£)</label><input id="cost-battery" type="number" min="0" step="1" inputmode="decimal"></div>
         <div><label for="cost-installed">Installed on</label><input id="cost-installed" type="date"></div>
@@ -178,12 +182,100 @@
       <p class="note" id="tariff-empty">Connect your Octopus account to track your tariff's prices, use them for the battery payback, and see the cheapest times to charge. Agile, Go, Intelligent Go, Cosy, Flux and fixed tariffs all work.</p>
       <p class="setup-msg error" id="tariff-error" hidden></p>
       <dl class="facts" id="tariff-facts"></dl>
+      <details id="tariff-diag" hidden>
+        <summary>Details for troubleshooting</summary>
+        <pre class="diag" id="tariff-diag-text"></pre>
+      </details>
       <div id="tariff-detail" hidden>
         <div class="chart-box short"><canvas id="price-chart" aria-label="Upcoming electricity prices"></canvas></div>
         <h3>Suggested battery times</h3>
         <ul class="windows" id="tariff-windows"></ul>
         <p class="note">Suggestions only: the dashboard doesn't change your battery. Charging from the grid only pays when the cheap price is below the dear one after about 10% round-trip losses.</p>
       </div>
+    </section>
+
+    <section class="card" id="control-card">
+      <div class="card-head">
+        <h2>Battery control</h2>
+        <span class="pill" id="control-mode"></span>
+      </div>
+      <p class="control-now" id="control-now">–</p>
+      <p class="setup-msg error" id="control-error" hidden></p>
+      <form id="control-form" class="control-form" novalidate>
+        <label class="compare"><input type="checkbox" id="control-enabled"> Let the dashboard control the battery in cheap hours</label>
+        <label class="compare"><input type="checkbox" id="control-hold"> Don't discharge while electricity is cheap (the house uses grid power instead)</label>
+        <label class="compare"><input type="checkbox" id="control-charge"> Also charge from the grid in the cheapest hours</label>
+        <div class="row">
+          <div><label for="control-power">Charge power (W)</label><input id="control-power" type="number" min="100" max="5000" step="100"></div>
+          <div><label for="control-target">Stop charging at (%)</label><input id="control-target" type="number" min="20" max="100" step="5"></div>
+        </div>
+        <div class="dialog-actions"><button type="submit" class="primary">Save</button></div>
+      </form>
+      <p class="note">Cheap hours come from your Octopus prices (or the off-peak hours in Edit costs). Outside them, and whenever control is off or the dashboard stops, the battery goes back to the mode it was in from the Anker app. Changing the mode in the app makes the dashboard stand back until the next cheap window.</p>
+      <details>
+        <summary>Activity</summary>
+        <ul class="activity" id="control-log"></ul>
+      </details>
+    </section>
+
+    <section class="card" id="care-card">
+      <div class="card-head">
+        <h2>Battery care</h2>
+        <p class="today" id="care-cycles"></p>
+      </div>
+      <ul class="tips" id="care-tips"></ul>
+    </section>
+
+    <section class="card" id="compare-card">
+      <div class="card-head">
+        <h2>Compare tariffs</h2>
+        <div class="compare-actions">
+          <label for="compare-region" class="muted">Region</label>
+          <select id="compare-region">
+            <option value="">Your Octopus region</option>
+            <option value="A">Eastern England</option><option value="B">East Midlands</option><option value="C">London</option>
+            <option value="D">Merseyside and North Wales</option><option value="E">West Midlands</option><option value="F">North Eastern England</option>
+            <option value="G">North Western England</option><option value="H">Southern England</option><option value="J">South Eastern England</option>
+            <option value="K">South Wales</option><option value="L">South Western England</option><option value="M">Yorkshire</option>
+            <option value="N">Southern Scotland</option><option value="P">Northern Scotland</option>
+          </select>
+          <button type="button" class="secondary" id="compare-run">Compare</button>
+        </div>
+      </div>
+      <p class="note" id="compare-intro">Replays your recorded home use and solar against other tariffs, with the battery run to suit each one, and estimates a year's cost.</p>
+      <p class="setup-msg" id="compare-msg" role="status" aria-live="polite"></p>
+      <div class="table-wrap" id="compare-result" hidden>
+        <table id="compare-table">
+          <thead><tr><th>Tariff</th><th>A year</th><th>vs now</th><th>Export</th><th>Notes</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="note" id="compare-summary"></p>
+      <details id="compare-assumptions" hidden>
+        <summary>How this is worked out</summary>
+        <ul class="note" id="compare-assumption-list"></ul>
+      </details>
+      <details>
+        <summary>Add your own tariffs (E.ON, EDF or any other)</summary>
+        <ul class="tips" id="custom-list"></ul>
+        <form id="custom-form" class="control-form" novalidate>
+          <div class="preset-row" id="custom-presets"></div>
+          <div><label for="custom-name">Name</label><input id="custom-name" class="text" maxlength="60" placeholder="e.g. E.ON Next Drive"></div>
+          <div class="row">
+            <div><label for="custom-peak">Peak price (p)</label><input id="custom-peak" type="number" step="0.01" min="0"></div>
+            <div><label for="custom-offpeak">Off-peak price (p)</label><input id="custom-offpeak" type="number" step="0.01" min="0"></div>
+          </div>
+          <div class="row">
+            <div><label for="custom-from">Off-peak from</label><input id="custom-from" type="time" step="1800" value="00:00"></div>
+            <div><label for="custom-to">Off-peak until</label><input id="custom-to" type="time" step="1800" value="07:00"></div>
+          </div>
+          <div class="row">
+            <div><label for="custom-export">Export price (p)</label><input id="custom-export" type="number" step="0.01" min="0"></div>
+            <div><label for="custom-standing">Standing charge (p a day)</label><input id="custom-standing" type="number" step="0.01" min="0"></div>
+          </div>
+          <div class="dialog-actions"><button type="submit" class="secondary">Add tariff</button></div>
+        </form>
+      </details>
     </section>
 
     <section class="card" id="payback-card">

@@ -94,6 +94,13 @@ class ConnectionStore:
         data["tariff"] = tariff
         self._write(data)
 
+    def load_section(self, name: str) -> dict:
+        value = self._read().get(name)
+        return value if isinstance(value, dict) else {}
+
+    def save_section(self, name: str, value: dict) -> None:
+        data = self._read()
+        data[name] = value
     def load_lifetime(self) -> dict | None:
         return self._read().get("lifetime") or None
 
