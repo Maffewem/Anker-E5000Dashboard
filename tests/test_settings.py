@@ -87,3 +87,11 @@ def test_env_locks_settings(client, monkeypatch):
     assert client.get("/api/settings").json()["battery"]["locked"] is True
     assert client.get("/api/settings").json()["meter"]["locked"] is False
     assert client.post("/api/settings/battery?skip_test=true", json={"host": "127.0.0.1"}).status_code == 409
+
+
+def test_index_versions_assets(client):
+    # Fresh asset URLs per image stop a cached app.js calling an old API.
+    res = client.get("/")
+    assert res.headers["cache-control"] == "no-cache"
+    assert "{{version}}" not in res.text
+    assert '/static/app.js?v=' in res.text

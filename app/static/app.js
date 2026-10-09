@@ -467,7 +467,32 @@ for (const btn of document.querySelectorAll(".range button[data-hours]")) {
   });
 }
 
-matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { refreshHistory(); refreshEnergy(); });
+// ---------- Theme ----------
+
+const darkQuery = matchMedia("(prefers-color-scheme: dark)");
+const isDark = () => document.documentElement.dataset.theme === "dark"
+  || (document.documentElement.dataset.theme !== "light" && darkQuery.matches);
+
+function showTheme() {
+  const dark = isDark();
+  const label = dark ? "Switch to light mode" : "Switch to dark mode";
+  const btn = $("theme-toggle");
+  btn.classList.toggle("is-dark", dark);
+  btn.setAttribute("aria-label", label);
+  btn.title = label;
+}
+
+$("theme-toggle").addEventListener("click", () => {
+  const theme = isDark() ? "light" : "dark";
+  document.documentElement.dataset.theme = theme;
+  try { localStorage.setItem("theme", theme); } catch (_) {}
+  showTheme();
+  refreshHistory();
+  refreshEnergy();
+});
+
+darkQuery.addEventListener("change", () => { showTheme(); refreshHistory(); refreshEnergy(); });
+showTheme();
 
 refreshLive();
 refreshHistory();
