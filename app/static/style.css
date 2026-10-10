@@ -219,7 +219,6 @@ dialog input:focus-visible { outline: 2px solid var(--solar); outline-offset: 1p
 .tips li.good { border-color: var(--good); }
 .tips b { display: block; font-size: 14px; }
 .tips span { color: var(--text-secondary); }
-.diag { font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-secondary); margin: 8px 0 0; }
 .compare-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
 .compare-actions select { font: inherit; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--page); color: var(--text-primary); }
 .control-form input.text, .control-form input[type=time] { width: 100%; font: inherit; font-size: 16px; padding: 8px 10px; border-radius: 8px;

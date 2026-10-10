@@ -453,7 +453,6 @@ function renderManualTariff() {
   const flat = t.peak_rate === t.offpeak_rate;
   $("tariff-empty").hidden = true;
   $("tariff-error").hidden = true;
-  $("tariff-diag").hidden = true;
   $("tariff-detail").hidden = true;
   $("tariff-manual").hidden = false;
   $("tariff-manual").textContent = `Prices you entered in Edit costs${payback.supplier === "other" ? "" : ` for ${name}`}. `
@@ -620,11 +619,10 @@ function renderOctopus(o) {
   $("open-octopus").textContent = o.configured ? "Octopus settings" : "Connect Octopus";
   $("tariff-empty").hidden = o.configured;
   $("tariff-error").hidden = !o.last_error;
-  $("tariff-error").textContent = o.last_error ? `Couldn't update from Octopus: ${o.last_error}` : "";
-  $("tariff-diag").hidden = !(o.configured || o.last_error);
-  $("tariff-diag-text").textContent = JSON.stringify({ account: o.account, import: o.import && o.import.tariff,
-    export: o.export && o.export.tariff, last_sync: o.last_sync && new Date(o.last_sync * 1000).toISOString(),
-    error: o.last_error, ...o.diagnostics }, null, 2);
+  // Only when a sync fails: the error plus what's needed to look into it. The full steps are in the container log.
+  const known = [o.import && o.import.tariff, o.last_sync && `last updated ${new Date(o.last_sync * 1000).toLocaleString()}`].filter(Boolean);
+  $("tariff-error").textContent = o.last_error
+    ? `Couldn't update from Octopus: ${o.last_error}${known.length ? ` (${known.join(", ")})` : ""}` : "";
   const ready = o.configured && o.import;
   $("tariff-detail").hidden = !ready || !(o.prices && o.prices.length);
   if (!ready) { $("tariff-facts").replaceChildren(); return; }
