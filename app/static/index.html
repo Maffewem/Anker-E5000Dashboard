@@ -115,7 +115,7 @@
   <dialog id="login" aria-labelledby="login-title">
     <form id="login-form" method="dialog" novalidate>
       <h2 id="login-title">Sign in to make changes</h2>
-      <p class="dialog-intro">Use the password set as <code>ADMIN_PASSWORD</code> in the container settings.</p>
+      <p class="dialog-intro">Viewing is open to everyone; changes need the dashboard password.</p>
       <label for="login-password">Password</label>
       <input id="login-password" type="password" autocomplete="current-password">
       <p class="setup-msg" id="login-msg" role="status" aria-live="polite"></p>
@@ -123,6 +123,30 @@
         <button type="button" class="secondary" id="login-cancel">Cancel</button>
         <button type="submit" class="primary">Sign in</button>
       </div>
+    </form>
+  </dialog>
+
+  <dialog id="pw" aria-labelledby="pw-title">
+    <form id="pw-form" method="dialog" novalidate>
+      <h2 id="pw-title">Dashboard password</h2>
+      <p class="dialog-intro" id="pw-intro"></p>
+      <div id="pw-current-row">
+        <label for="pw-current">Current password</label>
+        <input id="pw-current" type="password" autocomplete="current-password">
+      </div>
+      <div id="pw-new-rows">
+        <label for="pw-new">New password (at least 8 characters)</label>
+        <input id="pw-new" type="password" autocomplete="new-password">
+        <label for="pw-confirm">Type it again</label>
+        <input id="pw-confirm" type="password" autocomplete="new-password">
+      </div>
+      <p class="setup-msg" id="pw-msg" role="status" aria-live="polite"></p>
+      <div class="dialog-actions">
+        <button type="button" class="secondary" id="pw-cancel">Close</button>
+        <button type="button" class="secondary" id="pw-signout">Sign out</button>
+        <button type="submit" class="primary" id="pw-save">Set password</button>
+      </div>
+      <button type="button" class="link" id="pw-remove">Remove the password</button>
     </form>
   </dialog>
 

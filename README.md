@@ -42,7 +42,7 @@ You don't need to edit the compose file. Set any of these as **Environment varia
 
 **Connect Octopus** on the dashboard |
 | `CONTROL_LIVE` | `0` | Set to `1` to let **Battery control** write to the battery. Until then it's a dry run that only logs what it would do |
-| `ADMIN_PASSWORD` | – | Locks every change (settings, battery control, mode, schedules, Octopus, costs) and the full backup behind this password. Viewing stays open. See **Security** below |
+| `ADMIN_PASSWORD` | – | Instead of setting a password with the padlock on the dashboard. Locks every change (settings, battery control, mode, schedules, Octopus, costs) and the full backup behind this password. Viewing stays open. See **Security** below |
 | `READ_ONLY` | `false` | `true` turns every change off, even for you. Recording and battery control carry on with the settings they already have |
 | `PORT` | `8080` | Port inside the container. Only needed with `docker-compose.host.yml` |
 | `RELAY_METER` | `false` | `true` shares the Smart Meter with Home Assistant (see below) |
@@ -86,7 +86,7 @@ To do this it puts the battery in Anker's third-party control mode. Outside chea
 
 Out of the box the dashboard trusts everyone who can reach it, which is fine on your home network. Anyone who can open it can also change the battery's mode and schedules, so before you make it reachable from anywhere else:
 
-- **Set `ADMIN_PASSWORD`** on the stack (a long one, it's the only thing between the internet and your battery). The dashboard is still viewable, but a padlock appears at the top and the edit buttons disappear until you sign in with it. Signing in lasts 30 days, or until the container restarts. After 5 wrong passwords from one address, that address has to wait 15 minutes. Or **set `READ_ONLY=true`** if nobody should change anything from the dashboard at all; change the stack's variables to make changes instead.
+- **Set a password**: click the padlock at the top of the dashboard, or set `ADMIN_PASSWORD` on the stack. Use a long one; it's the only thing between the internet and your battery. The dashboard is still viewable, but the edit buttons disappear until you sign in. Signing in lasts 30 days, or until the container restarts. After 5 wrong passwords from one address, that address has to wait 15 minutes. A password set on the dashboard is kept only as a salted scrypt hash in `auth.json` on the data volume, and changing or removing it needs the current one. Forgot it? In Portainer open the container's **Console**, run `rm /data/auth.json`, and restart the container (or set `ADMIN_PASSWORD`, which always wins and stops the dashboard changing it). Or **set `READ_ONLY=true`** if nobody should change anything from the dashboard at all; change the stack's variables to make changes instead.
 - **Put it behind a reverse proxy with HTTPS** (Nginx Proxy Manager, Caddy, Traefik or a Cloudflare Tunnel), and publish only that. Without HTTPS the password crosses the internet in plain text. Don't forward the dashboard's port (`HOST_PORT`) or the relay's (`RELAY_HOST_PORT`, 502) straight from your router.
 - Better still, keep it private and reach it over a VPN such as Tailscale or WireGuard, or put the proxy's own login (Cloudflare Access, Authelia) in front as well.
 

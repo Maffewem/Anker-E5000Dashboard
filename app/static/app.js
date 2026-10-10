@@ -1507,7 +1507,8 @@ $("open-setup").addEventListener("click", () => openSetup("battery"));
 $("banner-setup").addEventListener("click", () => openSetup("battery"));
 
 // ---------- Lock ----------
-// With ADMIN_PASSWORD set, changes need signing in; with READ_ONLY they're off.
+// With a password (ADMIN_PASSWORD or one set here), changes need signing in;
+// with READ_ONLY they're off.
 // The server enforces both; this only hides the controls that would fail.
 
 let auth = { password_set: false, read_only: false, signed_in: false, can_edit: true, csrf: null };
@@ -1517,10 +1518,11 @@ function applyAuth(a) {
   document.body.classList.toggle("locked", !a.can_edit);
   $("control-fields").disabled = !a.can_edit;
   const btn = $("lock-btn");
-  btn.hidden = !a.password_set && !a.read_only;
+  btn.hidden = false;
   btn.classList.toggle("open", a.can_edit);
   const label = a.read_only ? "Read-only: changes are turned off in the container settings"
-    : a.signed_in ? "Signed in. Click to sign out" : "Locked. Click to sign in and make changes";
+    : !a.password_set ? "Unlocked: anyone can make changes. Click to set a password"
+    : a.signed_in ? "Signed in. Click to sign out or change the password" : "Locked. Click to sign in and make changes";
   btn.title = label;
   btn.setAttribute("aria-label", label);
 }
@@ -1529,13 +1531,61 @@ async function refreshAuth() {
   try { applyAuth(await (await fetch("/api/auth", { cache: "no-store" })).json()); } catch (_) {}
 }
 
-$("lock-btn").addEventListener("click", async () => {
-  if (auth.read_only) return;
-  if (auth.signed_in) {
-    try { applyAuth(await (await fetch("/api/auth/logout", { method: "POST" })).json()); } catch (_) {}
-    refreshOctopus();
+const FORGOT = " If you forget it, delete auth.json from the data volume and restart the container.";
+
+function openPassword() {
+  const env = auth.password_source === "env";
+  $("pw-intro").textContent = env ? "The password is set by ADMIN_PASSWORD in the container settings. Change it there."
+    : auth.password_set ? "Changes are locked behind this password. Change it here, or remove it to unlock the dashboard." + FORGOT
+    : "Anyone who can open the dashboard can change its settings and the battery. Set a password to lock changes; viewing stays open." + FORGOT;
+  $("pw-current-row").hidden = env || !auth.password_set;
+  $("pw-new-rows").hidden = env;
+  $("pw-save").hidden = env;
+  $("pw-save").textContent = auth.password_set ? "Change password" : "Set password";
+  $("pw-remove").hidden = env || !auth.password_set;
+  $("pw-signout").hidden = !auth.signed_in;
+  for (const id of ["pw-current", "pw-new", "pw-confirm"]) $(id).value = "";
+  $("pw-msg").textContent = "";
+  $("pw").showModal();
+}
+
+async function sendPassword(body) {
+  try {
+    applyAuth(await postSettings("/api/auth/password", body));
+    $("pw").close();
+  } catch (err) {
+    $("pw-msg").className = "setup-msg error";
+    $("pw-msg").textContent = err.message;
+  }
+}
+
+$("pw-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  if ($("pw-new").value !== $("pw-confirm").value) {
+    $("pw-msg").className = "setup-msg error";
+    $("pw-msg").textContent = "The two new passwords don't match.";
     return;
   }
+  sendPassword({ current: $("pw-current").value, new: $("pw-new").value });
+});
+$("pw-remove").addEventListener("click", () => {
+  if (!$("pw-current").value) {
+    $("pw-msg").className = "setup-msg error";
+    $("pw-msg").textContent = "Enter the current password to remove it.";
+    return;
+  }
+  sendPassword({ current: $("pw-current").value, new: "" });
+});
+$("pw-signout").addEventListener("click", async () => {
+  try { applyAuth(await (await fetch("/api/auth/logout", { method: "POST" })).json()); } catch (_) {}
+  $("pw").close();
+  refreshOctopus();
+});
+$("pw-cancel").addEventListener("click", () => $("pw").close());
+
+$("lock-btn").addEventListener("click", async () => {
+  if (auth.read_only) return;
+  if (!auth.password_set || auth.signed_in) { openPassword(); return; }
   $("login-msg").textContent = "";
   $("login-password").value = "";
   $("login").showModal();
