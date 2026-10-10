@@ -36,6 +36,9 @@
     <form id="costs-form" method="dialog" novalidate>
       <h2 id="costs-title">Battery costs</h2>
       <p class="dialog-intro">Prices in pence per kWh, as on your bill. For a single-rate tariff, use the same price for peak and off-peak.</p>
+      <label for="cost-supplier">Energy supplier</label>
+      <select id="cost-supplier" class="supplier-select"></select>
+      <div id="cost-preset-row" hidden><label for="cost-preset">Tariff</label><select id="cost-preset"></select></div>
       <label class="compare" id="costs-manual-row" hidden><input type="checkbox" id="cost-manual"> Use my own prices below instead of Octopus (for the payback and battery control)</label>
       <p class="locked-note" id="costs-octopus" hidden>Prices come from your Octopus account, so only the battery's price is used from here.</p>
       <p class="locked-note" id="costs-octopus-wait" hidden>Octopus is connected but its prices haven't loaded yet, so these typed prices are used for now. See <b>Electricity prices</b> for why.</p>
@@ -145,6 +148,11 @@
           <div><label for="setup-unit">Unit id</label><input id="setup-unit" name="unit_id" type="number" min="0" max="247" value="1"></div>
         </div>
       </details>
+      <div id="setup-supplier-row" hidden>
+        <label for="setup-supplier">Energy supplier</label>
+        <select id="setup-supplier" class="supplier-select"></select>
+        <p class="note">Octopus prices are read from your account. With any other supplier you type your prices into <b>Edit costs</b>.</p>
+      </div>
       <p class="locked-note" id="setup-locked" hidden>This address is set by <code id="setup-env">SOLARBANK_HOST</code> in the container settings. Remove that variable from your stack to change it here.</p>
       <p class="setup-msg" id="setup-msg" role="status" aria-live="polite"></p>
       <div class="dialog-actions">
@@ -232,7 +240,9 @@
       <div class="card-head">
         <h2>Electricity prices</h2>
         <button type="button" class="secondary edit" id="open-octopus">Connect Octopus</button>
+        <button type="button" class="secondary edit" id="tariff-edit-costs" hidden>Edit prices</button>
       </div>
+      <p class="note" id="tariff-manual" hidden></p>
       <p class="note" id="tariff-empty">Connect your Octopus account to track your tariff's prices, use them for the battery payback, and see the cheapest times to charge. Agile, Go, Intelligent Go, Cosy, Flux and fixed tariffs all work.</p>
       <p class="setup-msg error" id="tariff-error" hidden></p>
       <dl class="facts" id="tariff-facts"></dl>
@@ -253,7 +263,7 @@
         <div class="compare-actions">
           <label for="compare-region" class="muted">Region</label>
           <select id="compare-region">
-            <option value="">Your Octopus region</option>
+            <option value="" id="compare-region-default">Your Octopus region</option>
             <option value="A">Eastern England</option><option value="B">East Midlands</option><option value="C">London</option>
             <option value="D">Merseyside and North Wales</option><option value="E">West Midlands</option><option value="F">North Eastern England</option>
             <option value="G">North Western England</option><option value="H">Southern England</option><option value="J">South Eastern England</option>
@@ -338,10 +348,10 @@
       </div>
       <form id="control-form" class="control-form control-section" novalidate>
         <h3>Cheap hours</h3>
-        <p class="hint">Uses your Octopus prices, or the off-peak hours in Edit costs. Schedules win when they overlap.</p>
+        <p class="hint" id="cheap-hint">Uses your Octopus prices, or the off-peak hours in Edit costs. Schedules win when they overlap.</p>
         <label class="compare"><input type="checkbox" id="control-hold"> Don't discharge while electricity is cheap (the house uses grid power instead)</label>
         <label class="compare"><input type="checkbox" id="control-charge"> Also charge from the grid in the cheapest hours</label>
-        <label class="compare"><input type="checkbox" id="control-dispatch"> On Intelligent Go, charge during any smart-charge slot Octopus adds (even a short one in the day) and don't discharge while it runs</label>
+        <label class="compare" id="control-dispatch-row"><input type="checkbox" id="control-dispatch"> On Intelligent Go, charge during any smart-charge slot Octopus adds (even a short one in the day) and don't discharge while it runs</label>
         <div class="row">
           <div><label for="control-power">Charge power (W)</label><input id="control-power" type="number" min="100" max="5000" step="100"></div>
           <div><label for="control-target">Stop charging at (%)</label><input id="control-target" type="number" min="20" max="100" step="5"></div>

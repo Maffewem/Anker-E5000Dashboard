@@ -55,6 +55,7 @@ EXPORT_FOR = {"agile": "agile_outgoing", "flux": "flux_export"}
 PRESETS = [
     {"name": "E.ON Next Drive", "offpeak_start": "00:00", "offpeak_end": "07:00"},
     {"name": "EDF GoElectric Overnight", "offpeak_start": "00:00", "offpeak_end": "05:00"},
+    {"name": "British Gas Electric Driver", "offpeak_start": "00:00", "offpeak_end": "05:00"},
 ]
 
 

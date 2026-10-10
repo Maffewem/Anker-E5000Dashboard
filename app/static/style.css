@@ -137,6 +137,7 @@ fieldset.plain { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; 
   background: var(--surface); font-size: 14px; }
 @media (max-width: 1120px) { .banner { margin-left: 16px; margin-right: 16px; } }
 .banner[hidden] { display: none; }
+[hidden] { display: none !important; } /* beats display: flex/grid on the same element */
 .banner p::before { content: "⚠ "; color: var(--critical); }
 
 button.primary, button.secondary, .banner button { font: inherit; font-size: 14px; border-radius: 8px; padding: 8px 14px;
@@ -330,3 +331,7 @@ dialog input:disabled { opacity: 0.6; }
 .tl-axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); margin-top: 2px;
   font-variant-numeric: tabular-nums; }
 .timeline .hint { margin: 6px 0 0; }
+
+dialog select { width: 100%; font: inherit; font-size: 16px; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--axis); background: var(--page); color: var(--text-primary); }
+#setup-supplier-row .note { margin-top: 6px; }
