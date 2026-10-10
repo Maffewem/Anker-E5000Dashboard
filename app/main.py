@@ -34,7 +34,7 @@ from .octopus import ECONOMY7_NIGHT, Octopus, tariff_parts, validate as validate
 from .relay import Relay
 from .runtime import PATTERN_DAYS, battery_size, estimate, pattern_from_minutes
 from .storage import EVENT_KINDS, Storage
-from .tariff import Tariff, fixed_profile, payback
+from .tariff import SUPPLIERS, Tariff, fixed_profile, payback
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO").upper(),
@@ -101,8 +101,7 @@ def _make_controller(app: FastAPI, store: ConnectionStore, storage: Storage) -> 
         octopus: Octopus = app.state.octopus
         battery = app.state.collectors["battery"]
         t = Tariff.from_dict(store.load_tariff())
-        status = (octopus.status(battery.snapshot, now)
-                  if octopus.configured and octopus.info and not t.use_manual else None)
+        status = octopus.status(battery.snapshot, now) if _octopus_prices(t) and octopus.info else None
         offpeak = (t.offpeak_start, t.offpeak_end) if t.peak_rate != t.offpeak_rate else None
         mine = schedule_windows(app.state.controller.settings.schedules, storage.tz, now)
         return mine + cheap_windows(status, offpeak, storage.tz, now)
@@ -119,7 +118,7 @@ async def _octopus_loop(app: FastAPI) -> None:
     last_full = -float("inf")
     while True:
         octopus: Octopus = app.state.octopus
-        if octopus.configured:
+        if octopus.configured and _supplier() == "octopus":
             every = OCTOPUS_RETRY_SECONDS if octopus.last_error or not octopus.info else OCTOPUS_SYNC_SECONDS
             if time.monotonic() - last_full >= every:
                 await asyncio.to_thread(octopus.sync)
@@ -274,6 +273,7 @@ class TariffIn(BaseModel):
     export_rate: float = 15.0
     use_manual: bool = False
     installed: str = ""
+    supplier: str = ""
 
 
 @app.get("/api/payback")
@@ -283,7 +283,7 @@ def get_payback() -> dict:
     octopus: Octopus = app.state.octopus
     typed = Tariff.from_dict(store.load_tariff())
     tariff = typed
-    use_octopus = octopus.configured and not typed.use_manual
+    use_octopus = _octopus_prices(typed)
     profile = octopus.profile() if use_octopus else None
     if profile:
         # Octopus prices stand in for the typed ones; only the battery cost is kept.
@@ -292,11 +292,40 @@ def get_payback() -> dict:
     prices = storage.rates() if use_octopus else None
     out = payback(tariff, storage.battery_slots(), datetime.now(storage.tz).date(), prices, _lifetime())
     out["source"] = "octopus" if profile else "manual"
-    out["octopus_connected"] = octopus.configured
+    out["octopus_connected"] = octopus.configured and _supplier(typed) == "octopus"
+    out["supplier"] = _supplier(typed)
+    out["supplier_picked"] = bool(typed.supplier)
+    out["suppliers"] = [{"value": k, **v} for k, v in SUPPLIERS.items()]
     out["use_manual"] = typed.use_manual
     out["manual"] = asdict(typed)  # what was typed, even while Octopus prices are shown
     out["tariff_name"] = (octopus.info.get("import") or {}).get("name") if profile else None
     return out
+
+
+def _supplier(typed: Tariff | None = None) -> str:
+    """Who you buy electricity from: as picked, else Octopus if it's connected."""
+    typed = typed or Tariff.from_dict(app.state.connection_store.load_tariff())
+    return typed.supplier or ("octopus" if app.state.octopus.configured else "other")
+
+
+def _octopus_prices(typed: Tariff) -> bool:
+    """Whether Octopus's prices stand in for the typed ones."""
+    return app.state.octopus.configured and _supplier(typed) == "octopus" and not typed.use_manual
+
+
+class SupplierIn(BaseModel):
+    supplier: str
+
+
+@app.post("/api/supplier")
+def save_supplier(body: SupplierIn) -> dict:
+    store: ConnectionStore = app.state.connection_store
+    try:
+        tariff = Tariff.from_dict({**store.load_tariff(), "supplier": body.supplier}).validate()
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+    store.save_tariff(asdict(tariff))
+    return get_payback()
 
 
 def _lifetime() -> dict | None:
@@ -313,8 +342,10 @@ def _lifetime() -> dict | None:
 
 @app.post("/api/tariff")
 def save_tariff(body: TariffIn) -> dict:
+    data = body.model_dump()
+    data["supplier"] = data["supplier"] or app.state.connection_store.load_tariff().get("supplier", "")
     try:
-        tariff = Tariff(**body.model_dump()).validate()
+        tariff = Tariff(**data).validate()
     except ValueError as err:
         raise HTTPException(status_code=422, detail=str(err)) from err
     app.state.connection_store.save_tariff(asdict(tariff))
@@ -331,6 +362,7 @@ def get_octopus(request: Request) -> dict:
     octopus: Octopus = app.state.octopus
     out = octopus.status(app.state.collectors["battery"].snapshot)
     out["locked"] = app.state.connection_store.octopus_from_env()
+    out["supplier"] = _supplier()
     if out.get("account") and not app.state.auth.can_edit(request):
         out["account"] = out["account"][:4] + "…"  # the API key is never sent; hide the account number from viewers too
     return out
@@ -358,6 +390,9 @@ async def save_octopus(body: OctopusIn, request: Request) -> dict:
         raise HTTPException(status_code=422, detail=octopus.last_error)
     store.save_octopus(api_key, account)
     app.state.octopus = octopus
+    typed = store.load_tariff()
+    if typed.get("supplier") not in (None, "", "octopus"):  # connecting Octopus means you're with Octopus
+        store.save_tariff({**typed, "supplier": "octopus"})
     log.info("Connected Octopus account %s (%s)", account, octopus.info["import"]["name"])
     return get_octopus(request)
 
@@ -430,7 +465,7 @@ def _current_candidate() -> Candidate:
     store: ConnectionStore = app.state.connection_store
     octopus: Octopus = app.state.octopus
     typed = Tariff.from_dict(store.load_tariff())
-    if octopus.configured and octopus.info and not typed.use_manual:
+    if _octopus_prices(typed) and octopus.info:
         rates = app.state.storage.rates()
         imp = {k: v[0] for k, v in rates.items() if v[0] is not None}
         exp = {k: v[1] for k, v in rates.items() if v[1] is not None}

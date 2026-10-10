@@ -38,7 +38,9 @@ You don't need to edit the compose file. Set any of these as **Environment varia
 | `RETENTION_DAYS` | `365` | Days of history to keep (`0` keeps everything) |
 | `POLL_SECONDS` | `5` | How often to read the devices |
 | `SOLARBANK_HOST`, `METER_HOST` | – | Set an address here instead of on the setup screen. The setup screen then shows it read-only |
-| `OCTOPUS_API_KEY`, `OCTOPUS_ACCOUNT` | – | Your Octopus Energy API key and account number, instead of entering them with **Connect Octopus** on the dashboard |
+| `OCTOPUS_API_KEY`, `OCTOPUS_ACCOUNT` | – | Your Octopus Energy API key and account number, instead of entering them with **Energy supplier** is asked in first-run setup and can be changed in **Edit costs**: Octopus Energy, E.ON Next, EDF, British Gas or Other. Only Octopus has a price feed, so the Octopus parts (Connect Octopus, Intelligent Go slots) only show when it's picked. With any other supplier you type your prices into **Edit costs**, where the supplier's EV tariffs fill in their off-peak hours, and those prices drive the payback and battery control. The tariff comparison works for everyone. Existing installs count as Octopus if it's connected, otherwise Other.
+
+**Connect Octopus** on the dashboard |
 | `CONTROL_LIVE` | `0` | Set to `1` to let **Battery control** write to the battery. Until then it's a dry run that only logs what it would do |
 | `ADMIN_PASSWORD` | – | Locks every change (settings, battery control, mode, schedules, Octopus, costs) and the full backup behind this password. Viewing stays open. See **Security** below |
 | `READ_ONLY` | `false` | `true` turns every change off, even for you. Recording and battery control carry on with the settings they already have |

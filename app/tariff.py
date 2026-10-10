@@ -22,6 +22,17 @@ SPREAD = 0.25
 MAX_DAYS = 50 * 365
 
 
+# Energy suppliers you can pick. Only Octopus has a price feed; the others use
+# the prices typed into Edit costs, with their off-peak windows as presets.
+SUPPLIERS = {
+    "octopus": {"name": "Octopus Energy", "presets": []},
+    "eon": {"name": "E.ON Next", "presets": [{"name": "Next Drive", "offpeak_start": "00:00", "offpeak_end": "07:00"}]},
+    "edf": {"name": "EDF", "presets": [{"name": "GoElectric Overnight", "offpeak_start": "00:00", "offpeak_end": "05:00"}]},
+    "british_gas": {"name": "British Gas", "presets": [{"name": "Electric Driver", "offpeak_start": "00:00", "offpeak_end": "05:00"}]},
+    "other": {"name": "Other", "presets": []},
+}
+
+
 @dataclass(frozen=True)
 class Tariff:
     battery_cost: float = 0.0  # what was paid for the battery, in pounds
@@ -32,6 +43,7 @@ class Tariff:
     export_rate: float = 15.0  # p/kWh paid for export; what solar charging gives up
     use_manual: bool = False  # use these prices even when Octopus is connected
     installed: str = ""  # ISO date the battery was installed; lets its lifetime totals count
+    supplier: str = ""  # one of SUPPLIERS; empty until picked (then Octopus if connected, else other)
 
     @classmethod
     def from_dict(cls, data: dict | None) -> "Tariff":
@@ -46,6 +58,8 @@ class Tariff:
         for name in ("offpeak_start", "offpeak_end"):
             if not TIME_RE.match(getattr(self, name)):
                 raise ValueError("Off-peak times must look like 00:30")
+        if self.supplier and self.supplier not in SUPPLIERS:
+            raise ValueError("Pick an energy supplier from the list")
         if self.installed:
             try:
                 installed = date.fromisoformat(self.installed)

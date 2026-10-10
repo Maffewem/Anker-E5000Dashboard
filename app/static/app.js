@@ -419,8 +419,85 @@ function durationRange(low, high) {
   return a === b ? `${a} month${a === 1 ? "" : "s"}` : `${a} to ${b} months`;
 }
 
+// ---------- Energy supplier ----------
+// Only Octopus has a price feed. With anyone else the Octopus parts are
+// hidden and the typed prices (with that supplier's off-peak presets) are used.
+const isOctopus = () => !payback || payback.supplier === "octopus";
+
+function fillSuppliers(sel) {
+  if (sel.options.length || !payback) return;
+  for (const s of payback.suppliers) sel.append(new Option(s.name, s.value));
+}
+
+function applySupplier() {
+  const oct = isOctopus();
+  for (const sel of document.querySelectorAll(".supplier-select")) {
+    fillSuppliers(sel);
+    if (sel !== document.activeElement) sel.value = payback.supplier;
+  }
+  $("open-octopus").hidden = !oct;
+  $("tariff-edit-costs").hidden = oct;
+  $("control-dispatch-row").hidden = !oct;
+  $("cheap-hint").textContent = oct
+    ? "Uses your Octopus prices, or the off-peak hours in Edit costs. Schedules win when they overlap."
+    : "Uses the off-peak hours in Edit costs. Schedules win when they overlap.";
+  $("compare-region-default").textContent = oct ? "Your Octopus region" : "London (pick your region)";
+  if (!oct) renderManualTariff();
+  else if (octopus) renderOctopus(octopus);
+}
+
+// The Electricity prices card for suppliers without a price feed: what was typed in.
+function renderManualTariff() {
+  const t = payback.manual || payback.tariff;
+  const name = (payback.suppliers.find((s) => s.value === payback.supplier) || {}).name;
+  const flat = t.peak_rate === t.offpeak_rate;
+  $("tariff-empty").hidden = true;
+  $("tariff-error").hidden = true;
+  $("tariff-diag").hidden = true;
+  $("tariff-detail").hidden = true;
+  $("tariff-manual").hidden = false;
+  $("tariff-manual").textContent = `Prices you entered in Edit costs${payback.supplier === "other" ? "" : ` for ${name}`}. `
+    + "They're used for the battery payback, battery control and the tariff comparison.";
+  factList($("tariff-facts"), [
+    ["Supplier", name],
+    [flat ? "Price" : "Peak price", pence(t.peak_rate)],
+    ...(flat ? [] : [["Off-peak price", `${pence(t.offpeak_rate)} (${t.offpeak_start}–${t.offpeak_end})`]]),
+    ["Export price", pence(t.export_rate)],
+  ]);
+}
+
+async function saveSupplier(value) {
+  try {
+    renderPayback(await postSettings("/api/supplier", { supplier: value }));
+    refreshOctopus();
+    refreshControl();
+  } catch (err) { alert(err.message); }
+}
+$("setup-supplier").addEventListener("change", (e) => saveSupplier(e.target.value));
+$("tariff-edit-costs").addEventListener("click", () => $("open-costs").click());
+
+function syncPresets() {
+  const s = payback && payback.suppliers.find((x) => x.value === $("cost-supplier").value);
+  const presets = (s && s.presets) || [];
+  $("cost-preset-row").hidden = !presets.length;
+  $("cost-preset").replaceChildren(new Option("Choose to fill in the off-peak hours", ""),
+    ...presets.map((p, i) => new Option(`${p.name} (off-peak ${p.offpeak_start}–${p.offpeak_end})`, i)));
+  // Octopus prices come from the account; the "use my own prices" switch only makes sense there.
+  $("costs-manual-row").hidden = !(payback && payback.octopus_connected) || $("cost-supplier").value !== "octopus";
+  syncCostInputs();
+}
+$("cost-supplier").addEventListener("change", syncPresets);
+$("cost-preset").addEventListener("change", (e) => {
+  const s = payback.suppliers.find((x) => x.value === $("cost-supplier").value);
+  const p = s && s.presets[Number(e.target.value)];
+  if (!p || e.target.value === "") return;
+  $("cost-from").value = p.offpeak_start;
+  $("cost-to").value = p.offpeak_end;
+});
+
 function renderPayback(p) {
   payback = p;
+  applySupplier();
   const set = p.tariff.battery_cost > 0;
   $("payback-empty").hidden = set;
   $("payback-empty").textContent = p.source === "octopus"
@@ -482,7 +559,9 @@ $("open-costs").addEventListener("click", () => {
     $("cost-peak").value = m.peak_rate; $("cost-offpeak").value = m.offpeak_rate;
     $("cost-from").value = m.offpeak_start; $("cost-to").value = m.offpeak_end; $("cost-export").value = m.export_rate;
   }
-  syncCostInputs();
+  fillSuppliers($("cost-supplier"));
+  $("cost-supplier").value = payback.supplier;
+  syncPresets();
   $("costs-msg").textContent = "";
   $("costs").showModal();
 });
@@ -490,7 +569,7 @@ $("costs-cancel").addEventListener("click", () => $("costs").close());
 const KEYS = { "cost-battery": "battery_cost", "cost-peak": "peak_rate", "cost-offpeak": "offpeak_rate",
   "cost-from": "offpeak_start", "cost-to": "offpeak_end", "cost-export": "export_rate" };
 function syncCostInputs() {
-  const connected = Boolean(payback && payback.octopus_connected);
+  const connected = Boolean(payback && payback.octopus_connected) && $("cost-supplier").value === "octopus";
   const manual = $("cost-manual").checked;
   const fromOctopus = connected && !manual && payback.source === "octopus";
   $("costs-octopus").hidden = !fromOctopus;
@@ -508,7 +587,7 @@ $("costs-form").addEventListener("submit", async (e) => {
     const p = await postSettings("/api/tariff", {
       battery_cost: num("cost-battery"), installed: $("cost-installed").value, peak_rate: num("cost-peak"), offpeak_rate: num("cost-offpeak"),
       offpeak_start: time("cost-from", "00:00"), offpeak_end: time("cost-to", "00:00"), export_rate: num("cost-export"),
-      use_manual: $("cost-manual").checked,
+      use_manual: $("cost-manual").checked, supplier: $("cost-supplier").value,
     });
     renderPayback(p);
     $("costs").close();
@@ -536,6 +615,8 @@ const WINDOW_LABEL = { charge: "Charge", avoid: "Use battery", export: "Export" 
 
 function renderOctopus(o) {
   octopus = o;
+  if (!isOctopus()) return renderManualTariff();
+  $("tariff-manual").hidden = true;
   $("open-octopus").textContent = o.configured ? "Octopus settings" : "Connect Octopus";
   $("tariff-empty").hidden = o.configured;
   $("tariff-error").hidden = !o.last_error;
@@ -1320,6 +1401,8 @@ function setBusy(busy) {
 
 function showDevice(device) {
   setupDevice = device;
+  // First run only: ask who the supplier is alongside the battery's address.
+  $("setup-supplier-row").hidden = device !== "battery" || !payback || payback.supplier_picked;
   const s = savedSettings[device] || { host: "", port: 502, unit_id: 1, locked: false };
   for (const b of document.querySelectorAll(".device-switch button")) b.setAttribute("aria-pressed", String(b.dataset.device === device));
   for (const el of document.querySelectorAll(".device-label")) el.textContent = DEVICE_LABEL[device];

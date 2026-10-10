@@ -303,3 +303,31 @@ def test_refresh_does_nothing_off_intelligent_go(storage):
     n = len(fake.calls)
     o.refresh_dispatches()
     assert len(fake.calls) == n
+
+
+def test_supplier_picks_whether_octopus_prices_are_used(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    for name in ("SOLARBANK_HOST", "METER_HOST", "OCTOPUS_API_KEY", "OCTOPUS_ACCOUNT"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "solarbank.db"))
+    monkeypatch.setattr(oct, "_urllib_fetch", FakeOctopus())
+    from app.main import app
+
+    with TestClient(app) as c:
+        pb = c.get("/api/payback").json()
+        assert pb["supplier"] == "other" and not pb["supplier_picked"]  # nothing connected yet
+        assert [s["value"] for s in pb["suppliers"]] == ["octopus", "eon", "edf", "british_gas", "other"]
+        eon = c.post("/api/supplier", json={"supplier": "eon"}).json()
+        assert eon["supplier"] == "eon" and eon["supplier_picked"]
+        assert c.post("/api/supplier", json={"supplier": "nobody"}).status_code == 422
+        # Saving costs without naming a supplier keeps the one picked.
+        assert c.post("/api/tariff", json={"battery_cost": 2000, "peak_rate": 27, "offpeak_rate": 7}).json()["supplier"] == "eon"
+        # Connecting Octopus means you're with Octopus, and its prices are used.
+        c.post("/api/octopus", json={"api_key": "sk_live_abcdefghij", "account": "A-1234ABCD"})
+        pb = c.get("/api/payback").json()
+        assert pb["supplier"] == "octopus" and pb["source"] == "octopus"
+        # Picking another supplier switches to the typed prices even with Octopus connected.
+        pb = c.post("/api/supplier", json={"supplier": "edf"}).json()
+        assert pb["source"] == "manual" and not pb["octopus_connected"] and pb["tariff"]["peak_rate"] == 27
+        assert c.get("/api/octopus").json()["supplier"] == "edf"
