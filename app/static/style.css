@@ -278,6 +278,11 @@ dialog input:disabled { opacity: 0.6; }
 #schedule-dialog .dialog-actions { align-items: center; }
 #control-saved { margin: 0; align-self: center; min-height: 0; }
 .footer { text-align: center; font-size: 12px; color: var(--text-muted); padding: 8px 16px 24px; }
+.footer button.link { font-size: 12px; }
+.update-note { max-width: 1088px; margin: 0 auto 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  flex-wrap: wrap; padding: 10px 16px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); font-size: 14px; }
+@media (max-width: 1120px) { .update-note { margin-left: 16px; margin-right: 16px; } }
+.update-actions { display: flex; align-items: center; gap: 12px; }
 
 .device-state { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); margin: 0; }
 .device-state.live .dot { background: var(--good); }

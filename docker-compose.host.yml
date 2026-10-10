@@ -29,6 +29,10 @@ services:
       # to turn changes off. Do one of these before publishing the dashboard.
       ADMIN_PASSWORD: "${ADMIN_PASSWORD:-}"
       READ_ONLY: "${READ_ONLY:-false}"
+      # Portainer stack webhook for "Update now" (or paste it on the dashboard),
+      # and UPDATE_CHECK=false to stop checking GHCR for newer images.
+      UPDATE_WEBHOOK: "${UPDATE_WEBHOOK:-}"
+      UPDATE_CHECK: "${UPDATE_CHECK:-true}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
       # Smart Meter relay: see docker-compose.yml. On host networking the
       # container can't listen on 502 (it doesn't run as root), so the relay
@@ -37,6 +41,9 @@ services:
       RELAY_PORT: "${RELAY_PORT:-5020}"
     volumes:
       - solarbank-data:/data
+    labels:
+      # Lets Watchtower (run with --label-enable) update just this container.
+      com.centurylinklabs.watchtower.enable: "true"
     # It needs no Linux privileges, so drop them all.
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]

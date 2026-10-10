@@ -5,6 +5,11 @@ other than GET/HEAD/OPTIONS) and the full database backup need a signed-in
 session. The session is an HttpOnly, SameSite=Strict cookie, and every change
 must also carry the session's CSRF token in an X-CSRF-Token header.
 
+Without ADMIN_PASSWORD, a password can instead be set on the dashboard. Only
+a salted scrypt hash of it is kept, in auth.json on the data volume; deleting
+that file (and restarting) removes it. ADMIN_PASSWORD always wins, and then
+the dashboard can't change the password.
+
 READ_ONLY=true: refuses every change outright, signed in or not. The
 dashboard keeps recording, and battery control keeps running on the settings
 it already has.
@@ -17,9 +22,12 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
+import logging
 import os
 import secrets
 import time
+from pathlib import Path
 
 from fastapi import HTTPException, Request
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -30,6 +38,10 @@ CSRF_HEADER = "x-csrf-token"
 SESSION_SECONDS = 30 * 86400
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 OPEN_PATHS = {"/api/auth/login", "/api/auth/logout"}  # usable while locked
+MIN_LENGTH = 8
+SCRYPT = {"n": 2**15, "r": 8, "p": 1}  # about 32 MB and a tenth of a second per guess on a Pi
+
+log = logging.getLogger("solarbank.auth")
 MAX_FAILURES = 5  # wrong passwords per address ...
 FAILURE_WINDOW = 15 * 60  # ... within this many seconds, then refused until it passes
 
@@ -38,20 +50,77 @@ def _flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def hash_password(password: str) -> dict:
+    salt = secrets.token_bytes(16)
+    digest = hashlib.scrypt(password.encode(), salt=salt, maxmem=64 * 1024 * 1024, **SCRYPT)
+    return {"scrypt": {**SCRYPT, "salt": salt.hex(), "hash": digest.hex()}}
+
+
+def verify_password(password: str, stored: dict) -> bool:
+    try:
+        s = stored["scrypt"]
+        digest = hashlib.scrypt(password.encode(), salt=bytes.fromhex(s["salt"]), n=int(s["n"]), r=int(s["r"]),
+                                p=int(s["p"]), maxmem=64 * 1024 * 1024)
+        return hmac.compare_digest(digest.hex(), s["hash"])
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 class Auth:
-    def __init__(self, password: str = "", read_only: bool = False) -> None:
-        self.password = password
+    def __init__(self, password: str = "", read_only: bool = False, path: str | None = None) -> None:
+        self.password = password  # from ADMIN_PASSWORD
         self.read_only = read_only
+        self.path = Path(path) if path else None
+        self.stored = self._load() if not password else None  # a hash set on the dashboard
         self._key = secrets.token_bytes(32)
         self._failures: dict[str, list[float]] = {}
 
     @classmethod
-    def from_env(cls) -> "Auth":
-        return cls(os.environ.get("ADMIN_PASSWORD", ""), _flag("READ_ONLY"))
+    def from_env(cls, path: str | None = None) -> "Auth":
+        return cls(os.environ.get("ADMIN_PASSWORD", ""), _flag("READ_ONLY"), path)
+
+    def _load(self) -> dict | None:
+        if not self.path:
+            return None
+        try:
+            data = json.loads(self.path.read_text())
+        except FileNotFoundError:
+            return None
+        except (ValueError, OSError) as err:
+            # Refuse to start unlocked because of a damaged file: nobody could sign in either way,
+            # so say how to reset it.
+            log.error("Can't read %s (%s). Delete it to remove the dashboard password.", self.path, err)
+            return {"scrypt": {}}
+        return data if isinstance(data, dict) and data.get("scrypt") is not None else None
+
+    @property
+    def source(self) -> str | None:
+        """Where the password comes from: "env", "dashboard" or None."""
+        return "env" if self.password else "dashboard" if self.stored else None
 
     @property
     def password_set(self) -> bool:
-        return bool(self.password)
+        return self.source is not None
+
+    def set_password(self, new: str) -> None:
+        """Set, change or (with "") remove the dashboard password. Signs everyone out."""
+        if self.password:
+            raise ValueError("The password is set by ADMIN_PASSWORD in the container settings.")
+        if new and len(new) < MIN_LENGTH:
+            raise ValueError(f"Use at least {MIN_LENGTH} characters.")
+        if len(new) > 1024:
+            raise ValueError("That password is too long.")
+        if new:
+            self.stored = hash_password(new)
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self.stored))
+            tmp.chmod(0o600)
+            tmp.replace(self.path)
+        else:
+            self.stored = None
+            self.path.unlink(missing_ok=True)
+        self._key = secrets.token_bytes(32)
 
     def _sign(self, text: str) -> str:
         return hmac.new(self._key, text.encode(), hashlib.sha256).hexdigest()
@@ -86,6 +155,7 @@ class Auth:
         signed_in = self.signed_in(request)
         return {
             "password_set": self.password_set,
+            "password_source": self.source,
             "read_only": self.read_only,
             "signed_in": signed_in,
             "can_edit": self.can_edit(request),
@@ -98,7 +168,10 @@ class Auth:
         recent = [t for t in self._failures.get(client, []) if now - t < FAILURE_WINDOW]
         if len(recent) >= MAX_FAILURES:
             raise HTTPException(status_code=429, detail="Too many wrong passwords. Try again in 15 minutes.")
-        ok = self.password_set and hmac.compare_digest(password.encode(), self.password.encode())
+        if self.password:
+            ok = hmac.compare_digest(password.encode(), self.password.encode())
+        else:
+            ok = bool(self.stored) and verify_password(password, self.stored)
         if ok:
             self._failures.pop(client, None)
         else:

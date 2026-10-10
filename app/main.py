@@ -34,6 +34,7 @@ from .octopus import ECONOMY7_NIGHT, Octopus, tariff_parts, validate as validate
 from .relay import Relay
 from .runtime import PATTERN_DAYS, battery_size, estimate, pattern_from_minutes
 from .storage import EVENT_KINDS, Storage
+from .updates import CHECK_SECONDS, RETRY_SECONDS, Updates, call_webhook, validate_webhook
 from .tariff import SUPPLIERS, Tariff, fixed_profile, payback
 
 logging.basicConfig(
@@ -130,16 +131,26 @@ async def _octopus_loop(app: FastAPI) -> None:
                             else OCTOPUS_RETRY_SECONDS if octopus.last_error else OCTOPUS_SYNC_SECONDS)
 
 
+async def _update_loop(app: FastAPI) -> None:
+    await asyncio.sleep(60)  # let the dashboard settle first
+    while True:
+        updates: Updates = app.state.updates
+        await asyncio.to_thread(updates.check)
+        await asyncio.sleep(RETRY_SECONDS if updates.error else CHECK_SECONDS)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("Solarbank dashboard version %s (commit %s, built %s)", APP_VERSION, APP_COMMIT[:7] or "unknown",
              APP_BUILT or "unknown")
-    app.state.auth = auth = Auth.from_env()
+    settings = Settings.from_env()
+    app.state.auth = auth = Auth.from_env(str(Path(settings.settings_path).parent / "auth.json"))
     if auth.read_only:
         log.info("READ_ONLY is set: the dashboard can't change anything")
-    elif auth.password_set:
+    elif auth.source == "env":
         log.info("ADMIN_PASSWORD is set: changes need signing in")
-    settings = Settings.from_env()
+    elif auth.source == "dashboard":
+        log.info("A dashboard password is set: changes need signing in")
     storage = Storage(settings.db_path, settings.retention_days, settings.timezone)
     store = ConnectionStore(settings.settings_path)
     collectors = {
@@ -157,6 +168,9 @@ async def lifespan(app: FastAPI):
     app.state.controller = controller
     tasks = [asyncio.create_task(c.run()) for c in collectors.values()]
     tasks.append(asyncio.create_task(_octopus_loop(app)))
+    app.state.updates = Updates(APP_COMMIT)
+    if APP_COMMIT and os.environ.get("UPDATE_CHECK", "true").strip().lower() not in ("0", "false", "no", "off"):
+        tasks.append(asyncio.create_task(_update_loop(app)))
     relay = None
     if settings.relay_meter:
         relay = Relay(collectors["meter"], settings.relay_port)
@@ -210,13 +224,48 @@ async def login(body: LoginIn, request: Request) -> JSONResponse:
         log.warning("Wrong dashboard password from %s", client)
         await asyncio.sleep(1)  # slows guessing
         raise HTTPException(status_code=401, detail="Wrong password")
+    log.info("Signed in from %s", client)
+    return _session_response(auth.status(request), request)
+
+
+class PasswordIn(BaseModel):
+    current: str = ""
+    new: str = ""
+
+
+def _session_response(out: dict, request: Request) -> JSONResponse:
+    """A response that signs this browser in with a new session."""
+    auth: Auth = app.state.auth
     token = auth.new_session()
-    out = {**auth.status(request), "signed_in": True, "can_edit": not auth.read_only, "csrf": auth.csrf_for(token)}
-    response = JSONResponse(out)
+    response = JSONResponse({**out, "signed_in": True, "can_edit": not auth.read_only, "csrf": auth.csrf_for(token)})
     secure = request.url.scheme == "https" or request.headers.get("x-forwarded-proto", "").startswith("https")
     response.set_cookie(COOKIE, token, max_age=SESSION_SECONDS, httponly=True, samesite="strict", secure=secure)
-    log.info("Signed in from %s", client)
     return response
+
+
+@app.post("/api/auth/password")
+async def set_password(body: PasswordIn, request: Request) -> JSONResponse:
+    """Set, change or remove the dashboard password (not ADMIN_PASSWORD).
+
+    Setting the first one works while the dashboard is unlocked, which is
+    already anyone on the network. Changing or removing one needs signing
+    in (the lock middleware checks that) and the current password too.
+    """
+    auth: Auth = app.state.auth
+    if auth.source == "env":
+        raise HTTPException(status_code=409, detail="The password is set by ADMIN_PASSWORD in the container settings.")
+    client = request.client.host if request.client else "unknown"
+    if auth.password_set and not auth.check_password(client, body.current[:1024]):
+        await asyncio.sleep(1)
+        raise HTTPException(status_code=401, detail="The current password is wrong")
+    try:
+        auth.set_password(body.new)
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+    log.info("Dashboard password %s from %s", "set" if body.new else "removed", client)
+    if not body.new:
+        return JSONResponse(auth.status(request))
+    return _session_response(auth.status(request), request)
 
 
 @app.post("/api/auth/logout")
@@ -241,6 +290,62 @@ def live() -> dict:
             "relay_port": app.state.relay.port if app.state.relay else None,
         },
     }
+
+
+def _webhook() -> tuple[str, bool]:
+    """(Portainer webhook URL, whether it comes from UPDATE_WEBHOOK)."""
+    env = os.environ.get("UPDATE_WEBHOOK", "").strip()
+    if env:
+        return env, True
+    return str(app.state.connection_store.load_section("update").get("webhook") or ""), False
+
+
+@app.get("/api/version")
+def version() -> dict:
+    """This build, the newest published one, and whether one-click updates are set up.
+
+    The webhook URL itself is never sent: anyone holding it can redeploy the stack.
+    """
+    url, from_env = _webhook()
+    return {"running": {"name": APP_VERSION, "commit": APP_COMMIT, "built": APP_BUILT},
+            **app.state.updates.status(), "webhook_set": bool(url), "webhook_locked": from_env}
+
+
+class WebhookIn(BaseModel):
+    url: str = ""
+
+
+@app.post("/api/update/webhook")
+def save_webhook(body: WebhookIn) -> dict:
+    if _webhook()[1]:
+        raise HTTPException(status_code=409, detail="Set by UPDATE_WEBHOOK in the container settings.")
+    url = ""
+    if body.url.strip():
+        try:
+            url = validate_webhook(body.url[:2048])
+        except ValueError as err:
+            raise HTTPException(status_code=422, detail=str(err)) from err
+    app.state.connection_store.save_section("update", {"webhook": url} if url else {})
+    log.info("Update webhook %s", "saved" if url else "removed")
+    return version()
+
+
+@app.post("/api/update")
+async def update_now() -> dict:
+    """Ask Portainer to re-pull the image and recreate this container."""
+    url, _ = _webhook()
+    if not url:
+        raise HTTPException(status_code=409, detail="Add your Portainer webhook in Update settings first.")
+    log.info("Asking Portainer to update the dashboard")
+    call = asyncio.ensure_future(asyncio.to_thread(call_webhook, url))
+    done, _ = await asyncio.wait({call}, timeout=15)
+    # Portainer often answers only once the new container is up, by which time
+    # this one is gone; no answer within 15 s means it's under way.
+    error = call.result() if done else None
+    if error:
+        log.warning("Update failed: %s", error)
+        raise HTTPException(status_code=502, detail=error)
+    return {"started": True}
 
 
 @app.get("/api/runtime")
