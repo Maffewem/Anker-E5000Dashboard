@@ -32,6 +32,31 @@
     </div>
   </header>
 
+  <div class="update-note" id="update-note" role="status" hidden>
+    <span id="update-text"></span>
+    <span class="update-actions">
+      <button type="button" class="secondary edit" id="update-now" hidden>Update now</button>
+      <button type="button" class="link edit" id="update-open">Update settings</button>
+    </span>
+  </div>
+
+  <dialog id="updates" aria-labelledby="updates-title">
+    <form id="updates-form" method="dialog" novalidate>
+      <h2 id="updates-title">Updates</h2>
+      <p class="dialog-intro" id="updates-status"></p>
+      <p class="dialog-intro">For one-click updates, open this stack in Portainer, turn on <b>GitOps updates</b> with the <b>Webhook</b> mechanism and <b>Re-pull image</b> on, and paste the webhook URL it shows here. The dashboard can't update itself without that: it would need full control of Docker.</p>
+      <label for="updates-url">Portainer webhook URL</label>
+      <input id="updates-url" type="password" autocomplete="off" spellcheck="false" placeholder="https://192.168.0.10:9443/api/stacks/webhooks/…">
+      <p class="locked-note" id="updates-locked" hidden>Set by <code>UPDATE_WEBHOOK</code> in the container settings.</p>
+      <p class="setup-msg" id="updates-msg" role="status" aria-live="polite"></p>
+      <div class="dialog-actions">
+        <button type="button" class="secondary" id="updates-cancel">Close</button>
+        <button type="submit" class="primary" id="updates-save">Save</button>
+      </div>
+      <button type="button" class="link" id="updates-remove" hidden>Remove the webhook</button>
+    </form>
+  </dialog>
+
   <dialog id="costs" aria-labelledby="costs-title">
     <form id="costs-form" method="dialog" novalidate>
       <h2 id="costs-title">Battery costs</h2>
@@ -468,7 +493,7 @@
       <p class="note">Minute readings, and the daily totals worked out from them, go back as far as <code>RETENTION_DAYS</code> (a year by default). Battery half hours are kept for good.<span class="edit"> <a href="/api/export/backup" download>Download a full backup</a> of everything recorded (SQLite).</span></p>
     </section>
   </main>
-  <footer class="footer" id="version"></footer>
+  <footer class="footer"><span id="version"></span><span class="edit"> · <button type="button" class="link" id="footer-updates">Updates</button></span></footer>
 
   <script src="/static/vendor/chart.umd.js?v={{version}}"></script>
   <script src="/static/app.js?v={{version}}"></script>

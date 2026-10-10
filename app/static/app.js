@@ -1606,6 +1606,93 @@ $("login-form").addEventListener("submit", async (e) => {
 });
 $("login-cancel").addEventListener("click", () => $("login").close());
 
+// ---------- Updates ----------
+// The server compares its build with the newest published image. "Update now"
+// asks Portainer (through the stack's webhook) to re-pull and recreate it.
+
+let updates = null;
+const buildDate = (d) => (d ? new Date(`${d}T12:00:00Z`).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" }) : "");
+const versionLabel = (v) => (v && v.name ? `v${v.name}` : "a newer version");
+
+function renderUpdates(u) {
+  updates = u;
+  $("update-note").hidden = !u.update_available;
+  if (u.update_available) {
+    const built = buildDate(u.latest.built);
+    $("update-text").textContent = `Update available: ${versionLabel(u.latest)}${built ? `, built ${built}` : ""}.`
+      + (u.webhook_set ? "" : " Re-pull the stack in Portainer to install it.");
+  }
+  $("update-now").hidden = !u.webhook_set;
+}
+
+async function refreshUpdates() {
+  try { renderUpdates(await (await fetch("/api/version", { cache: "no-store" })).json()); } catch (_) {}
+}
+
+function openUpdates() {
+  const u = updates || {};
+  const running = u.running && u.running.name !== "dev" ? `v${u.running.name}` : "a development build";
+  $("updates-status").textContent = `Running ${running}. `
+    + (u.error ? u.error : !u.checked_at ? "Not checked for updates yet."
+      : u.update_available ? `${versionLabel(u.latest)} is available.` : "This is the newest version.");
+  $("updates-url").value = "";
+  $("updates-url").placeholder = u.webhook_set ? "Saved (paste a new one to replace it)" : "https://192.168.0.10:9443/api/stacks/webhooks/…";
+  for (const id of ["updates-url", "updates-save"]) $(id).disabled = Boolean(u.webhook_locked);
+  $("updates-locked").hidden = !u.webhook_locked;
+  $("updates-remove").hidden = !u.webhook_set || u.webhook_locked;
+  $("updates-msg").textContent = "";
+  $("updates").showModal();
+}
+
+async function saveWebhook(url) {
+  try {
+    renderUpdates(await postSettings("/api/update/webhook", { url }));
+    $("updates").close();
+  } catch (err) {
+    $("updates-msg").className = "setup-msg error";
+    $("updates-msg").textContent = err.message;
+  }
+}
+
+async function waitForNewVersion(from) {
+  // The container is replaced while this runs, so failed requests are expected.
+  for (let i = 0; i < 60; i++) {
+    await new Promise((r) => setTimeout(r, 5000));
+    try {
+      const v = (await (await fetch("/api/live", { cache: "no-store" })).json()).version;
+      if (v && v.commit !== from) { location.reload(); return; }
+    } catch (_) {}
+  }
+  $("update-text").textContent = "The update hasn't come through yet. Check the stack in Portainer.";
+  $("update-now").disabled = false;
+}
+
+$("update-now").addEventListener("click", async () => {
+  const from = updates && updates.running && updates.running.commit;
+  $("update-now").disabled = true;
+  $("update-note").hidden = false;
+  $("update-text").textContent = "Updating. The dashboard reloads when the new version is running.";
+  try {
+    await postSettings("/api/update", {});
+  } catch (err) {
+    if (!(err instanceof TypeError)) {  // a TypeError is the connection closing as the container restarts
+      $("update-text").textContent = err.message;
+      $("update-now").disabled = false;
+      return;
+    }
+  }
+  waitForNewVersion(from);
+});
+$("update-open").addEventListener("click", openUpdates);
+$("footer-updates").addEventListener("click", openUpdates);
+$("updates-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  if ($("updates-url").value.trim()) saveWebhook($("updates-url").value.trim());
+  else $("updates").close();
+});
+$("updates-remove").addEventListener("click", () => saveWebhook(""));
+$("updates-cancel").addEventListener("click", () => $("updates").close());
+
 // ---------- Wiring ----------
 
 for (const btn of document.querySelectorAll(".range button[data-hours]")) {
@@ -1691,6 +1778,8 @@ darkQuery.addEventListener("change", () => { showTheme(); refreshHistory(); refr
 showTheme();
 
 refreshAuth().then(refreshLive);
+refreshUpdates();
+setInterval(refreshUpdates, 30 * 60 * 1000);
 refreshHistory();
 refreshEnergy();
 refreshPayback();
