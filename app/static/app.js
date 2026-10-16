@@ -770,6 +770,7 @@ function renderControl(c) {
   schedules = (t.schedules || []).map((s) => ({ ...s }));
   renderSchedules();
   renderModes(c);
+  renderOverride(c);
   syncControlInputs();
   $("control-log").replaceChildren(...(c.log.length ? c.log : [{ text: "Nothing yet." }]).map((e) => {
     const li = document.createElement("li");
@@ -778,6 +779,29 @@ function renderControl(c) {
     return li;
   }));
 }
+
+function renderOverride(c) {
+  const o = c.override;
+  $("override-cancel").hidden = !o;
+  $("override-state").textContent = o
+    ? `${ACTION_LABEL[o.action]} until ${clock(o.until)}${o.action === "hold" ? "" : ` (${o.power_w} W, ${o.action === "charge" ? "up to" : "down to"} ${o.target_soc}%)`}, then back to normal.`
+    : "Charge, hold or discharge for a while without making a schedule. It ends by itself and works even when control is off.";
+}
+
+document.querySelectorAll("[data-override]").forEach((btn) => btn.addEventListener("click", async () => {
+  const action = btn.dataset.override;
+  const minutes = Number($("override-minutes").value);
+  if (action !== "off" && !confirm(`${ACTION_LABEL[action]} the battery now for ${$("override-minutes").selectedOptions[0].text}?`)) return;
+  btn.disabled = true;
+  try {
+    renderControl(await postSettings("/api/control/override", { action, minutes }));
+  } catch (err) {
+    $("control-error").hidden = false;
+    $("control-error").textContent = err.message;
+  } finally {
+    btn.disabled = false;
+  }
+}));
 
 function renderModes(c) {
   const sel = $("mode-select");

@@ -68,7 +68,7 @@ def test_live_hold_then_hand_back(monkeypatch):
     ctl = make(c, {"enabled": True}, store)
     asyncio.run(ctl.tick(IN))
     assert c.writes == [("operating_mode", 3), ("battery_power_setpoint", 0)]
-    assert store["state"] == {"saved_mode": 6, "in_control": True}
+    assert store["state"] == {"saved_mode": 6, "in_control": True, "saved_limits": {}, "override": None}
     asyncio.run(ctl.tick(IN + timedelta(seconds=15)))
     assert len(c.writes) == 2  # nothing new to say
     asyncio.run(ctl.tick(OUT))
@@ -309,6 +309,8 @@ def test_api_schedules_and_mode(tmp_path, monkeypatch):
         assert client.post("/api/control/mode", json={"mode": 0}).status_code == 409  # no battery connected
         saved = app.state.connection_store.load_section("control")
         assert saved["schedules"][0]["days"] == [0, 1, 2, 3, 4]
+        assert client.post("/api/control/override", json={"action": "hold"}).status_code == 409  # no battery connected
+        assert client.post("/api/control/override", json={"action": "off"}).json()["override"] is None
 
 
 # An Intelligent Go top-up Octopus adds in the middle of the day.
@@ -382,3 +384,84 @@ def test_overlapping_schedules_are_rejected():
     with pytest.raises(ValueError, match="overlap"):
         ControlSettings(schedules=(night, late)).validate()
     ControlSettings(schedules=(Schedule("hold", "23:00", "00:30", (6,), 1500, 90, True), night)).validate()  # touching is fine
+
+
+def _charging(collector=None):
+    c = collector or FakeCollector(mode=6, soc=50)
+    c.raw.update({"charging_limit_soc": 100, "discharge_limit_soc": 10})
+    return c, {}
+
+
+def test_charge_narrows_the_batterys_own_limit_then_puts_it_back(monkeypatch):
+    monkeypatch.setenv("CONTROL_LIVE", "1")
+    c, store = _charging()
+    ctl = make(c, {"enabled": True, "grid_charge": True, "charge_target_soc": 80}, store)
+    asyncio.run(ctl.tick(IN))
+    assert ("charging_limit_soc", 80) in c.writes
+    assert store["state"]["saved_limits"] == {"charging_limit_soc": 100}
+    n = len(c.writes)
+    asyncio.run(ctl.tick(IN + timedelta(seconds=15)))
+    assert [w for w in c.writes[n:] if w[0] == "charging_limit_soc"] == []  # said once, not every tick
+    asyncio.run(ctl.tick(OUT))
+    assert c.writes[-1] == ("charging_limit_soc", 100)
+    assert store["state"]["saved_limits"] == {}
+
+
+def test_a_stricter_limit_of_your_own_is_never_widened(monkeypatch):
+    monkeypatch.setenv("CONTROL_LIVE", "1")
+    c, store = _charging()
+    c.raw["charging_limit_soc"] = 70
+    ctl = make(c, {"enabled": True, "grid_charge": True, "charge_target_soc": 90}, store)
+    asyncio.run(ctl.tick(IN))
+    assert ("charging_limit_soc", 70) in c.writes and ("charging_limit_soc", 90) not in c.writes
+
+
+def test_limits_are_restored_after_a_restart(monkeypatch):
+    monkeypatch.setenv("CONTROL_LIVE", "1")
+    c, _ = _charging()
+    store = {"settings": {"enabled": False},
+             "state": {"saved_mode": 6, "in_control": True, "saved_limits": {"charging_limit_soc": 95}}}
+    asyncio.run(make(c, {}, store).tick(IN))
+    assert ("operating_mode", 6) in c.writes and c.writes[-1] == ("charging_limit_soc", 95)
+
+
+def test_limits_can_be_switched_off(monkeypatch):
+    monkeypatch.setenv("CONTROL_LIVE", "1")
+    monkeypatch.setenv("CONTROL_LIMITS", "0")
+    c, store = _charging()
+    asyncio.run(make(c, {"enabled": True, "grid_charge": True}, store).tick(IN))
+    assert not [w for w in c.writes if w[0].endswith("_limit_soc")]
+
+
+def test_quick_override_works_with_control_off_and_ends_by_itself(monkeypatch):
+    monkeypatch.setenv("CONTROL_LIVE", "1")
+    c, store = _charging(FakeCollector(mode=6, soc=50))
+    ctl = make(c, {"enabled": False}, store)
+    asyncio.run(ctl.set_override("charge", 30, 2000, 70, now=OUT))
+    assert ("battery_power_setpoint", -2000) in c.writes and ("charging_limit_soc", 70) in c.writes
+    assert ctl.status()["override"]["action"] == "charge" and store["state"]["override"]
+    asyncio.run(ctl.tick(OUT + timedelta(minutes=31)))
+    assert c.writes[-1] == ("charging_limit_soc", 100) and ("operating_mode", 6) in c.writes
+    assert ctl.override is None and not ctl.in_control
+
+
+def test_quick_override_hold_and_cancel(monkeypatch):
+    monkeypatch.setenv("CONTROL_LIVE", "1")
+    c = FakeCollector(mode=0)
+    ctl = make(c, {"enabled": False}, {})
+    asyncio.run(ctl.set_override("hold", 60, now=OUT))
+    assert ctl.action == HOLD and ctl.in_control
+    asyncio.run(ctl.clear_override())
+    assert ctl.override is None and c.writes[-1] == ("operating_mode", 0)
+    with pytest.raises(ValueError):
+        asyncio.run(ctl.set_override("charge", 2))
+    with pytest.raises(ValueError):
+        asyncio.run(ctl.set_override("explode", 30))
+
+
+def test_quick_override_beats_a_schedule_window(monkeypatch):
+    monkeypatch.setenv("CONTROL_LIVE", "1")
+    c = FakeCollector(mode=0, soc=50)
+    ctl = make(c, {"enabled": True, "grid_charge": True}, {})
+    asyncio.run(ctl.set_override("hold", 60, now=IN))  # inside the cheap window that would charge
+    assert ctl.action == HOLD

@@ -21,7 +21,7 @@ import logging
 import os
 import time
 from collections import deque
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, fields, replace
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
@@ -38,10 +38,16 @@ DISCHARGE = "discharge"
 ACTIONS = (CHARGE, HOLD, DISCHARGE)
 DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 MAX_SCHEDULES = 20
+OVERRIDE_MAX_MINUTES = 12 * 60
 
 
 def live_writes_allowed() -> bool:
     return os.environ.get("CONTROL_LIVE", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def limits_allowed() -> bool:
+    """Narrowing the battery's own SOC limits while control drives it; CONTROL_LIMITS=0 turns it off."""
+    return os.environ.get("CONTROL_LIMITS", "1").strip().lower() not in ("0", "false", "no", "off")
 
 
 def _hhmm(value: str) -> tuple[int, int]:
@@ -275,6 +281,10 @@ class Controller:
         # The mode to give back. Kept on disk so a restart mid-window still restores it.
         self.saved_mode: int | None = state.get("saved_mode")
         self.in_control = bool(state.get("in_control"))
+        # The battery's own SOC limits as they were before we narrowed them; kept on disk so a restart puts them back.
+        self.saved_limits: dict[str, int] = dict(state.get("saved_limits") or {})
+        self._last_cap: dict[str, int] = {}
+        self.override: dict | None = state.get("override") or None
         self.action = APP
         self.reason = "Starting"
         self.window: Window | None = None
@@ -320,7 +330,8 @@ class Controller:
             log.warning("Couldn't record control event: %s", err)
 
     def _persist(self) -> None:
-        self._save_state({"saved_mode": self.saved_mode, "in_control": self.in_control})
+        self._save_state({"saved_mode": self.saved_mode, "in_control": self.in_control,
+                          "saved_limits": self.saved_limits, "override": self.override})
 
     async def _write(self, key: str, value: int) -> None:
         if not self.live:
@@ -337,7 +348,12 @@ class Controller:
         if not self.collector.connected or not snap:
             self.reason = "Waiting for the battery"
             return
-        action, setpoint, reason, window = decide(self.settings, self._windows(now), snap, now)
+        if self.saved_limits and not self.in_control:
+            await self._restore_limits()  # e.g. a retry after a failed write, or the mode was changed in the app
+        quick = self._override_window(now)
+        settings = replace(self.settings, enabled=True) if quick and not self.settings.enabled else self.settings
+        windows = ([quick] if quick else []) + self._windows(now)
+        action, setpoint, reason, window = decide(settings, windows, snap, now)
         mode = self.collector.raw.get("operating_mode")
         if (self.live and self.in_control and isinstance(mode, int) and mode != THIRD_PARTY_MODE
                 and time.monotonic() - self.took_control_at > 3 * REASSERT_SECONDS):
@@ -361,6 +377,7 @@ class Controller:
                                 "dashboard" if not self.settings.enabled else self._source)
                     self.in_control, self.saved_mode, self.last_setpoint = False, None, None
                     self._persist()
+                    await self._restore_limits()
                 self.action = APP
             else:
                 if not self.in_control:
@@ -389,11 +406,110 @@ class Controller:
                         self._event(what, "battery_power_setpoint", self.last_setpoint, setpoint,
                                     window.source if window else "dashboard")
                     self.last_setpoint, self.last_write = setpoint, time.monotonic()
+                await self._cap_limits(action, window)
                 self.action = action
             self.last_error = None
         except Exception as err:
             self.last_error = str(err)
             self._note(f"Write failed: {err}")
+
+    def _override_window(self, now: datetime) -> Window | None:
+        o = self.override
+        if not o:
+            return None
+        until = datetime.fromisoformat(o["until"])
+        if now >= until:
+            self.override = None
+            self._persist()
+            self._note("Quick override finished")
+            return None
+        sch = Schedule(o["action"], "00:00", "23:59", tuple(range(7)), o["power_w"], o["target_soc"])
+        return Window(datetime.fromisoformat(o["started"]), until, "quick override", "override", sch)
+
+    async def set_override(self, action: str, minutes: int, power_w: int | None = None,
+                           target_soc: int | None = None, now: datetime | None = None) -> None:
+        """Charge, hold or discharge for the next few minutes, whatever the schedules say.
+
+        It works even when schedules are switched off, and it ends by itself."""
+        if action not in ACTIONS:
+            raise ValueError("A quick override must charge, hold or discharge")
+        if not 5 <= int(minutes) <= OVERRIDE_MAX_MINUTES:
+            raise ValueError(f"Pick between 5 minutes and {OVERRIDE_MAX_MINUTES // 60} hours")
+        power = int(power_w if power_w is not None else self.settings.charge_power_w)
+        target = int(target_soc if target_soc is not None
+                     else self.settings.charge_target_soc if action == CHARGE else 10)
+        Schedule(action, "00:00", "23:59", tuple(range(7)), power, target).validate()
+        now = now or datetime.now(timezone.utc)
+        self.override = {"action": action, "started": now.isoformat(), "until": (now + timedelta(minutes=int(minutes))).isoformat(),
+                         "power_w": power, "target_soc": target}
+        self.stand_back_until = None
+        self._persist()
+        what = {HOLD: "Hold", CHARGE: f"Charge at {power} W to {target}%", DISCHARGE: f"Discharge at {power} W down to {target}%"}[action]
+        self._note(f"Quick override: {what} for {int(minutes)} minutes")
+        self._event(f"Quick override started: {what} for {int(minutes)} minutes", "override", None, action, "dashboard", always=True)
+        self._wake.set()
+        await self.tick(now)
+
+    async def clear_override(self) -> None:
+        if self.override:
+            self.override = None
+            self._persist()
+            self._note("Quick override cancelled")
+            self._event("Quick override cancelled", "override", None, None, "dashboard", always=True)
+        await self.tick()
+
+    async def _cap_limits(self, action: str, window: Window | None) -> None:
+        """While charging or discharging, narrow the battery's own SOC limit to the target.
+
+        If the dashboard (or the Pi) stops mid-window the battery then still stops at the
+        target instead of carrying on. The limit that was there is put back afterwards."""
+        want = None
+        sch = window.schedule if window else None
+        if limits_allowed():
+            if action == CHARGE:
+                want = ("charging_limit_soc", sch.target_soc if sch else self.settings.charge_target_soc)
+            elif action == DISCHARGE and sch:
+                want = ("discharge_limit_soc", sch.target_soc)
+        for key in [k for k in self.saved_limits if not want or k != want[0]]:
+            await self._restore_limit(key)
+        if not want:
+            return
+        key, value = want
+        current = self.collector.raw.get(key)
+        if key not in self.saved_limits:
+            if not isinstance(current, int):
+                return  # can't put it back afterwards, so leave it alone
+            self.saved_limits[key] = current
+            self._persist()  # before writing, so a crash can still restore it
+        saved = self.saved_limits[key]
+        value = min(value, saved) if key == "charging_limit_soc" else max(value, saved)  # never widen your own limit
+        if self._last_cap.get(key) == value:
+            return
+        await self._write(key, value)
+        self._last_cap[key] = value
+        name = "charge" if key == "charging_limit_soc" else "discharge"
+        self._note(f"Set the battery's own {name} limit to {value}% while it {name}s")
+        self._event(f"Set the battery's own {name} limit to {value}% while it {name}s (was {saved}%)", key, saved, value,
+                    window.source if window else "dashboard")
+
+    async def _restore_limit(self, key: str) -> None:
+        saved = self.saved_limits[key]
+        await self._write(key, saved)
+        del self.saved_limits[key]
+        self._last_cap.pop(key, None)
+        self._persist()
+        name = "charge" if key == "charging_limit_soc" else "discharge"
+        self._note(f"Put the battery's own {name} limit back to {saved}%")
+        self._event(f"Put the battery's own {name} limit back to {saved}%", key, None, saved, "dashboard")
+
+    async def _restore_limits(self) -> None:
+        for key in list(self.saved_limits):
+            try:
+                await self._restore_limit(key)
+            except Exception as err:  # retried at the start of the next tick
+                self.last_error = str(err)
+                self._note(f"Couldn't put the battery's {key} back yet: {err}")
+                return
 
     async def set_mode(self, mode: int) -> None:
         """Switch the battery to one of the Anker app's modes now.
@@ -416,11 +532,16 @@ class Controller:
                 self.stand_back_until = self.window.end if self.window else None
                 self.action, self.reason = APP, f"Standing back: you picked {name}"
                 self._persist()
+            if self.override:
+                self.override = None
+                self._persist()
+            await self._restore_limits()
             self.last_error = None
 
     async def restore(self) -> None:
         """Give control back now, e.g. when the dashboard shuts down."""
-        if self.in_control:
+        self.override = None
+        if self.in_control or self.saved_limits:
             self.settings = ControlSettings(**{**asdict(self.settings), "enabled": False})
             await self.tick()
             self.settings = ControlSettings.from_dict(self._load().get("settings"))
@@ -443,6 +564,7 @@ class Controller:
             "reason": self.reason,
             "in_control": self.in_control,
             "saved_mode": OPERATING_MODES.get(self.saved_mode) if self.saved_mode is not None else None,
+            "override": self.override,
             "window": {"start": w.start.isoformat(), "end": w.end.isoformat(), "why": w.why} if w else None,
             "modes": [{"value": k, "name": v} for k, v in OPERATING_MODES.items() if k != THIRD_PARTY_MODE],
             "battery_mode": self.collector.raw.get("operating_mode") if self.collector.connected else None,

@@ -188,7 +188,7 @@ async def lifespan(app: FastAPI):
         with contextlib.suppress(asyncio.CancelledError):
             await control_task
         with contextlib.suppress(Exception):
-            await asyncio.wait_for(controller.restore(), 10)  # hand the battery back before stopping
+            await asyncio.wait_for(controller.restore(), 20)  # hand the battery back before stopping
         if relay is not None:
             await relay.close()
         for task in tasks:
@@ -526,6 +526,13 @@ class ModeIn(BaseModel):
     mode: int
 
 
+class OverrideIn(BaseModel):
+    action: str  # charge, hold, discharge, or off to cancel
+    minutes: int = 60
+    power_w: int | None = None
+    target_soc: int | None = None
+
+
 @app.get("/api/control")
 def get_control() -> dict:
     return app.state.controller.status()
@@ -543,6 +550,22 @@ async def save_control(body: ControlIn) -> dict:
     controller: Controller = app.state.controller
     controller.update_settings(settings)
     await controller.tick()
+    return controller.status()
+
+
+@app.post("/api/control/override")
+async def quick_override(body: OverrideIn) -> dict:
+    """Charge, hold or discharge for the next while, whatever the schedules say; "off" cancels it."""
+    controller: Controller = app.state.controller
+    if body.action == "off":
+        await controller.clear_override()
+        return controller.status()
+    if not app.state.collectors["battery"].connected:
+        raise HTTPException(status_code=409, detail="The battery isn't connected")
+    try:
+        await controller.set_override(body.action, body.minutes, body.power_w, body.target_soc)
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
     return controller.status()
 
 
