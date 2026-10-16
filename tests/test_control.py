@@ -418,7 +418,7 @@ def test_a_stricter_limit_of_your_own_is_never_widened(monkeypatch):
 
 def test_limits_are_restored_after_a_restart(monkeypatch):
     monkeypatch.setenv("CONTROL_LIVE", "1")
-    c, _ = _charging()
+    c, _ = _charging(FakeCollector(mode=3))  # left in third-party mode by a crash
     store = {"settings": {"enabled": False},
              "state": {"saved_mode": 6, "in_control": True, "saved_limits": {"charging_limit_soc": 95}}}
     asyncio.run(make(c, {}, store).tick(IN))
