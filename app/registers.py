@@ -74,6 +74,11 @@ READ_BLOCKS: list[tuple[str, int, int]] = [
 WRITABLE = {
     "operating_mode": (10064, "UINT16"),
     "battery_power_setpoint": (10071, "INT32"),
+    # The battery's own charge and discharge limits. Control narrows them to the
+    # schedule's target while it is driving, so the battery stops there even if
+    # the dashboard does, then puts the originals back.
+    "charging_limit_soc": (60000, "UINT16"),
+    "discharge_limit_soc": (60001, "UINT16"),
 }
 THIRD_PARTY_MODE = 3
 

@@ -19,6 +19,9 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements-dev.txt
+      - run: ruff check .
+      # The dashboard's scripts are plain files, so catch a syntax slip before it ships.
+      - run: for f in app/static/js/*.js; do node --check "$f"; done
       - run: python -m pytest -q
 
   image:

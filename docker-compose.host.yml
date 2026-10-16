@@ -7,6 +7,8 @@ services:
     image: ghcr.io/maffewem/anker-e5000dashboard:latest
     container_name: solarbank-dashboard
     restart: unless-stopped
+    # Docker's default 10 s is shorter than handing the battery back to the Anker app can take.
+    stop_grace_period: 30s
     network_mode: host
     environment:
       PORT: "${PORT:-8080}"

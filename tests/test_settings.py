@@ -94,7 +94,7 @@ def test_index_versions_assets(client):
     res = client.get("/")
     assert res.headers["cache-control"] == "no-cache"
     assert "{{version}}" not in res.text
-    assert '/static/app.js?v=' in res.text
+    assert '/static/js/live.js?v=' in res.text
 
 
 def test_meter_cannot_reuse_the_solarbank_address(client):

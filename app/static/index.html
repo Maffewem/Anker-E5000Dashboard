@@ -370,6 +370,22 @@
           <label class="switch edit"><input type="checkbox" id="control-enabled" role="switch"><span></span><b id="control-enabled-text">Off</b></label>
         </div>
       </div>
+      <div class="control-section" id="override-row">
+        <h3>Quick override</h3>
+        <p class="hint" id="override-state">Charge, hold or discharge for a while without making a schedule. It ends by itself and works even when control is off.</p>
+        <div class="compare-actions edit">
+          <select id="override-minutes" aria-label="How long">
+            <option value="30">30 minutes</option>
+            <option value="60" selected>1 hour</option>
+            <option value="120">2 hours</option>
+            <option value="240">4 hours</option>
+          </select>
+          <button type="button" class="secondary" data-override="charge">Charge</button>
+          <button type="button" class="secondary" data-override="hold">Hold</button>
+          <button type="button" class="secondary" data-override="discharge">Discharge</button>
+          <button type="button" class="secondary" data-override="off" id="override-cancel" hidden>Cancel</button>
+        </div>
+      </div>
       <div class="control-section mode-row">
         <h3>Anker app mode</h3>
         <p class="hint">The battery uses this mode whenever the dashboard isn't charging, holding or discharging it. Now: <b id="mode-current">unknown</b></p>
@@ -492,6 +508,12 @@
   <footer class="footer"><span id="version"></span><span class="edit"> · <button type="button" class="link" id="footer-updates">Updates</button></span></footer>
 
   <script src="/static/vendor/chart.umd.js?v={{version}}"></script>
-  <script src="/static/app.js?v={{version}}"></script>
+  <script src="/static/js/live.js?v={{version}}"></script>
+  <script src="/static/js/money.js?v={{version}}"></script>
+  <script src="/static/js/control.js?v={{version}}"></script>
+  <script src="/static/js/compare.js?v={{version}}"></script>
+  <script src="/static/js/events.js?v={{version}}"></script>
+  <script src="/static/js/security.js?v={{version}}"></script>
+  <script src="/static/js/boot.js?v={{version}}"></script>
 </body>
 </html>
