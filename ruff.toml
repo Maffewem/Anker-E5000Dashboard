@@ -1,0 +1,6 @@
+# Catches real mistakes (syntax errors, undefined or unused names), not style.
+target-version = "py312"
+extend-exclude = ["app/static"]
+
+[lint]
+select = ["E9", "F"]

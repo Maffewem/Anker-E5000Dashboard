@@ -84,11 +84,11 @@ def test_webhook_is_saved_but_never_sent_back(client, monkeypatch):
     assert "0a1b2c3d" not in client.get("/api/version").text
 
     called = []
-    monkeypatch.setattr("app.main.call_webhook", lambda u: called.append(u))
+    monkeypatch.setattr("app.routes.system.call_webhook", lambda u: called.append(u))
     assert client.post("/api/update").json() == {"started": True}
     assert called == [url]
 
-    monkeypatch.setattr("app.main.call_webhook", lambda u: "Portainer refused the webhook (404).")
+    monkeypatch.setattr("app.routes.system.call_webhook", lambda u: "Portainer refused the webhook (404).")
     assert client.post("/api/update").status_code == 502
 
 
