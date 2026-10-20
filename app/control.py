@@ -307,6 +307,19 @@ def active_charge(settings: ControlSettings, windows: list[Window], now: datetim
     return ends[-1] if ends else None
 
 
+def active_target(settings: ControlSettings, windows: list[Window], now: datetime, balance: bool = False) -> int | None:
+    """The level the charging window in progress stops at, as `decide` would choose it."""
+    if not settings.enabled:
+        return None
+    mine = [w for w in windows if w.start <= now < w.end and _charges(settings, w)]
+    if not mine:
+        return None
+    w = max(mine, key=lambda w: w.end)
+    if w.schedule and not (w.happy and settings.charge_happy):
+        return 100 if balance and w.source == "schedule" else w.schedule.target_soc
+    return 100 if balance else settings.charge_target_soc
+
+
 def decide(settings: ControlSettings, windows: list[Window], snapshot: dict, now: datetime,
            balance: bool = False) -> tuple[str, int, str, Window | None]:
     """(action, setpoint W, reason, window) for this moment.

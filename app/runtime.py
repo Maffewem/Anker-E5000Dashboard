@@ -40,14 +40,16 @@ def ceiling_soc(snap: dict[str, Any]) -> float:
 
 def estimate(snap: dict[str, Any], pattern: list[float | None], hours_of_history: float,
              now: datetime, charges: list[tuple[datetime, str]] | None = None,
-             charging_now: tuple[datetime, str] | None = None) -> dict[str, Any]:
+             charging_now: tuple[datetime, str] | None = None, charge_target: int | None = None) -> dict[str, Any]:
     """Project the charge forward from `now` (timezone-aware, local).
 
     `charges` are the charges the dashboard has planned (start, description):
     your schedules, Happy Hours, smart-charge slots. The first one ends the
     projection, ahead of any charging the usual pattern suggests.
 
-    `charging_now` is the end and description of a planned charge in progress.
+    `charging_now` is the end and description of a planned charge in progress,
+    `charge_target` the level it stops at. While charging, the time it is full
+    (or reaches that level) comes from the live power, not the usual pattern.
 
     `pattern` is the average battery power in W for each of the 48 local
     half hours (+ discharging, - charging; None where there's no history).
@@ -74,8 +76,14 @@ def estimate(snap: dict[str, Any], pattern: list[float | None], hours_of_history
         "charging": power < -CHARGING_W,  # it is charging right now
         "charging_until": charging_now[0].isoformat() if charging_now and power < -CHARGING_W else None,
         "charging_by": charging_now[1] if charging_now and power < -CHARGING_W else None,
+        "charge_target": None,  # the level the charge in progress is heading for
         "recharges_by": None,  # what starts it: a scheduled charge's description, or None for the usual pattern
     }
+    if power < -CHARGING_W:
+        goal = min(ceiling, charge_target) if charge_target else ceiling
+        out["charge_target"] = goal
+        if soc < goal:
+            out["full_at"] = (now + timedelta(hours=(goal - soc) / 100 * capacity_wh / -power)).isoformat()
     planned = sorted((a, why) for a, why in (charges or []) if a > now)
     planned = planned[0] if planned else None
     if not use_pattern:
@@ -84,7 +92,7 @@ def estimate(snap: dict[str, Any], pattern: list[float | None], hours_of_history
         # than a day away isn't worth a warning.
         if power > 5 and 0 < stored_wh / power <= CURRENT_EMPTY_HOURS:
             out["empty_at"] = (now + timedelta(hours=stored_wh / power)).isoformat()
-        elif power < -5 and room_wh > 0:
+        elif power < -5 and room_wh > 0 and out["full_at"] is None:
             out["full_at"] = (now + timedelta(hours=room_wh / -power)).isoformat()
         if planned and (out["empty_at"] is None or planned[0] < datetime.fromisoformat(out["empty_at"])):
             out["recharges_at"], out["recharges_by"] = planned[0].isoformat(), planned[1]
