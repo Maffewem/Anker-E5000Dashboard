@@ -39,12 +39,15 @@ def ceiling_soc(snap: dict[str, Any]) -> float:
 
 
 def estimate(snap: dict[str, Any], pattern: list[float | None], hours_of_history: float,
-             now: datetime, charges: list[tuple[datetime, str]] | None = None) -> dict[str, Any]:
+             now: datetime, charges: list[tuple[datetime, str]] | None = None,
+             charging_now: tuple[datetime, str] | None = None) -> dict[str, Any]:
     """Project the charge forward from `now` (timezone-aware, local).
 
     `charges` are the charges the dashboard has planned (start, description):
     your schedules, Happy Hours, smart-charge slots. The first one ends the
     projection, ahead of any charging the usual pattern suggests.
+
+    `charging_now` is the end and description of a planned charge in progress.
 
     `pattern` is the average battery power in W for each of the 48 local
     half hours (+ discharging, - charging; None where there's no history).
@@ -68,6 +71,9 @@ def estimate(snap: dict[str, Any], pattern: list[float | None], hours_of_history
         "empty_at": None,
         "full_at": None,
         "recharges_at": None,  # when it next starts charging (after empty_at, if it runs out first)
+        "charging": power < -CHARGING_W,  # it is charging right now
+        "charging_until": charging_now[0].isoformat() if charging_now and power < -CHARGING_W else None,
+        "charging_by": charging_now[1] if charging_now and power < -CHARGING_W else None,
         "recharges_by": None,  # what starts it: a scheduled charge's description, or None for the usual pattern
     }
     planned = sorted((a, why) for a, why in (charges or []) if a > now)

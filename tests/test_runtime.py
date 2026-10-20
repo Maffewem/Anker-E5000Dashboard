@@ -91,3 +91,18 @@ def test_a_scheduled_charge_ends_the_projection_before_the_usual_pattern():
     assert e["recharges_at"] == charge.isoformat() and e["recharges_by"] == "your schedule 00:30-05:30"
     e = estimate(snap(soc=80, power=220), p, 100, NOW)
     assert e["recharges_at"] == "2026-10-10T13:00:00+01:00" and e["recharges_by"] is None
+
+
+def test_a_scheduled_charge_in_progress_is_reported_and_not_called_a_wait_for_solar():
+    p = [0.0] * 48
+    for slot in range(26, 30):
+        p[slot] = -1500.0
+    now = datetime(2026, 10, 21, 0, 39, tzinfo=TZ)
+    end = datetime(2026, 10, 21, 5, 30, tzinfo=TZ)
+    nxt = datetime(2026, 10, 22, 0, 30, tzinfo=TZ)
+    e = estimate(snap(soc=10, power=-2510, floor=10), p, 100, now, [(nxt, "your schedule 00:30-05:30")],
+                 (end, "your schedule 00:30-05:30"))
+    assert e["charging"] and e["charging_until"] == end.isoformat()
+    assert e["charging_by"] == "your schedule 00:30-05:30"
+    idle = estimate(snap(soc=10, power=0, floor=10), p, 100, now, [(nxt, "x")], (end, "x"))
+    assert not idle["charging"] and idle["charging_until"] is None

@@ -138,7 +138,7 @@ function atTime(iso) {
 const RUNTIME_MARGIN_MS = 60 * 60 * 1000;
 
 function runtimeText(r) {
-  const charging = $("battery-detail").textContent.startsWith("Charging");
+  const charging = r.charging;
   const floor = Math.round(r.floor_soc);
   // Say what ends the projection: a charge the dashboard has planned, or the usual pattern.
   const how = r.recharges_by ? `a scheduled charge at ${atTime(r.recharges_at)}` : `it usually charges, from about ${atTime(r.recharges_at)}`;
@@ -147,7 +147,9 @@ function runtimeText(r) {
   if (r.soc <= r.floor_soc + 0.5 && !charging) return `At its ${floor}% reserve${next}`;
   const short = r.empty_at && !(r.recharges_at && new Date(r.recharges_at) - new Date(r.empty_at) < RUNTIME_MARGIN_MS);
   const low = short ? `down to ${floor}% around ${atTime(r.empty_at)}` : null;
-  if (charging && r.full_at) return `Full around ${atTime(r.full_at)}${low ? `, then ${low}` : ""}`;
+  const planned = r.charging_until ? `scheduled charge until ${atTime(r.charging_until)}` : "";
+  if (charging && r.full_at) return `Full around ${atTime(r.full_at)}${planned ? `, ${planned}` : ""}${low ? `, then ${low}` : ""}`;
+  if (charging && planned) return `Charging, ${planned}`;
   if (low) return `Down to ${floor}% around ${atTime(r.empty_at)}${r.recharges_at ? `, before ${how}` : ""}`;
   if (r.recharges_at) return `Lasts${next}`;
   if (r.full_at) return `Full around ${atTime(r.full_at)}`;
