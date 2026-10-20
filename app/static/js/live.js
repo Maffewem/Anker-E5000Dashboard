@@ -34,6 +34,7 @@ async function refreshLive() {
     body = await res.json();
   } catch (err) {
     setStatus("offline", "Dashboard unreachable");
+    showInTab(null, false);
     return;
   }
   const { status, data, meter } = body;
@@ -69,6 +70,7 @@ async function refreshLive() {
       : meterOn ? "Smart Meter only · no Solarbank set up" : "Not set up yet";
     $("facts").replaceChildren();
     renderGrid(null, meter);
+    showInTab(null, false);
     return;
   }
 
@@ -89,6 +91,37 @@ async function refreshLive() {
 
   renderGrid(data, meter);
   renderFacts(data, status);
+  showInTab(data, status.connected && !stale);
+}
+
+// ---------- Browser tab ----------
+
+// Keep the battery level and what it's doing visible on the tab itself, so it
+// can be followed from the tab strip while another tab or window is in front.
+const TAB_NAME = document.title;
+let tabShown = "";
+
+function showInTab(d, live) {
+  const soc = d && d.soc != null ? Math.max(0, Math.min(100, Math.round(d.soc))) : null;
+  const b = d ? d.battery_w : null;
+  const flow = b == null ? "" : b < -5 ? `▲ ${watts(b)}` : b > 5 ? `▼ ${watts(b)}` : "Idle";
+  const title = soc == null ? TAB_NAME
+    : [`${soc}%`, flow, live ? null : "offline", TAB_NAME].filter(Boolean).join(" · ");
+  if (document.title !== title) document.title = title;
+
+  const key = `${soc}|${live}`;
+  if (key === tabShown) return;
+  tabShown = key;
+  // The icon is a battery filled to the current level, grey when not live.
+  const colour = soc == null || !live ? "#8a9099" : soc <= 15 ? "#d9534f" : "#1baf7a";
+  const fill = soc == null ? 0 : Math.max(soc ? 1.5 : 0, (18 * soc) / 100);
+  const svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>"
+    + `<rect x='3' y='7' width='24' height='18' rx='3' fill='none' stroke='${colour}' stroke-width='2.5'/>`
+    + `<rect x='27' y='12' width='3' height='8' rx='1' fill='${colour}'/>`
+    + `<rect x='6' y='10' width='${fill.toFixed(1)}' height='12' rx='1' fill='${colour}'/></svg>`;
+  let icon = document.querySelector("link[rel='icon']");
+  if (!icon) { icon = document.createElement("link"); icon.rel = "icon"; document.head.append(icon); }
+  icon.href = `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
 // ---------- Battery runtime ----------
