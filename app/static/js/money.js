@@ -192,6 +192,8 @@ $("open-costs").addEventListener("click", () => {
   $("cost-battery").value = t.battery_cost || "";
   $("cost-installed").value = t.installed || "";
   $("cost-installed").max = isoDay(new Date());
+  $("cost-prices-from").value = "";
+  $("cost-prices-from").max = isoDay(new Date());
   $("cost-peak").value = t.peak_rate ?? "";
   $("cost-offpeak").value = t.offpeak_rate ?? "";
   $("cost-from").value = t.offpeak_start || "00:30";
@@ -234,7 +236,7 @@ $("costs-form").addEventListener("submit", async (e) => {
     const p = await postSettings("/api/tariff", {
       battery_cost: num("cost-battery"), installed: $("cost-installed").value, peak_rate: num("cost-peak"), offpeak_rate: num("cost-offpeak"),
       offpeak_start: time("cost-from", "00:00"), offpeak_end: time("cost-to", "00:00"), export_rate: num("cost-export"),
-      use_manual: $("cost-manual").checked, supplier: $("cost-supplier").value,
+      use_manual: $("cost-manual").checked, supplier: $("cost-supplier").value, prices_from: $("cost-prices-from").value,
     });
     renderPayback(p);
     $("costs").close();

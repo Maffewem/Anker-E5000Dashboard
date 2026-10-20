@@ -114,7 +114,7 @@ $("export-form").addEventListener("submit", (e) => {
   window.location.href = `/api/export?${params}`;
 });
 
-const DEVICE_LABEL = { battery: "Solarbank", meter: "Smart Meter" };
+const DEVICE_LABEL = { battery: "Solarbank", meter: "Smart Meter", tariff: "Tariff" };
 const DEVICE_ENV = { battery: "SOLARBANK_HOST", meter: "METER_HOST" };
 
 function setupValues() {

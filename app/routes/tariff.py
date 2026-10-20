@@ -10,7 +10,7 @@ import asyncio
 import csv
 import io
 from dataclasses import asdict
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from ..config import ConnectionStore
 from ..octopus import Octopus, validate as validate_octopus
 from ..storage import Storage
-from ..tariff import SUPPLIERS, Tariff, daily_costs, payback
+from ..tariff import SUPPLIERS, PriceHistory, Tariff, daily_costs, payback, prices_changed
 
 log = logging.getLogger("solarbank.web")
 router = APIRouter()
@@ -36,6 +36,7 @@ class TariffIn(BaseModel):
     use_manual: bool = False
     installed: str = ""
     supplier: str = ""
+    prices_from: str = ""  # local date the typed prices start; today if empty
 
 
 def _pricing() -> tuple[Tariff, Tariff, dict | None, dict | None]:
@@ -51,7 +52,12 @@ def _pricing() -> tuple[Tariff, Tariff, dict | None, dict | None]:
         # Octopus prices stand in for the typed ones; only the battery cost is kept.
         tariff = Tariff.from_dict({**{k: v for k, v in profile.items() if v is not None},
                                    "battery_cost": typed.battery_cost, "installed": typed.installed})
-    prices = storage.rates() if use_octopus else None
+    if use_octopus:
+        prices = storage.rates()
+    else:
+        # Typed prices that have changed keep pricing each past day at what it cost then.
+        history = storage.tariff_history()
+        prices = PriceHistory(history) if history else None
     return typed, tariff, profile, prices
 
 
@@ -120,13 +126,30 @@ def _lifetime() -> dict | None:
 
 @router.post("/api/tariff")
 def save_tariff(body: TariffIn) -> dict:
+    store: ConnectionStore = state.connection_store
+    storage: Storage = state.storage
     data = body.model_dump()
-    data["supplier"] = data["supplier"] or state.connection_store.load_tariff().get("supplier", "")
+    prices_from = data.pop("prices_from") or ""
+    saved = store.load_tariff()
+    data["supplier"] = data["supplier"] or saved.get("supplier", "")
+    today = datetime.now(storage.tz).date()
     try:
         tariff = Tariff(**data).validate()
     except ValueError as err:
         raise HTTPException(status_code=422, detail=str(err)) from err
-    state.connection_store.save_tariff(asdict(tariff))
+    try:
+        since = date.fromisoformat(prices_from) if prices_from else today
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Enter when the new prices start as a date") from None
+    if since > today:
+        raise HTTPException(status_code=422, detail="The new prices can't start in the future; save them on the day they start")
+    old = Tariff.from_dict(saved)
+    changes = prices_changed(old, tariff) if saved else []
+    if changes:
+        storage.save_tariff_change(asdict(old), asdict(tariff), since.isoformat())
+        storage.record_event("tariff", f"Prices changed from {since:%-d %b %Y}: " + ", ".join(changes),
+                             device="tariff", source="dashboard")
+    store.save_tariff(asdict(tariff))
     return get_payback()
 
 

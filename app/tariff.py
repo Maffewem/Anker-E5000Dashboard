@@ -7,6 +7,7 @@ are any, override it half hour by half hour.
 from __future__ import annotations
 
 import re
+from bisect import bisect_right
 from dataclasses import asdict, dataclass, fields
 from datetime import date, timedelta
 
@@ -184,6 +185,41 @@ def _pricer(tariff: Tariff, prices: dict | None):
         return rate / 100, export / 100
 
     return price
+
+
+class PriceHistory:
+    """Prices per (day, slot) for `_pricer`: fetched prices where there are
+    any, else the typed prices that were in force that day.
+
+    `changes` is Storage.tariff_history(): (local date from, prices), oldest
+    first, the first applying to everything before the second.
+    """
+
+    def __init__(self, changes: list[tuple[str, dict]], actual: dict | None = None) -> None:
+        self.since = [day for day, _ in changes]
+        self.tariffs = [Tariff.from_dict(prices) for _, prices in changes]
+        self.rates = [t.slot_rates() for t in self.tariffs]
+        self.actual = actual or {}
+
+    def get(self, key: tuple[str, int], default=(None, None)) -> tuple:
+        actual_import, actual_export = self.actual.get(key, (None, None))
+        if not self.since or (actual_import is not None and actual_export is not None):
+            return (actual_import, actual_export) if key in self.actual else default
+        i = max(0, bisect_right(self.since, key[0]) - 1)
+        return (self.rates[i][key[1]] if actual_import is None else actual_import,
+                self.tariffs[i].export_rate if actual_export is None else actual_export)
+
+
+def prices_changed(old: Tariff, new: Tariff) -> list[str]:
+    """Readable list of the typed prices that differ, e.g. "peak 28p to 30p"."""
+    out = []
+    for name, label in (("peak_rate", "peak"), ("offpeak_rate", "off-peak"), ("export_rate", "export")):
+        a, b = getattr(old, name), getattr(new, name)
+        if a != b:
+            out.append(f"{label} {a:g}p to {b:g}p")
+    if (old.offpeak_start, old.offpeak_end) != (new.offpeak_start, new.offpeak_end):
+        out.append(f"off-peak hours {old.offpeak_start}–{old.offpeak_end} to {new.offpeak_start}–{new.offpeak_end}")
+    return out
 
 
 def daily_costs(tariff: Tariff, slots: list[dict], today: date, days: int = 30,

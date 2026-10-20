@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .context import APP_BUILT, APP_COMMIT, APP_VERSION, state
 from .routes import ROUTERS
+from . import weather
 from .services import make_octopus, octopus_prices, supplier
 from .auth import Auth, LockMiddleware
 from .collector import Collector
@@ -98,6 +99,22 @@ async def _octopus_loop(app: FastAPI) -> None:
                             else OCTOPUS_RETRY_SECONDS if octopus.last_error else OCTOPUS_SYNC_SECONDS)
 
 
+async def _weather_loop(app: FastAPI) -> None:
+    first = True
+    while True:
+        place = state.connection_store.load_section("location")
+        if place.get("lat") is not None:
+            try:
+                n = await asyncio.to_thread(weather.sync, state.storage, place["lat"], place["lon"], first_run=first)
+                first = False
+                state.weather_error = None
+                log.info("Weather: stored %s hours", n)
+            except Exception as err:  # offline or Open-Meteo down; try again later
+                state.weather_error = str(err) or err.__class__.__name__
+                log.warning("Weather: %s", state.weather_error)
+        await asyncio.sleep(weather.SYNC_SECONDS if not state.weather_error else 15 * 60)
+
+
 async def _update_loop(app: FastAPI) -> None:
     await asyncio.sleep(60)  # let the dashboard settle first
     while True:
@@ -118,7 +135,7 @@ async def lifespan(app: FastAPI):
         log.info("ADMIN_PASSWORD is set: changes need signing in")
     elif auth.source == "dashboard":
         log.info("A dashboard password is set: changes need signing in")
-    storage = Storage(settings.db_path, settings.retention_days, settings.timezone)
+    storage = Storage(settings.db_path, settings.retention_days, settings.timezone, settings.sample_days)
     store = ConnectionStore(settings.settings_path)
     collectors = {
         "battery": Collector(settings, storage, store.load("battery"), BATTERY),
@@ -135,6 +152,8 @@ async def lifespan(app: FastAPI):
     state.controller = controller
     tasks = [asyncio.create_task(c.run()) for c in collectors.values()]
     tasks.append(asyncio.create_task(_octopus_loop(app)))
+    state.weather_error = None
+    tasks.append(asyncio.create_task(_weather_loop(app)))
     state.updates = Updates(APP_COMMIT)
     if APP_COMMIT and os.environ.get("UPDATE_CHECK", "true").strip().lower() not in ("0", "false", "no", "off"):
         tasks.append(asyncio.create_task(_update_loop(app)))
