@@ -219,6 +219,8 @@ class Collector:
         if self._bucket is None:
             self._bucket = MeterBucket(minute) if self.profile.name == "meter" else MinuteBucket(minute)
         self._bucket.add(self.snapshot, seconds)
+        if self.profile.name == "battery":
+            self.storage.write_sample(now, self.snapshot)
 
         if now - self._last_prune > 3600:
             self.storage.prune()

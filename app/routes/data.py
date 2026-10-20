@@ -77,7 +77,7 @@ def events(
 
 @router.get("/api/export")
 def export(
-    data: str = Query("minutes", pattern="^(minutes|daily|meter|slots|events)$"),
+    data: str = Query("minutes", pattern="^(minutes|daily|meter|slots|events|days|weather|samples)$"),
     start: date | None = None,
     end: date | None = None,
     format: str = Query("csv", pattern="^(csv|json)$"),

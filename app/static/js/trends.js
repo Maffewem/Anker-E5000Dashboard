@@ -5,8 +5,8 @@
 // current period projected from recent days, plus this month's outlook, the
 // payback over time and the measured battery capacity.
 
-let trends = null, trendsChart, paybackChart;
-let trendView = "energy", trendPeriod = "week";
+let trends = null, trendsChart, paybackChart, tempChart;
+let trendView = "energy", trendPeriod = "day";
 try {
   trendView = localStorage.getItem("trend-view") || trendView;
   trendPeriod = localStorage.getItem("trend-period") || trendPeriod;
@@ -66,16 +66,97 @@ function trendBattery() {
   return { type: "bar", data: { labels: ps.map(periodLabel), datasets: sets }, options: opts };
 }
 
+// Solar output against the sunshine it had, for the last weeks of days.
+function weatherBars() {
+  const rows = trends.conditions.slice(-(window.innerWidth < 600 ? 14 : 30));
+  const opts = baseOptions();
+  opts.scales.y.ticks.callback = (v) => `${v} kWh`;
+  opts.scales.y2 = { position: "right", beginAtZero: true, ticks: { color: css("--text-muted"), callback: (v) => `${v}` }, grid: { display: false }, border: { display: false },
+    title: { display: true, text: "Sunshine kWh/m²", color: css("--text-muted") } };
+  opts.plugins.tooltip.filter = (item) => item.raw != null;
+  opts.plugins.tooltip.callbacks = {
+    label: (c) => (c.dataset.yAxisID === "y2" ? `Sunshine: ${c.parsed.y.toFixed(1)} kWh/m²` : `Solar: ${c.parsed.y.toFixed(1)} kWh`),
+  };
+  return { type: "bar", data: { labels: rows.map((r) => shortDate(r.day)), datasets: [
+    { type: "bar", label: "Solar", data: rows.map((r) => r.solar_kwh), backgroundColor: css("--solar"), borderRadius: { topLeft: 4, topRight: 4 }, borderSkipped: "bottom", order: 2 },
+    { type: "line", label: "Sunshine", yAxisID: "y2", data: rows.map((r) => r.sun_kwh_m2), borderColor: css("--text-muted"), backgroundColor: css("--text-muted"),
+      borderWidth: 2, pointRadius: 2, spanGaps: true, order: 0 },
+  ] }, options: opts };
+}
+
+function tempLines() {
+  const rows = trends.conditions;
+  const opts = baseOptions();
+  const h = trends.health;
+  opts.scales.y.ticks.callback = (v) => `${v} kWh`;
+  if (h.rated_kwh) { opts.scales.y.min = Math.floor(h.rated_kwh * 0.7); opts.scales.y.max = Math.ceil(h.rated_kwh * 1.05 * 2) / 2; }
+  opts.scales.y2 = { position: "right", ticks: { color: css("--text-muted"), callback: (v) => `${v}°` }, grid: { display: false }, border: { display: false } };
+  opts.plugins.tooltip.filter = (item) => item.raw != null;
+  opts.plugins.tooltip.callbacks = {
+    label: (c) => (c.dataset.yAxisID === "y2" ? `Temperature: ${c.parsed.y.toFixed(1)}°C` : `Capacity: ${c.parsed.y.toFixed(2)} kWh`),
+  };
+  return { type: "line", data: { labels: rows.map((r) => shortDate(r.day)), datasets: [
+    { label: "Measured capacity", data: rows.map((r) => r.capacity_kwh), borderColor: css("--battery"), backgroundColor: css("--battery"),
+      showLine: false, pointRadius: 4, order: 0 },
+    { label: "Temperature", yAxisID: "y2", data: rows.map((r) => r.temp_avg), borderColor: css("--gridpower"), backgroundColor: css("--gridpower"),
+      borderWidth: 2, pointRadius: 0, tension: 0.3, spanGaps: true, order: 1 },
+  ] }, options: opts };
+}
+
+function renderInsights() {
+  const i = trends.insights;
+  const pct = (v) => (v == null ? null : `${v}%`);
+  factList($("trends-insights"), i.days ? [
+    ["Home use covered without the grid", pct(i.self_sufficiency)],
+    ["Solar used or stored (not exported)", pct(i.solar_used)],
+    ["Battery saved", money(i.battery_saved)],
+    ["Net grid cost", money(i.net_cost)],
+    ["Over", `the last ${i.days} recorded day${i.days === 1 ? "" : "s"}`],
+  ] : []);
+}
+
+const fmtVal = (v, unit, digits = 0) => (v == null ? null : `${v.toFixed(digits)}${unit}`);
+
+function renderConditions() {
+  const rows = trends.conditions;
+  const recent = rows.filter((r) => r.solar_kwh != null).slice(-30);
+  const max = (key) => recent.reduce((m, r) => (r[key] != null && (m == null || r[key] > m.v) ? { v: r[key], day: r.day } : m), null);
+  const peak = (key, label) => { const m = max(key); return [label, m ? `${Math.round(m.v)} W on ${shortDate(m.day)}` : null]; };
+  const volts = recent.filter((r) => r.voltage_min != null);
+  const yields = recent.filter((r) => r.solar_yield != null);
+  const effect = trends.temperature_effect;
+  factList($("trends-conditions"), [
+    ["Solar yield", yields.length ? `${(yields.reduce((a, r) => a + r.solar_yield, 0) / yields.length).toFixed(1)} kWh per kWh/m² of sunshine (last ${yields.length} days; a fall over time can mean dirty or shaded panels)` : "Needs a location and a few days of weather"],
+    ["Capacity when cold and mild", effect ? `${effect.cold_kwh} kWh at about ${effect.cold_temp}°C, ${effect.warm_kwh} kWh at about ${effect.warm_temp}°C` : "Needs a wider range of temperatures over a few weeks"],
+    peak("solar_peak_w", "Highest solar"), peak("home_peak_w", "Highest home use"), peak("import_peak_w", "Highest grid import"),
+    peak("charge_peak_w", "Fastest charge"), peak("discharge_peak_w", "Fastest discharge"),
+    ["Grid voltage (Smart Meter)", volts.length ? `${Math.min(...volts.map((r) => r.voltage_min)).toFixed(0)}–${Math.max(...volts.map((r) => r.voltage_max)).toFixed(0)} V` : null],
+  ]);
+}
+
 function drawTrends() {
   if (!trends) return;
+  const isWeather = trendView === "weather";
+  $("trends-weather").hidden = !isWeather;
   for (const b of document.querySelectorAll("[data-trend-view]")) b.setAttribute("aria-pressed", String(b.dataset.trendView === trendView));
   for (const b of document.querySelectorAll("[data-trend-period]")) b.setAttribute("aria-pressed", String(b.dataset.trendPeriod === trendPeriod));
   const since = trends.first_day ? `Recorded since ${shortDate(trends.first_day, { day: "numeric", month: "short", year: "numeric" })}.` : "Nothing recorded yet.";
   $("trends-note").textContent = trendView === "battery"
     ? `${since} Measured usable capacity, and full cycles (energy discharged ÷ rated capacity) per ${trends.period}.`
     : `${since} The paler part of the latest bar is the rest of this ${trends.period}, projected from the last ${trends.month.recent_days} days.`;
+  if (isWeather) {
+    $("trends-note").textContent = `${since} Daily solar against the sunshine the day had.`;
+    $("trends-weather-note").textContent = trends.has_weather
+      ? "Measured capacity needs a long discharge, so only some days have a dot. The Solarbank 4 reports neither battery temperature nor cell voltages over Modbus, so outdoor temperature is shown instead."
+      : "Enter your location to fetch weather. Only the rounded latitude and longitude are sent to Open-Meteo.";
+    tempChart?.destroy();
+    tempChart = trends.has_weather ? new Chart($("temp-chart"), tempLines()) : null;
+    $("temp-chart").parentElement.hidden = !trends.has_weather;
+    renderConditions();
+  }
   trendsChart?.destroy();
-  trendsChart = new Chart($("trends-chart"), trendView === "battery" ? trendBattery() : trendBars());
+  trendsChart = new Chart($("trends-chart"), isWeather ? weatherBars() : trendView === "battery" ? trendBattery() : trendBars());
+  renderInsights();
   drawPaybackCurve();
   renderTrendFacts();
 }
@@ -163,7 +244,8 @@ function renderTrendFacts() {
 }
 
 async function refreshTrends() {
-  const count = window.innerWidth < 600 ? (trendPeriod === "month" ? 6 : 8) : 12;
+  const phone = window.innerWidth < 600;
+  const count = trendPeriod === "day" ? (phone ? 14 : 30) : phone ? (trendPeriod === "month" ? 6 : 8) : 12;
   try {
     trends = await (await fetch(`/api/trends?period=${trendPeriod}&count=${count}`, { cache: "no-store" })).json();
   } catch (_) { return; }
@@ -184,3 +266,25 @@ for (const btn of document.querySelectorAll("[data-trend-period]")) {
     refreshTrends();
   });
 }
+
+$("location-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const msg = $("location-message");
+  msg.className = "note";
+  msg.textContent = "Fetching weather…";
+  try {
+    const clear = !$("loc-lat").value.trim() && !$("loc-lon").value.trim();
+    await postSettings("/api/location", clear ? {} : { lat: Number($("loc-lat").value), lon: Number($("loc-lon").value) });
+    msg.textContent = clear ? "Location removed. Weather already stored is kept." : "Saved. Weather is fetched every few hours.";
+    refreshTrends();
+  } catch (err) {
+    msg.className = "note error";
+    msg.textContent = err.message;
+  }
+});
+(async () => {
+  try {
+    const place = await (await fetch("/api/location", { cache: "no-store" })).json();
+    if (place.lat != null) { $("loc-lat").value = place.lat; $("loc-lon").value = place.lon; }
+  } catch (_) {}
+})();

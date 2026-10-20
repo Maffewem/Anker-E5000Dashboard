@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import time
@@ -11,6 +12,12 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 POWER_FIELDS = ("solar_w", "home_w", "battery_w", "grid_w", "soc")
+# The highest and lowest single reading within each minute, so short spikes
+# (a kettle, the battery ramping) aren't lost in the minute's average. Added
+# after `minutes` was created, so older databases get them by migration.
+PEAK_FIELDS = ("solar_w_max", "home_w_max", "grid_w_max", "grid_w_min", "battery_w_max", "battery_w_min")
+# Every poll as read, kept for SAMPLE_DAYS (a week by default).
+SAMPLE_FIELDS = ("solar_w", "home_w", "battery_w", "grid_w", "ac_output_w", "soc")
 ENERGY_FIELDS = (
     "solar_wh",
     "home_wh",
@@ -20,10 +27,46 @@ ENERGY_FIELDS = (
     "discharge_wh",
 )
 
+# What each day summary holds besides the minutes recorded.
+DAY_FIELDS = (
+    "soc_min", "soc_max", "soc_avg",
+    "solar_peak_w", "home_peak_w", "import_peak_w", "export_peak_w", "charge_peak_w", "discharge_peak_w",
+    "voltage_min", "voltage_avg", "voltage_max",
+)
+TARIFF_PRICES = ("peak_rate", "offpeak_rate", "offpeak_start", "offpeak_end", "export_rate")
+
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS minutes (
     ts INTEGER PRIMARY KEY,  -- unix seconds, start of the minute (UTC)
     {", ".join(f"{f} REAL" for f in POWER_FIELDS + ENERGY_FIELDS)}
+);
+-- Every reading as polled (every few seconds), for looking closely at a
+-- recent spike. Pruned after SAMPLE_DAYS.
+CREATE TABLE IF NOT EXISTS samples (
+    ts REAL PRIMARY KEY,
+    {", ".join(f"{f} REAL" for f in SAMPLE_FIELDS)}
+);
+-- One row per finished local day, worked out from the minute history before
+-- it is pruned and kept for good: battery level range, peak power and grid
+-- voltage, for long-term trends.
+CREATE TABLE IF NOT EXISTS day_summaries (
+    day TEXT PRIMARY KEY,
+    minutes INTEGER NOT NULL,    -- minutes recorded
+    {", ".join(f"{f} REAL" for f in DAY_FIELDS)}
+);
+-- The typed prices in force from each date, so past days stay priced at what
+-- they cost when the prices in Edit costs change. Empty until they first do.
+CREATE TABLE IF NOT EXISTS tariff_history (
+    since TEXT PRIMARY KEY,      -- local date these prices apply from
+    prices TEXT NOT NULL         -- JSON: peak_rate, offpeak_rate, offpeak_start, offpeak_end, export_rate
+);
+-- Weather per UTC hour from Open-Meteo for the location set, past and
+-- forecast (forecast hours are overwritten as they pass). Kept for good.
+CREATE TABLE IF NOT EXISTS weather (
+    ts INTEGER PRIMARY KEY,      -- unix seconds, start of the hour
+    temp_c REAL,
+    cloud_pct REAL,
+    radiation_wm2 REAL           -- sunshine on flat ground (global horizontal), hour average
 );
 -- Energy per local half hour, kept for good (not pruned), so the payback
 -- and long-term trends can be worked out over the battery's whole life for
@@ -91,8 +134,8 @@ CREATE TABLE IF NOT EXISTS event_state (
 # charging: started/stopped charging or discharging. mode: operating mode.
 # setting: SOC limits, reserve, power limits. connection: online/offline or a
 # new address. firmware: a firmware update. control: something the dashboard
-# itself asked the battery to do.
-EVENT_KINDS = ("charging", "mode", "setting", "connection", "firmware", "control")
+# itself asked the battery to do. tariff: electricity prices or tariff changed.
+EVENT_KINDS = ("charging", "mode", "setting", "connection", "firmware", "control", "tariff")
 
 METER_FIELDS = ("grid_w", "voltage", "import_total_kwh", "export_total_kwh")
 
@@ -119,6 +162,7 @@ class MinuteBucket:
     sums: dict[str, float] = field(default_factory=dict)
     counts: dict[str, int] = field(default_factory=dict)
     energy: dict[str, float] = field(default_factory=lambda: dict.fromkeys(ENERGY_FIELDS, 0.0))
+    peaks: dict[str, float] = field(default_factory=dict)
 
     def add(self, snapshot: dict, seconds: float) -> None:
         for key in POWER_FIELDS:
@@ -126,6 +170,11 @@ class MinuteBucket:
             if v is not None:
                 self.sums[key] = self.sums.get(key, 0.0) + v
                 self.counts[key] = self.counts.get(key, 0) + 1
+        for name in PEAK_FIELDS:
+            v = snapshot.get(name[:-4])
+            if v is not None:
+                pick = max if name.endswith("_max") else min
+                self.peaks[name] = pick(self.peaks.get(name, v), v)
 
         hours = seconds / 3600
 
@@ -150,6 +199,7 @@ class MinuteBucket:
             n = self.counts.get(key)
             row[key] = self.sums[key] / n if n else None
         row.update(self.energy)
+        row.update({k: self.peaks.get(k) for k in PEAK_FIELDS})
         return row
 
 
@@ -183,10 +233,13 @@ class MeterBucket:
 
 # What each export contains: (table, time column, columns), oldest first.
 EXPORTS = {
-    "minutes": ("minutes", "ts", ("ts", *POWER_FIELDS, *ENERGY_FIELDS)),
+    "minutes": ("minutes", "ts", ("ts", *POWER_FIELDS, *ENERGY_FIELDS, *PEAK_FIELDS)),
+    "samples": ("samples", "ts", ("ts", *SAMPLE_FIELDS)),
     "meter": ("meter_minutes", "ts", ("ts", *METER_FIELDS)),
     "events": ("events", "ts", ("ts", "device", "kind", "field", "old", "new", "message", "source")),
     "slots": ("slots", "day", ("day", "slot", *SLOT_FIELDS)),
+    "days": ("day_summaries", "day", ("day", "minutes", *DAY_FIELDS)),
+    "weather": ("weather", "ts", ("ts", "temp_c", "cloud_pct", "radiation_wm2")),
 }
 
 
@@ -220,7 +273,7 @@ def discharge_runs(rows) -> list[tuple[float, float]]:
 
 
 class Storage:
-    def __init__(self, path: str, retention_days: int, timezone: str = "UTC") -> None:
+    def __init__(self, path: str, retention_days: int, timezone: str = "UTC", sample_days: int = 7) -> None:
         if path != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(path, check_same_thread=False)
@@ -229,15 +282,36 @@ class Storage:
         self._db.executescript(SCHEMA)
         self._lock = threading.Lock()
         self.retention_days = retention_days
+        self.sample_days = sample_days
         try:
             self.tz = ZoneInfo(timezone)
         except Exception:
             self.tz = ZoneInfo("UTC")
         self._migrate_slots()
         self._backfill_slots()
+        self._add_columns("minutes", PEAK_FIELDS)
+
+    def _add_columns(self, table: str, names: tuple[str, ...]) -> None:
+        with self._lock:
+            have = {r["name"] for r in self._db.execute(f"PRAGMA table_info({table})")}
+            for name in names:
+                if name not in have:
+                    self._db.execute(f"ALTER TABLE {table} ADD COLUMN {name} REAL")
+            self._db.commit()
+
+    def write_sample(self, ts: float, snapshot: dict) -> None:
+        """One poll's readings, as read."""
+        if self.sample_days <= 0:
+            return
+        with self._lock:
+            self._db.execute(
+                f"INSERT OR REPLACE INTO samples (ts, {', '.join(SAMPLE_FIELDS)}) VALUES (?{', ?' * len(SAMPLE_FIELDS)})",
+                (round(ts, 1), *(snapshot.get(f) for f in SAMPLE_FIELDS)),
+            )
+            self._db.commit()
 
     def write_minute(self, row: dict) -> None:
-        cols = ["ts", *POWER_FIELDS, *ENERGY_FIELDS]
+        cols = ["ts", *POWER_FIELDS, *ENERGY_FIELDS, *PEAK_FIELDS]
         with self._lock:
             self._db.execute(
                 f"INSERT OR REPLACE INTO minutes ({','.join(cols)}) "
@@ -488,13 +562,127 @@ class Storage:
             self._db.commit()
 
     def prune(self) -> None:
-        if self.retention_days <= 0:
-            return
-        cutoff = int(time.time()) - self.retention_days * 86400
+        # Summarise finished days first, so nothing goes before it is kept.
+        self.day_summaries()
+        now = int(time.time())
         with self._lock:
-            self._db.execute("DELETE FROM minutes WHERE ts < ?", (cutoff,))
-            self._db.execute("DELETE FROM meter_minutes WHERE ts < ?", (cutoff,))
+            if self.sample_days > 0:
+                self._db.execute("DELETE FROM samples WHERE ts < ?", (now - self.sample_days * 86400,))
+            if self.retention_days > 0:
+                cutoff = now - self.retention_days * 86400
+                self._db.execute("DELETE FROM minutes WHERE ts < ?", (cutoff,))
+                self._db.execute("DELETE FROM meter_minutes WHERE ts < ?", (cutoff,))
             self._db.commit()
+
+    def day_summaries(self, include_today: bool = False) -> list[dict]:
+        """Per-day battery level range, peaks and voltage, oldest first.
+
+        Finished days are worked out once and kept; today, if asked for, is
+        worked out afresh each time.
+        """
+        today = datetime.now(self.tz).date()
+        with self._lock:
+            done = {r[0] for r in self._db.execute("SELECT day FROM day_summaries")}
+            first = self._db.execute("SELECT MIN(ts) FROM minutes").fetchone()[0]
+        if first is not None:
+            day = datetime.fromtimestamp(first, self.tz).date()
+            while day < today:
+                if day.isoformat() not in done:
+                    row = self._summarise(day)
+                    if row:
+                        cols = ["day", "minutes", *DAY_FIELDS]
+                        with self._lock:
+                            self._db.execute(
+                                f"INSERT OR REPLACE INTO day_summaries ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+                                [row[c] for c in cols],
+                            )
+                            self._db.commit()
+                day += timedelta(days=1)
+        with self._lock:
+            rows = [dict(r) for r in self._db.execute("SELECT * FROM day_summaries ORDER BY day")]
+        if include_today:
+            row = self._summarise(today)
+            if row:
+                rows.append(row)
+        return rows
+
+    def _summarise(self, day: date) -> dict | None:
+        start, end = self._day_start(day), self._day_start(day + timedelta(days=1))
+        # Minutes recorded before the peak columns existed only have averages.
+        peak = lambda name, avg: f"COALESCE({name}, {avg})"  # noqa: E731
+        with self._lock:
+            r = self._db.execute(
+                "SELECT COUNT(*) AS minutes, MIN(soc) AS soc_min, MAX(soc) AS soc_max, AVG(soc) AS soc_avg, "
+                f"MAX({peak('solar_w_max', 'solar_w')}) AS solar_peak_w, MAX({peak('home_w_max', 'home_w')}) AS home_peak_w, "
+                f"MAX({peak('grid_w_max', 'grid_w')}) AS import_peak_w, -MIN({peak('grid_w_min', 'grid_w')}) AS export_peak_w, "
+                f"-MIN({peak('battery_w_min', 'battery_w')}) AS charge_peak_w, "
+                f"MAX({peak('battery_w_max', 'battery_w')}) AS discharge_peak_w "
+                "FROM minutes WHERE ts >= ? AND ts < ?", (start, end),
+            ).fetchone()
+            v = self._db.execute(
+                "SELECT MIN(voltage) AS voltage_min, AVG(voltage) AS voltage_avg, MAX(voltage) AS voltage_max "
+                "FROM meter_minutes WHERE ts >= ? AND ts < ?", (start, end),
+            ).fetchone()
+        if not r["minutes"]:
+            return None
+        row = {"day": day.isoformat(), **dict(r), **dict(v)}
+        for k in DAY_FIELDS:
+            if row[k] is not None:
+                row[k] = round(max(0.0, row[k]) if k.endswith("_peak_w") else row[k], 1)
+        return row
+
+    def tariff_history(self) -> list[tuple[str, dict]]:
+        """(local date, typed prices) for each change of the typed prices, oldest first."""
+        with self._lock:
+            rows = self._db.execute("SELECT since, prices FROM tariff_history ORDER BY since").fetchall()
+        return [(r["since"], json.loads(r["prices"])) for r in rows]
+
+    def save_tariff_change(self, old: dict, new: dict, since: str) -> None:
+        """New typed prices from local date `since`; days before it keep the ones they had.
+
+        The first change also records the prices before it, as applying to
+        everything earlier. A later change on or before an earlier one's date
+        replaces it.
+        """
+        pick = lambda t: json.dumps({k: t.get(k) for k in TARIFF_PRICES})  # noqa: E731
+        with self._lock:
+            if not self._db.execute("SELECT 1 FROM tariff_history LIMIT 1").fetchone():
+                self._db.execute("INSERT INTO tariff_history (since, prices) VALUES ('', ?)", (pick(old),))
+            self._db.execute("DELETE FROM tariff_history WHERE since >= ? AND since != ''", (since,))
+            self._db.execute("INSERT OR REPLACE INTO tariff_history (since, prices) VALUES (?, ?)", (since, pick(new)))
+            self._db.commit()
+
+    def save_weather(self, rows: list[tuple]) -> None:
+        """(hour start unix seconds, temp °C, cloud %, sunshine W/m²)."""
+        with self._lock:
+            self._db.executemany(
+                "INSERT OR REPLACE INTO weather (ts, temp_c, cloud_pct, radiation_wm2) VALUES (?, ?, ?, ?)", rows)
+            self._db.commit()
+
+    def weather_days(self, first: date | None = None) -> dict[str, dict]:
+        """Weather per local day: sunshine in kWh/m², temperatures and average cloud."""
+        start = self._day_start(first) if first else 0
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT ts, temp_c, cloud_pct, radiation_wm2 FROM weather WHERE ts >= ? ORDER BY ts", (start,)).fetchall()
+        days: dict[str, dict] = {}
+        for r in rows:
+            day = datetime.fromtimestamp(r["ts"], self.tz).date().isoformat()
+            d = days.setdefault(day, {"hours": 0, "sun_kwh_m2": 0.0, "temps": [], "clouds": []})
+            d["hours"] += 1
+            d["sun_kwh_m2"] += (r["radiation_wm2"] or 0.0) / 1000
+            if r["temp_c"] is not None:
+                d["temps"].append(r["temp_c"])
+            if r["cloud_pct"] is not None:
+                d["clouds"].append(r["cloud_pct"])
+        out = {}
+        for day, d in days.items():
+            t, c = d["temps"], d["clouds"]
+            out[day] = {"hours": d["hours"], "sun_kwh_m2": round(d["sun_kwh_m2"], 2),
+                        "temp_min": min(t) if t else None, "temp_max": max(t) if t else None,
+                        "temp_avg": round(sum(t) / len(t), 1) if t else None,
+                        "cloud_avg": round(sum(c) / len(c)) if c else None}
+        return out
 
     def history(self, hours: int, max_points: int = 720, offset_hours: int = 0) -> dict:
         """Average power over evenly sized buckets covering the last `hours`.

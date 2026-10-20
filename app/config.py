@@ -158,6 +158,7 @@ class Settings:
     timezone: str
     relay_meter: bool = False
     relay_port: int = 5020
+    sample_days: int = 7
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -170,4 +171,5 @@ class Settings:
             timezone=os.environ.get("TZ", "UTC"),
             relay_meter=os.environ.get("RELAY_METER", "").strip().lower() in ("1", "true", "yes", "on"),
             relay_port=_int("RELAY_PORT", 5020),
+            sample_days=_int("SAMPLE_DAYS", 7),
         )

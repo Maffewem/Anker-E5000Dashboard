@@ -41,6 +41,7 @@ You don't need to edit the compose file. Set any of these as **Environment varia
 | `HOST_PORT` | `8080` | Port you open the dashboard on |
 | `TZ` | `Europe/London` | Timezone for daily totals |
 | `RETENTION_DAYS` | `365` | Days of history to keep (`0` keeps everything) |
+| `SAMPLE_DAYS` | `7` | Days to keep every single reading (one per poll) for a close look at a spike; `0` turns it off. Minute averages and peaks follow `RETENTION_DAYS`, and daily summaries are kept for good |
 | `POLL_SECONDS` | `5` | How often to read the devices |
 | `SOLARBANK_HOST`, `METER_HOST` | – | Set an address here instead of on the setup screen. The setup screen then shows it read-only |
 | `OCTOPUS_API_KEY`, `OCTOPUS_ACCOUNT` | – | Your Octopus Energy API key and account number, instead of entering them with **Energy supplier** is asked in first-run setup and can be changed in **Edit costs**: Octopus Energy, E.ON Next, EDF, British Gas or Other. Only Octopus has a price feed, so the Octopus parts (Connect Octopus, Intelligent Go slots) only show when it's picked. With any other supplier you type your prices into **Edit costs**, where the supplier's EV tariffs fill in their off-peak hours, and those prices drive the payback and battery control. The tariff comparison works for everyone. Existing installs count as Octopus if it's connected, otherwise Other.
@@ -100,6 +101,14 @@ To do this it puts the battery in Anker's third-party control mode. Outside chea
 **Trends** shows solar, home use, grid import and export (Energy), grid cost, export earnings and battery savings (Money), or measured battery capacity and cycles (Battery), per week or month. The current week or month has its projected rest drawn paler on top, from the average of the last 14 recorded days. Below it: this month so far against a month-end projection and last month, savings over time with a projected payback date at the recent rate, and the battery's measured capacity against its rating.
 
 It all comes from the half-hour history, which is kept for good, so trends cover everything recorded even past `RETENTION_DAYS`. Older installs get solar, home, import and export added to that history from the minute readings still kept. Costs are unit prices only (no standing charge). The battery doesn't report its state of health, so capacity is measured from long discharges (energy out ÷ battery level used); watch its trend rather than the exact number.
+
+### Extra history
+
+Besides the minute averages, each minute now keeps the highest and lowest reading (so a short spike isn't averaged away), every poll is kept for `SAMPLE_DAYS`, and each finished day is boiled down to a daily summary that is kept for good: battery level range, peak solar, home, import, export, charge and discharge power, and the Smart Meter's grid voltage range. Changes to your typed prices (with the date they started, in **Edit costs**) and to your Octopus tariff go in the event log, and earlier days stay priced at what they cost then. All of it is in **Export data**.
+
+**Weather**: enter your latitude and longitude under Trends > Weather and the dashboard fetches hourly temperature, cloud and sunshine from Open-Meteo (free, no account; only the rounded coordinates are sent) and keeps it. That gives solar yield (kWh per kWh/m² of sunshine, which falls if panels get dirty or shaded) and capacity against temperature.
+
+The Solarbank 4's Modbus map (Anker's official integration) has no battery temperature or per-cell voltages, so those can't be recorded; outdoor temperature and grid voltage stand in. Trends now opens on days, with headline figures (self-sufficiency, solar used, savings).
 
 ## Security
 

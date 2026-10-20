@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from .. import weather
 from ..registers import BATTERY, METER
 from ..context import state
 
@@ -96,3 +98,34 @@ def _validated(body: ConnectionIn) -> Connection:
         return Connection(body.host, body.port, body.unit_id).validate()
     except ValueError as err:
         raise HTTPException(status_code=422, detail=str(err)) from err
+
+
+class LocationIn(BaseModel):
+    lat: float | None = None
+    lon: float | None = None
+
+
+@router.get("/api/location")
+def get_location() -> dict:
+    """Where the weather is fetched for (empty until set), and how much is stored."""
+    place = state.connection_store.load_section("location")
+    return {"lat": place.get("lat"), "lon": place.get("lon"), "error": state.weather_error,
+            "days": len(state.storage.weather_days())}
+
+
+@router.post("/api/location")
+async def save_location(body: LocationIn) -> dict:
+    store: ConnectionStore = state.connection_store
+    if body.lat is None or body.lon is None:
+        store.save_section("location", {})
+        return get_location()
+    try:
+        lat, lon = weather.parse_location(body.lat, body.lon)
+        await asyncio.to_thread(weather.sync, state.storage, lat, lon, first_run=True)
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+    except Exception as err:
+        raise HTTPException(status_code=422, detail=f"Couldn't reach Open-Meteo: {err}") from err
+    store.save_section("location", {"lat": lat, "lon": lon})
+    state.weather_error = None
+    return get_location()

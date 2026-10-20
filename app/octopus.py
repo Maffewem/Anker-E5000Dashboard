@@ -387,6 +387,8 @@ class Octopus:
             }
             log.info("Octopus: import tariff %s (%s), export tariff %s", imp.tariff, self.info["import"]["name"],
                      exp.tariff if exp else "none")
+            self._note_tariff("import", self.info["import"])
+            self._note_tariff("export", self.info["export"])
             stored = self._fill_prices(now)
             dispatch_error = None
             if tariff_kind(imp.product) == "intelligent_go":
@@ -417,6 +419,18 @@ class Octopus:
         except Exception as err:  # never let a bad answer stop the dashboard
             self.last_error = f"Unexpected answer from Octopus: {err}"
             log.exception("Octopus sync failed")
+
+    def _note_tariff(self, which: str, info: dict | None) -> None:
+        """Log a change of Octopus tariff (not the first one seen) to the event log."""
+        code = info["tariff"] if info else "none"
+        last = self.storage.event_state("tariff").get(f"octopus_{which}")
+        if last == code:
+            return
+        self.storage.save_event_state("tariff", f"octopus_{which}", code)
+        if last is not None:
+            name = f"{info['name']} ({code})" if info else "none"
+            self.storage.record_event("tariff", f"Octopus {which} tariff changed from {last} to {name}",
+                                      device="tariff", field=f"octopus_{which}", old=last, new=code, source="octopus")
 
     def _describe(self, a: Agreement) -> dict:
         name = a.product

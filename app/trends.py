@@ -47,12 +47,16 @@ def daily_totals(tariff: Tariff, slots: list[dict], prices: dict | None = None) 
 
 
 def period_start(day: date, period: str) -> date:
+    if period == "day":
+        return day
     if period == "month":
         return day.replace(day=1)
     return day - timedelta(days=day.weekday())  # weeks start on Monday
 
 
 def period_end(start: date, period: str) -> date:
+    if period == "day":
+        return start
     if period == "month":
         return start.replace(day=calendar.monthrange(start.year, start.month)[1])
     return start + timedelta(days=6)
@@ -177,3 +181,71 @@ def health(capacity: list[dict], period: str, today: date, count: int, rated: fl
 def _capacity(caps: list[dict]) -> float | None:
     drop = sum(c["soc_drop"] for c in caps)
     return round(sum(c["discharge_wh"] for c in caps) / 1000 / (drop / 100), 2) if drop else None
+
+
+def insights(days: dict[str, dict], today: date, span: int = 30) -> dict:
+    """Headline figures over the last `span` recorded days before today (or all there are).
+
+    Self-sufficiency is the share of home use not bought from the grid;
+    solar used is the share of solar output that wasn't exported.
+    """
+    recent = sorted(k for k in days if k < today.isoformat())[-span:]
+    if not recent:
+        return {"days": 0}
+    t = {k: sum(days[d][k] for d in recent) for k in ENERGY + MONEY}
+    return {
+        "days": len(recent),
+        "self_sufficiency": round(max(0.0, 1 - t["import"] / t["home"]) * 100) if t["home"] > 0 else None,
+        "solar_used": round(max(0.0, 1 - t["export"] / t["solar"]) * 100) if t["solar"] > 0.5 else None,
+        "battery_saved": round(t["battery_saved"], 2),
+        "net_cost": round(t["net_cost"], 2),
+        "discharge": round(t["discharge"], 1),
+    }
+
+
+def conditions(days: dict[str, dict], summaries: list[dict], weather: dict[str, dict], capacity: list[dict],
+               first: date, last: date) -> list[dict]:
+    """One row per day from `first` to `last`: weather, solar yield, battery range, peaks and voltage.
+
+    `solar_yield` is solar kWh per kWh/m² of sunshine, so a grey day and a
+    sunny one can be compared; it falls if panels get dirty or shaded.
+    """
+    by_summary = {r["day"]: r for r in summaries}
+    caps = {c["day"]: c for c in capacity if c["soc_drop"] > 0}
+    rows = []
+    day = first
+    while day <= last:
+        key = day.isoformat()
+        w, d, sm, c = weather.get(key, {}), days.get(key), by_summary.get(key, {}), caps.get(key)
+        sun = w.get("sun_kwh_m2")
+        solar = d["solar"] if d else None
+        rows.append({
+            "day": key,
+            "temp_avg": w.get("temp_avg"), "temp_min": w.get("temp_min"), "temp_max": w.get("temp_max"),
+            "cloud_avg": w.get("cloud_avg"), "sun_kwh_m2": sun,
+            "solar_kwh": round(solar, 2) if solar is not None else None,
+            "solar_yield": round(solar / sun, 2) if solar and sun and w.get("hours", 0) >= 20 and sun >= 0.5 else None,
+            "capacity_kwh": round(c["discharge_wh"] / 1000 / (c["soc_drop"] / 100), 2) if c else None,
+            **{k: sm.get(k) for k in ("soc_min", "soc_max", "solar_peak_w", "home_peak_w", "import_peak_w",
+                                      "export_peak_w", "charge_peak_w", "discharge_peak_w",
+                                      "voltage_min", "voltage_avg", "voltage_max")},
+        })
+        day += timedelta(days=1)
+    return rows
+
+
+def temperature_effect(rows: list[dict]) -> dict | None:
+    """Measured capacity on cold days against mild ones, if both have been seen.
+
+    Needs 5 measured days in each of the coldest and warmest thirds of the
+    temperatures; lithium batteries give a little less when cold, so a
+    difference here is expected and is not a fault.
+    """
+    pts = sorted((r["temp_avg"], r["capacity_kwh"]) for r in rows if r["temp_avg"] is not None and r["capacity_kwh"])
+    third = len(pts) // 3
+    if third < 5 or pts[-1][0] - pts[0][0] < 6:
+        return None
+    cold, warm = pts[:third], pts[-third:]
+    avg = lambda part, i: sum(p[i] for p in part) / len(part)  # noqa: E731
+    return {"cold_temp": round(avg(cold, 0), 1), "cold_kwh": round(avg(cold, 1), 2),
+            "warm_temp": round(avg(warm, 0), 1), "warm_kwh": round(avg(warm, 1), 2), "days": len(pts)}
