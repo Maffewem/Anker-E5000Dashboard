@@ -438,7 +438,8 @@ def test_quick_override_works_with_control_off_and_ends_by_itself(monkeypatch):
     c, store = _charging(FakeCollector(mode=6, soc=50))
     ctl = make(c, {"enabled": False}, store)
     asyncio.run(ctl.set_override("charge", 30, 2000, 70, now=OUT))
-    assert ("battery_power_setpoint", -2000) in c.writes and ("charging_limit_soc", 70) in c.writes
+    # The battery won't take a charge limit under 80%, so the cap stops there.
+    assert ("battery_power_setpoint", -2000) in c.writes and ("charging_limit_soc", 80) in c.writes
     assert ctl.status()["override"]["action"] == "charge" and store["state"]["override"]
     asyncio.run(ctl.tick(OUT + timedelta(minutes=31)))
     assert c.writes[-1] == ("charging_limit_soc", 100) and ("operating_mode", 6) in c.writes
@@ -465,3 +466,48 @@ def test_quick_override_beats_a_schedule_window(monkeypatch):
     ctl = make(c, {"enabled": True, "grid_charge": True}, {})
     asyncio.run(ctl.set_override("hold", 60, now=IN))  # inside the cheap window that would charge
     assert ctl.action == HOLD
+
+
+def test_default_charge_target_is_80():
+    assert ControlSettings().charge_target_soc == 80
+
+
+def test_discharge_cap_stays_inside_what_the_battery_accepts(monkeypatch):
+    monkeypatch.setenv("CONTROL_LIVE", "1")
+    c, store = _charging(FakeCollector(mode=6, soc=80))
+    ctl = make(c, {"enabled": False}, store)
+    asyncio.run(ctl.set_override("discharge", 30, 2000, 40, now=OUT))
+    assert ("discharge_limit_soc", 20) in c.writes  # not 40: the battery's discharge limit tops out at 20%
+
+
+def test_set_battery_limits(monkeypatch):
+    monkeypatch.setenv("CONTROL_LIVE", "1")
+    c, store = _charging()
+    ctl = make(c, {"enabled": False}, store)
+    asyncio.run(ctl.set_limits({"charging_limit_soc": 85, "discharge_limit_soc": 10}))
+    assert c.writes == [("charging_limit_soc", 85)]  # discharge was already 10
+    assert ctl.status()["limits"] == {"charging_limit_soc": 85, "discharge_limit_soc": 10}
+    for bad in ({"charging_limit_soc": 70}, {"discharge_limit_soc": 30}, {"backup_reserve_soc": 20}):
+        with pytest.raises(ValueError):
+            asyncio.run(ctl.set_limits(bad))
+
+
+def test_set_battery_limits_dry_run_writes_nothing(monkeypatch):
+    monkeypatch.delenv("CONTROL_LIVE", raising=False)
+    c, store = _charging()
+    asyncio.run(make(c, {"enabled": False}, store).set_limits({"charging_limit_soc": 80}))
+    assert c.writes == [] and c.raw["charging_limit_soc"] == 100
+
+
+def test_new_limit_while_control_is_capping_is_put_back_afterwards(monkeypatch):
+    monkeypatch.setenv("CONTROL_LIVE", "1")
+    c, store = _charging()
+    ctl = make(c, {"enabled": True, "grid_charge": True, "charge_target_soc": 90}, store)
+    asyncio.run(ctl.tick(IN))
+    assert ("charging_limit_soc", 90) in c.writes
+    asyncio.run(ctl.set_limits({"charging_limit_soc": 85}))
+    assert store["state"]["saved_limits"] == {"charging_limit_soc": 85}
+    asyncio.run(ctl.tick(IN + timedelta(seconds=15)))
+    assert c.writes[-1] == ("charging_limit_soc", 85)  # stricter than the cap, so it applies now
+    asyncio.run(ctl.tick(OUT))
+    assert c.writes[-1] == ("charging_limit_soc", 85) and store["state"]["saved_limits"] == {}

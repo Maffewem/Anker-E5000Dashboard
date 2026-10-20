@@ -115,14 +115,11 @@ def payback(tariff: Tariff, slots: list[dict], today: date,
     per kWh recorded so far, so the average per day covers the battery's
     whole life rather than the first few hours.
     """
-    rates = tariff.slot_rates()
-    prices = prices or {}
+    price = _pricer(tariff, prices)
     value = grid_cost = solar_cost = 0.0
     days = set()
     for r in slots:
-        actual_import, actual_export = prices.get((r["day"], r["slot"]), (None, None))
-        rate = (rates[r["slot"]] if actual_import is None else actual_import) / 100  # pounds per kWh
-        export = (tariff.export_rate if actual_export is None else actual_export) / 100
+        rate, export = price(r["day"], r["slot"])
         value += r["discharge_wh"] / 1000 * rate
         grid_cost += r["grid_charge_wh"] / 1000 * rate
         solar_cost += r["solar_charge_wh"] / 1000 * export
@@ -172,6 +169,80 @@ def payback(tariff: Tariff, slots: list[dict], today: date,
         "payback_date_low": on(low),
         "payback_date_high": on(high),
     }
+
+
+def _pricer(tariff: Tariff, prices: dict | None):
+    """(import, export) in pounds per kWh for a (day, slot): the actual price if
+    there is one (e.g. from Octopus), else the tariff's."""
+    rates = tariff.slot_rates()
+    prices = prices or {}
+
+    def price(day: str, slot: int) -> tuple[float, float]:
+        actual_import, actual_export = prices.get((day, slot), (None, None))
+        rate = rates[slot] if actual_import is None else actual_import
+        export = tariff.export_rate if actual_export is None else actual_export
+        return rate / 100, export / 100
+
+    return price
+
+
+def daily_costs(tariff: Tariff, slots: list[dict], today: date, days: int = 30,
+                prices: dict[tuple[str, int], tuple] | None = None) -> dict:
+    """What charging the battery cost each day, and what its discharge saved.
+
+    Priced the same way as the payback: grid charging at the price of the half
+    hour it happened in, solar charging at the export price it gave up, and
+    discharge at the import price it saved. Days with nothing recorded are
+    left in as zeros so the list has no gaps.
+    """
+    price = _pricer(tariff, prices)
+    first = (today - timedelta(days=days - 1)).isoformat()
+    by_day: dict[str, dict] = {}
+    for r in slots:
+        if r["day"] < first or r["day"] > today.isoformat():
+            continue
+        d = by_day.setdefault(r["day"], {"grid_wh": 0.0, "grid_cost": 0.0, "solar_wh": 0.0, "solar_cost": 0.0,
+                                         "discharge_wh": 0.0, "discharge_value": 0.0})
+        rate, export = price(r["day"], r["slot"])
+        d["grid_wh"] += r["grid_charge_wh"]
+        d["grid_cost"] += r["grid_charge_wh"] / 1000 * rate
+        d["solar_wh"] += r["solar_charge_wh"]
+        d["solar_cost"] += r["solar_charge_wh"] / 1000 * export
+        d["discharge_wh"] += r["discharge_wh"]
+        d["discharge_value"] += r["discharge_wh"] / 1000 * rate
+
+    rows = []
+    for i in range(days):
+        day = (today - timedelta(days=i)).isoformat()
+        d = by_day.get(day)
+        if d is None:
+            rows.append({"day": day, "recorded": False, "grid_charge_kwh": 0.0, "grid_charge_cost": 0.0,
+                         "grid_charge_p_per_kwh": None, "solar_charge_kwh": 0.0, "solar_charge_cost": 0.0,
+                         "discharge_kwh": 0.0, "discharge_value": 0.0, "saved": 0.0})
+            continue
+        grid_kwh = d["grid_wh"] / 1000
+        rows.append({
+            "day": day,
+            "recorded": True,
+            "grid_charge_kwh": round(grid_kwh, 2),
+            "grid_charge_cost": round(d["grid_cost"], 2),
+            "grid_charge_p_per_kwh": round(d["grid_cost"] / grid_kwh * 100, 2) if grid_kwh >= 0.05 else None,
+            "solar_charge_kwh": round(d["solar_wh"] / 1000, 2),
+            "solar_charge_cost": round(d["solar_cost"], 2),
+            "discharge_kwh": round(d["discharge_wh"] / 1000, 2),
+            "discharge_value": round(d["discharge_value"], 2),
+            "saved": round(d["discharge_value"] - d["grid_cost"] - d["solar_cost"], 2),
+        })
+
+    def total(n: int) -> dict:
+        part = [r for r in rows[:n] if r["recorded"]]
+        kwh = sum(r["grid_charge_kwh"] for r in part)
+        cost = sum(r["grid_charge_cost"] for r in part)
+        return {"days": len(part), "grid_charge_kwh": round(kwh, 2), "grid_charge_cost": round(cost, 2),
+                "saved": round(sum(r["saved"] for r in part), 2)}
+
+    return {"days": rows, "today": total(1), "week": total(7), "month": total(min(30, days)),
+            "average_per_day": round(total(days)["grid_charge_cost"] / max(1, total(days)["days"]), 2)}
 
 
 def _before_recording(tariff: Tariff, slots: list[dict], lifetime: dict | None,

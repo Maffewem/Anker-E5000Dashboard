@@ -114,6 +114,12 @@ th, td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--gri
 th:first-child, td:first-child { text-align: left; }
 th { color: var(--text-secondary); font-weight: 600; }
 
+.spend-bar-col { width: 30%; min-width: 60px; }
+.spend-bar { display: block; height: 8px; border-radius: 4px; background: var(--gridpower); min-width: 0; }
+@media (max-width: 520px) { .spend-bar-col { display: none; } #spend-table th, #spend-table td { padding: 6px 4px; } }
+a.button-link { display: inline-block; text-decoration: none; font-size: 14px; border-radius: 8px; padding: 8px 14px;
+  color: var(--text-primary); border: 1px solid var(--axis); }
+
 .facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px 24px; margin: 12px 0 0; }
 .facts div { min-width: 0; }
 .facts dt { font-size: 12px; color: var(--text-muted); }

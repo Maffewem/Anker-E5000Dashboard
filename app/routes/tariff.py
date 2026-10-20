@@ -7,17 +7,20 @@ from ..context import state
 from ..services import make_octopus, octopus_prices, supplier
 
 import asyncio
+import csv
+import io
 from dataclasses import asdict
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import Response
 
 from pydantic import BaseModel
 
 from ..config import ConnectionStore
 from ..octopus import Octopus, validate as validate_octopus
 from ..storage import Storage
-from ..tariff import SUPPLIERS, Tariff, payback
+from ..tariff import SUPPLIERS, Tariff, daily_costs, payback
 
 log = logging.getLogger("solarbank.web")
 router = APIRouter()
@@ -35,8 +38,8 @@ class TariffIn(BaseModel):
     supplier: str = ""
 
 
-@router.get("/api/payback")
-def get_payback() -> dict:
+def _pricing() -> tuple[Tariff, Tariff, dict | None, dict | None]:
+    """(typed tariff, tariff in use, Octopus profile, actual half-hour prices)."""
     store: ConnectionStore = state.connection_store
     storage: Storage = state.storage
     octopus: Octopus = state.octopus
@@ -49,6 +52,33 @@ def get_payback() -> dict:
         tariff = Tariff.from_dict({**{k: v for k, v in profile.items() if v is not None},
                                    "battery_cost": typed.battery_cost, "installed": typed.installed})
     prices = storage.rates() if use_octopus else None
+    return typed, tariff, profile, prices
+
+
+@router.get("/api/charging-costs")
+def get_charging_costs(days: int = Query(30, ge=1, le=366), format: str = Query("json", pattern="^(csv|json)$")):
+    """What charging the battery cost each day (newest first), with today, 7 and 30 day totals."""
+    storage: Storage = state.storage
+    _, tariff, profile, prices = _pricing()
+    today = datetime.now(storage.tz).date()
+    out = daily_costs(tariff, storage.battery_slots(), today, days, prices)
+    out["source"] = "octopus" if profile else "manual"
+    if format == "json":
+        return out
+    columns = [k for k in out["days"][0] if k != "recorded"]
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=columns, extrasaction="ignore", lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(r for r in reversed(out["days"]) if r["recorded"])
+    name = f"solarbank-charging-costs-{today - timedelta(days=days - 1)}-to-{today}.csv"
+    return Response(buf.getvalue(), media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@router.get("/api/payback")
+def get_payback() -> dict:
+    storage: Storage = state.storage
+    octopus: Octopus = state.octopus
+    typed, tariff, profile, prices = _pricing()
     out = payback(tariff, storage.battery_slots(), datetime.now(storage.tz).date(), prices, _lifetime())
     out["source"] = "octopus" if profile else "manual"
     out["octopus_connected"] = octopus.configured and supplier(typed) == "octopus"

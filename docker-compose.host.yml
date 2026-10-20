@@ -27,6 +27,8 @@ services:
       # Battery control only writes to the battery when this is 1. Leave it 0 to
       # try control as a dry run first.
       CONTROL_LIVE: "${CONTROL_LIVE:-0}"
+      # Where the dashboard stops charging until you change it on the dashboard.
+      CHARGE_TARGET_SOC: "${CHARGE_TARGET_SOC:-80}"
       # Set a password to lock every change behind a sign-in, or READ_ONLY=true
       # to turn changes off. Do one of these before publishing the dashboard.
       ADMIN_PASSWORD: "${ADMIN_PASSWORD:-}"

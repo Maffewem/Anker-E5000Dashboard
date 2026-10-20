@@ -47,6 +47,7 @@ You don't need to edit the compose file. Set any of these as **Environment varia
 
 **Connect Octopus** on the dashboard |
 | `CONTROL_LIVE` | `0` | Set to `1` to let **Battery control** write to the battery. Until then it's a dry run that only logs what it would do |
+| `CHARGE_TARGET_SOC` | `80` | Where dashboard charging stops (cheap hours, smart-charge slots, new schedules) until you change **Stop charging at** on the dashboard. Once saved there, the dashboard's value is used |
 | `CONTROL_LIMITS` | `1` | While control is charging or discharging, it also narrows the battery's own charge or discharge limit to the target, so the battery still stops there if the dashboard or Pi goes down mid-window. The limit you had is put back afterwards. `0` turns this off |
 | `ADMIN_PASSWORD` | – | Instead of setting a password with the padlock on the dashboard. Locks every change (settings, battery control, mode, schedules, Octopus, costs) and the full backup behind this password. Viewing stays open. See **Security** below |
 | `READ_ONLY` | `false` | `true` turns every change off, even for you. Recording and battery control carry on with the settings they already have |
@@ -79,14 +80,18 @@ The relay is read-only: it never sends anything to the meter, and Home Assistant
 Off by default. When switched on in **Battery control**, the dashboard takes over the battery during cheap hours (your Octopus cheap windows and Intelligent Go slots, or the off-peak hours in **Edit costs**):
 
 - **Hold:** the battery doesn't discharge, so the house runs on cheap grid power and the stored energy is kept for the dear hours.
-- **Grid charge (optional):** charges at the power you choose until it reaches your stop level (90% by default).
+- **Grid charge (optional):** charges at the power you choose until it reaches your stop level (80% by default, gentler on the cells).
 - **Intelligent Go smart-charge slots (on by default):** when Octopus adds a slot to charge your car, even a short one in the middle of the day (say 13:20-13:40), the whole home pays the off-peak price, so the battery charges to your stop level and doesn't discharge until the slot ends. Slots are re-read from Octopus every 2 minutes, so ones added or cancelled at short notice are picked up. They beat a discharge schedule but not a charge one.
 
 **Your schedules** let you set your own windows: charge (at a power, up to a level), hold, or discharge (at a power, down to a floor), each on the days you pick. They win over cheap hours, and work on their own if the cheap-hour options are unticked. **Battery mode** switches the battery to one of the Anker app's modes straight away. Every change is recorded in the event log.
 
+**Battery limits** sets the battery's own charge limit (80–100%) and discharge limit (0–20%), the same settings as in the Anker app. Unlike the dashboard's stop levels they apply all the time, solar charging included. **Use recommended** fills in 80% and 10%: LFP cells last longest when they don't sit full or empty, so stop at 80–90% most days (a full charge now and then is fine) and keep about 10% in reserve. Nothing changes until you press **Set limits**.
+
 **Quick override** charges, holds or discharges for 30 minutes to 4 hours in one tap, whatever the schedules say, and works even with control switched off. It ends by itself and can be cancelled.
 
 To do this it puts the battery in Anker's third-party control mode. Outside cheap hours, when you switch control off, or when the container stops, it writes back the mode the battery was in before (Smart, Self-consumption and so on). If you change the mode here or in the Anker app, the dashboard stands back until the current window ends. Nothing is written unless `CONTROL_LIVE=1` is set; without it, the **Activity** list shows what it would have done.
+
+**Charging spend** shows what charging the battery from the grid cost each day for the last two weeks (kWh, cost, average price and what the battery saved that day), with today, 7 and 30 day totals, priced the same way as the payback. **Download CSV** gives up to a year of it.
 
 **Battery care** gives tips from the battery's limits and history: time spent full or empty, charge and discharge limits, and cycles so far.
 
