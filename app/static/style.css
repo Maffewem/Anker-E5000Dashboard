@@ -105,6 +105,7 @@ main { display: grid; gap: 16px; padding-bottom: 32px; }
 
 .chart-box { position: relative; height: 280px; margin-top: 12px; }
 .chart-box.short { height: 140px; margin-top: 8px; }
+.trend-controls { display: flex; gap: 8px; flex-wrap: wrap; }
 
 details { margin-top: 12px; }
 summary { cursor: pointer; font-size: 13px; color: var(--text-secondary); }

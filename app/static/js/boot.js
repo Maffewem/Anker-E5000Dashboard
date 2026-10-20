@@ -78,10 +78,11 @@ $("theme-toggle").addEventListener("click", () => {
   showTheme();
   refreshHistory();
   refreshEnergy();
+  drawTrends();
   drawPrices(octopus);
 });
 
-darkQuery.addEventListener("change", () => { showTheme(); refreshHistory(); refreshEnergy(); drawPrices(octopus); });
+darkQuery.addEventListener("change", () => { showTheme(); refreshHistory(); refreshEnergy(); drawTrends(); drawPrices(octopus); });
 showTheme();
 
 refreshAuth().then(refreshLive);
@@ -90,6 +91,7 @@ setInterval(refreshUpdates, 30 * 60 * 1000);
 refreshHistory();
 refreshEnergy();
 refreshPayback();
+refreshTrends();
 refreshEvents();
 refreshOctopus();
 refreshRuntime();
@@ -100,6 +102,7 @@ fetch("/api/compare/custom", { cache: "no-store" }).then((r) => r.json()).then((
 setInterval(refreshControl, 15000);
 setInterval(refreshCare, 10 * 60 * 1000);
 setInterval(refreshPayback, 5 * 60 * 1000);
+setInterval(refreshTrends, 15 * 60 * 1000);
 setInterval(refreshOctopus, 5 * 60 * 1000);
 setInterval(refreshLive, LIVE_MS);
 setInterval(() => { refreshHistory(); refreshEnergy(); refreshEvents(); }, HISTORY_MS);

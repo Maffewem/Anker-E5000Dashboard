@@ -25,8 +25,9 @@ CREATE TABLE IF NOT EXISTS minutes (
     ts INTEGER PRIMARY KEY,  -- unix seconds, start of the minute (UTC)
     {", ".join(f"{f} REAL" for f in POWER_FIELDS + ENERGY_FIELDS)}
 );
--- Battery energy per local half hour, kept for good (not pruned), so the
--- payback can be worked out over the battery's whole life for any tariff.
+-- Energy per local half hour, kept for good (not pruned), so the payback
+-- and long-term trends can be worked out over the battery's whole life for
+-- any tariff. Columns after solar_charge_wh were added later (see SLOT_EXTRA).
 CREATE TABLE IF NOT EXISTS slots (
     day TEXT NOT NULL,       -- local date
     slot INTEGER NOT NULL,   -- half hour of the local day, 0-47
@@ -34,6 +35,16 @@ CREATE TABLE IF NOT EXISTS slots (
     grid_charge_wh REAL NOT NULL DEFAULT 0,
     solar_charge_wh REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (day, slot)
+);
+-- Battery capacity measured per local day: energy discharged over long
+-- uninterrupted discharges and the battery level they took off. Kept for good
+-- so the health trend outlives the minute history.
+CREATE TABLE IF NOT EXISTS capacity_days (
+    day TEXT PRIMARY KEY,
+    discharge_wh REAL NOT NULL,  -- energy over the counted discharges
+    soc_drop REAL NOT NULL,      -- battery level points they took off
+    soc_min REAL,
+    soc_max REAL
 );
 -- Smart Meter readings per minute: average power and voltage, plus the
 -- meter's own lifetime import/export counters at the end of the minute.
@@ -84,6 +95,16 @@ CREATE TABLE IF NOT EXISTS event_state (
 EVENT_KINDS = ("charging", "mode", "setting", "connection", "firmware", "control")
 
 METER_FIELDS = ("grid_w", "voltage", "import_total_kwh", "export_total_kwh")
+
+# Energy per half hour beyond the battery's own, for trends; added to `slots`
+# after it was created, so older databases get them by migration.
+SLOT_EXTRA = ("import_wh", "export_wh", "solar_wh", "home_wh")
+SLOT_FIELDS = ("discharge_wh", "grid_charge_wh", "solar_charge_wh", *SLOT_EXTRA)
+
+# A discharge counts towards the capacity estimate when it takes at least this
+# many battery level points off without charging in between; shorter ones are
+# swamped by the level being reported in whole percent.
+CAPACITY_MIN_DROP = 20
 
 
 @dataclass
@@ -165,8 +186,37 @@ EXPORTS = {
     "minutes": ("minutes", "ts", ("ts", *POWER_FIELDS, *ENERGY_FIELDS)),
     "meter": ("meter_minutes", "ts", ("ts", *METER_FIELDS)),
     "events": ("events", "ts", ("ts", "device", "kind", "field", "old", "new", "message", "source")),
-    "slots": ("slots", "day", ("day", "slot", "discharge_wh", "grid_charge_wh", "solar_charge_wh")),
+    "slots": ("slots", "day", ("day", "slot", *SLOT_FIELDS)),
 }
+
+
+def discharge_runs(rows) -> list[tuple[float, float]]:
+    """(energy Wh, battery level points) for each uninterrupted discharge.
+
+    A run ends at a gap in the readings or at any minute that charges or
+    stands idle, so the level drop belongs to that energy alone.
+    """
+    runs: list[tuple[float, float]] = []
+    wh = 0.0
+    top = last = prev_ts = None
+
+    def close() -> None:
+        if top is not None and last is not None and wh > 0:
+            runs.append((wh, top - last))
+
+    for r in rows:
+        discharging = (r["discharge_wh"] or 0) > 0 and not (r["charge_wh"] or 0) and r["soc"] is not None
+        if not discharging or (prev_ts is not None and r["ts"] - prev_ts > 120):
+            close()
+            wh, top, last = 0.0, None, None
+        if discharging:
+            if top is None:
+                top = r["soc"]
+            wh += r["discharge_wh"]
+            last = r["soc"]
+        prev_ts = r["ts"]
+    close()
+    return runs
 
 
 class Storage:
@@ -183,6 +233,7 @@ class Storage:
             self.tz = ZoneInfo(timezone)
         except Exception:
             self.tz = ZoneInfo("UTC")
+        self._migrate_slots()
         self._backfill_slots()
 
     def write_minute(self, row: dict) -> None:
@@ -265,28 +316,48 @@ class Storage:
             )
             self._db.commit()
 
-    def _add_slot(self, row: dict) -> None:
+    def _add_slot(self, row: dict, fields: tuple[str, ...] = SLOT_FIELDS) -> None:
         charge = row.get("charge_wh") or 0.0
-        discharge = row.get("discharge_wh") or 0.0
-        if not charge and not discharge:
-            return
         # Charging while importing is counted as grid charging; the rest came from solar.
         grid_charge = min(charge, row.get("import_wh") or 0.0)
+        values = {
+            "discharge_wh": row.get("discharge_wh") or 0.0,
+            "grid_charge_wh": grid_charge,
+            "solar_charge_wh": charge - grid_charge,
+            **{f: row.get(f) or 0.0 for f in SLOT_EXTRA},
+        }
+        values = {f: values[f] for f in fields}
+        if not any(values.values()):
+            return
         local = datetime.fromtimestamp(row["ts"], self.tz)
+        cols = ", ".join(values)
         self._db.execute(
-            "INSERT INTO slots (day, slot, discharge_wh, grid_charge_wh, solar_charge_wh) VALUES (?, ?, ?, ?, ?) "
-            "ON CONFLICT (day, slot) DO UPDATE SET discharge_wh = discharge_wh + excluded.discharge_wh, "
-            "grid_charge_wh = grid_charge_wh + excluded.grid_charge_wh, "
-            "solar_charge_wh = solar_charge_wh + excluded.solar_charge_wh",
-            (local.date().isoformat(), (local.hour * 60 + local.minute) // 30, discharge, grid_charge, charge - grid_charge),
+            f"INSERT INTO slots (day, slot, {cols}) VALUES (?, ?{', ?' * len(values)}) "
+            f"ON CONFLICT (day, slot) DO UPDATE SET {', '.join(f'{f} = {f} + excluded.{f}' for f in values)}",
+            (local.date().isoformat(), (local.hour * 60 + local.minute) // 30, *values.values()),
         )
+
+    def _migrate_slots(self) -> None:
+        """Add the trend columns to an older `slots` table, filled from the minute history still kept."""
+        with self._lock:
+            have = {r["name"] for r in self._db.execute("PRAGMA table_info(slots)")}
+            missing = [f for f in SLOT_EXTRA if f not in have]
+            if not missing:
+                return
+            for f in missing:
+                self._db.execute(f"ALTER TABLE slots ADD COLUMN {f} REAL NOT NULL DEFAULT 0")
+            if self._db.execute("SELECT 1 FROM slots LIMIT 1").fetchone():
+                rows = self._db.execute(f"SELECT ts, {', '.join(missing)} FROM minutes").fetchall()
+                for r in rows:
+                    self._add_slot(dict(r), tuple(missing))
+            self._db.commit()
 
     def _backfill_slots(self) -> None:
         """Fill the half-hour table from minute history recorded before it existed."""
         with self._lock:
             if self._db.execute("SELECT 1 FROM slots LIMIT 1").fetchone():
                 return
-            rows = self._db.execute("SELECT ts, import_wh, charge_wh, discharge_wh FROM minutes").fetchall()
+            rows = self._db.execute(f"SELECT ts, {', '.join(ENERGY_FIELDS)} FROM minutes").fetchall()
             for r in rows:
                 self._add_slot(dict(r))
             self._db.commit()
@@ -304,6 +375,49 @@ class Storage:
                 "SELECT day, slot, discharge_wh, grid_charge_wh, solar_charge_wh FROM slots"
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def energy_slots(self) -> list[dict]:
+        """Every recorded half hour with all its energy totals, for trends."""
+        with self._lock:
+            rows = self._db.execute(f"SELECT day, slot, {', '.join(SLOT_FIELDS)} FROM slots").fetchall()
+        return [dict(r) for r in rows]
+
+    def capacity_days(self) -> list[dict]:
+        """Measured capacity per day, oldest first, measuring any finished day not done yet."""
+        today = datetime.now(self.tz).date()
+        with self._lock:
+            done = {r[0] for r in self._db.execute("SELECT day FROM capacity_days")}
+            first = self._db.execute("SELECT MIN(ts) FROM minutes").fetchone()[0]
+        if first is not None:
+            day = datetime.fromtimestamp(first, self.tz).date()
+            while day < today:
+                if day.isoformat() not in done:
+                    self._measure_capacity(day)
+                day += timedelta(days=1)
+        with self._lock:
+            return [dict(r) for r in self._db.execute("SELECT * FROM capacity_days ORDER BY day")]
+
+    def _measure_capacity(self, day: date) -> None:
+        start, end = self._day_start(day), self._day_start(day + timedelta(days=1))
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT ts, soc, charge_wh, discharge_wh FROM minutes WHERE ts >= ? AND ts < ? ORDER BY ts",
+                (start, end),
+            ).fetchall()
+        if not rows:
+            return
+        socs = [r["soc"] for r in rows if r["soc"] is not None]
+        energy = drop = 0.0
+        for run_wh, run_drop in discharge_runs(rows):
+            if run_drop >= CAPACITY_MIN_DROP:
+                energy += run_wh
+                drop += run_drop
+        with self._lock:
+            self._db.execute(
+                "INSERT OR REPLACE INTO capacity_days (day, discharge_wh, soc_drop, soc_min, soc_max) VALUES (?, ?, ?, ?, ?)",
+                (day.isoformat(), energy, drop, min(socs) if socs else None, max(socs) if socs else None),
+            )
+            self._db.commit()
 
     def usage_slots(self, days: int = 365) -> list[dict]:
         """Home use and solar per local half hour, for comparing tariffs.
