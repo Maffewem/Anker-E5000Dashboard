@@ -143,7 +143,8 @@ function runtimeText(r) {
   // Say what ends the projection: a charge the dashboard has planned, or the usual pattern.
   const how = r.recharges_by ? `a scheduled charge at ${atTime(r.recharges_at)}` : `it usually charges, from about ${atTime(r.recharges_at)}`;
   const next = r.recharges_at ? ` until ${how}` : "";
-  if (r.soc <= r.floor_soc + 0.5 && !charging) return `At its ${floor}% discharge limit${next}`;
+  if (r.soc < r.floor_soc - 0.5 && !charging) return `Below its ${floor}% reserve (now ${Math.round(r.soc)}%), holding${next}`;
+  if (r.soc <= r.floor_soc + 0.5 && !charging) return `At its ${floor}% reserve${next}`;
   const short = r.empty_at && !(r.recharges_at && new Date(r.recharges_at) - new Date(r.empty_at) < RUNTIME_MARGIN_MS);
   const low = short ? `down to ${floor}% around ${atTime(r.empty_at)}` : null;
   if (charging && r.full_at) return `Full around ${atTime(r.full_at)}${low ? `, then ${low}` : ""}`;
@@ -161,7 +162,7 @@ async function refreshRuntime() {
   el.hidden = !text;
   el.textContent = text;
   el.title = !r.available ? "" : r.method === "pattern"
-    ? `Estimate from how the battery was used at each time of day over the last ${Math.round(r.pattern_days)} days, down to its ${Math.round(r.floor_soc)}% limit.`
+    ? `Estimate from how the battery was used at each time of day over the last ${Math.round(r.pattern_days)} days, down to its ${Math.round(r.floor_soc)}% reserve.`
     : `Estimate at the current power, down to its ${Math.round(r.floor_soc)}% limit. After a day of history it follows your usual daily pattern instead.`;
 }
 
@@ -245,7 +246,7 @@ function renderFacts(d, status) {
     ["Battery state", d.battery_status && d.battery_status[0].toUpperCase() + d.battery_status.slice(1)],
     ["Capacity", d.rated_kwh != null ? kwh(d.rated_kwh) : null],
     ["Charge limit", pct(d.charging_limit_soc)],
-    ["Discharge limit", pct(d.discharge_limit_soc)],
+    ["Battery reserve", pct(d.discharge_limit_soc)],
     ["Backup reserve", pct(d.backup_reserve_soc)],
     ["Max charge / discharge", d.max_charge_w != null ? `${watts(d.max_charge_w)} / ${watts(d.max_discharge_w)}` : null],
     ["Lifetime charged", d.charged_total_kwh != null ? kwh(d.charged_total_kwh) : null],

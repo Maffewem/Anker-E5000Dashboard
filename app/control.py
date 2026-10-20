@@ -329,9 +329,10 @@ def decide(settings: ControlSettings, windows: list[Window], snapshot: dict, now
         if sch.action == CHARGE and soc is not None and soc < sch.target_soc:
             power = min(sch.power_w, int(snapshot["max_charge_w"])) if snapshot.get("max_charge_w") else sch.power_w
             return CHARGE, -power, f"Charging at {power} W to {sch.target_soc}% ({mine.why})", mine
-        if sch.action == DISCHARGE and soc is not None and soc > sch.target_soc:
+        floor = max(sch.target_soc, snapshot.get("reserve_soc") or 0)
+        if sch.action == DISCHARGE and soc is not None and soc > floor:
             power = min(sch.power_w, int(snapshot["max_discharge_w"])) if snapshot.get("max_discharge_w") else sch.power_w
-            return DISCHARGE, power, f"Discharging at {power} W down to {sch.target_soc}% ({mine.why})", mine
+            return DISCHARGE, power, f"Discharging at {power} W down to {floor}% ({mine.why})", mine
         reached = {CHARGE: " (target reached)", DISCHARGE: " (floor reached)"}.get(sch.action, "")
         return HOLD, 0, f"Holding the battery{reached} ({mine.why})", mine
     if not (settings.hold_cheap or settings.grid_charge):
@@ -435,6 +436,10 @@ class Controller:
         quick = self._override_window(now)
         settings = replace(self.settings, enabled=True) if quick and not self.settings.enabled else self.settings
         windows = ([quick] if quick else []) + self._windows(now)
+        # The battery reserve (its discharge limit) is a floor no dashboard discharge goes under.
+        reserve = self.saved_limits.get("discharge_limit_soc", self.collector.raw.get("discharge_limit_soc"))
+        if isinstance(reserve, int):
+            snap = {**snap, "reserve_soc": reserve}
         action, setpoint, reason, window = decide(settings, windows, snap, now)
         mode = self.collector.raw.get("operating_mode")
         if (self.live and self.in_control and isinstance(mode, int) and mode != THIRD_PARTY_MODE
@@ -551,7 +556,7 @@ class Controller:
             if action == CHARGE:
                 want = ("charging_limit_soc", sch.target_soc if sch else self.settings.charge_target_soc)
             elif action == DISCHARGE and sch:
-                want = ("discharge_limit_soc", sch.target_soc)
+                want = ("discharge_limit_soc", max(sch.target_soc, self.saved_limits.get("discharge_limit_soc", 0)))
         for key in [k for k in self.saved_limits if not want or k != want[0]]:
             await self._restore_limit(key)
         if not want:

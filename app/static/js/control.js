@@ -131,7 +131,7 @@ function renderLimits(c) {
   const l = c.limits || {};
   const known = l.charging_limit_soc != null;
   $("limits-current").textContent = known
-    ? `Now: charge to ${l.charging_limit_soc}%, discharge down to ${l.discharge_limit_soc ?? "?"}%.` : "";
+    ? `Now: charge to ${l.charging_limit_soc}%, reserve ${l.discharge_limit_soc ?? "?"}% (it won't discharge below that).` : "";
   if (!limitsDirty && !$("limits-form").contains(document.activeElement)) {
     $("limit-charge").value = l.charging_limit_soc ?? "";
     $("limit-discharge").value = l.discharge_limit_soc ?? "";
@@ -152,7 +152,7 @@ $("limits-recommended").addEventListener("click", () => {
 $("limits-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const body = { charging_limit_soc: Number($("limit-charge").value), discharge_limit_soc: Number($("limit-discharge").value) };
-  if (!confirm(`Set the battery to charge to ${body.charging_limit_soc}% and discharge down to ${body.discharge_limit_soc}%?`)) return;
+  if (!confirm(`Set the battery to charge to ${body.charging_limit_soc}% with a ${body.discharge_limit_soc}% reserve?`)) return;
   try {
     renderControl(await postSettings("/api/control/limits", body));
     limitsDirty = false;
