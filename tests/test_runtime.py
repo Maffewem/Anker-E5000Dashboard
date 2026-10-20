@@ -80,3 +80,14 @@ def test_pattern_averages_by_local_half_hour():
 
 def test_missing_readings_mean_no_estimate():
     assert estimate({"soc": None}, [None] * 48, 0, NOW) == {"available": False}
+
+
+def test_a_scheduled_charge_ends_the_projection_before_the_usual_pattern():
+    p = [0.0] * 48
+    for slot in range(26, 30):  # solar charging from 13:00
+        p[slot] = -1500.0
+    charge = datetime(2026, 10, 10, 0, 30, tzinfo=TZ)
+    e = estimate(snap(soc=80, power=220), p, 100, NOW, [(charge, "your schedule 00:30-05:30")])
+    assert e["recharges_at"] == charge.isoformat() and e["recharges_by"] == "your schedule 00:30-05:30"
+    e = estimate(snap(soc=80, power=220), p, 100, NOW)
+    assert e["recharges_at"] == "2026-10-10T13:00:00+01:00" and e["recharges_by"] is None
