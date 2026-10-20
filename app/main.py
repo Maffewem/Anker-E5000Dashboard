@@ -25,7 +25,7 @@ from .collector import Collector
 from .registers import BATTERY, METER
 from .compare import Comparer
 from .config import ConnectionStore, Settings
-from .control import Controller, cheap_windows, schedule_windows
+from .control import Controller, cheap_windows, happy_windows, schedule_windows
 from .octopus import Octopus
 from .relay import Relay
 from .storage import Storage
@@ -73,6 +73,7 @@ def _make_controller(app: FastAPI, store: ConnectionStore, storage: Storage) -> 
         status = octopus.status(battery.snapshot, now) if octopus_prices(t) and octopus.info else None
         offpeak = (t.offpeak_start, t.offpeak_end) if t.peak_rate != t.offpeak_rate else None
         mine = schedule_windows(state.controller.settings.schedules, storage.tz, now)
+        mine += happy_windows(state.controller.settings.happy_hours, storage.tz, now)
         return mine + cheap_windows(status, offpeak, storage.tz, now)
 
     return Controller(

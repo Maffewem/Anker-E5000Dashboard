@@ -52,10 +52,13 @@ function renderControl(c) {
     $("control-hold").checked = t.hold_cheap;
     $("control-charge").checked = t.grid_charge;
     $("control-dispatch").checked = t.charge_dispatch;
+    $("control-happy").checked = t.charge_happy;
     $("control-power").value = t.charge_power_w;
     $("control-target").value = t.charge_target_soc;
     controlLoaded = true;
   }
+  happyHours = (t.happy_hours || []).map((h) => ({ ...h }));
+  renderHappy();
   schedules = (t.schedules || []).map((s) => ({ ...s }));
   renderSchedules();
   renderModes(c);
@@ -301,6 +304,28 @@ function renderSchedules() {
   }));
 }
 
+let happyHours = [];
+
+function renderHappy() {
+  const list = $("happy-list");
+  list.replaceChildren(...happyHours.map((h, i) => {
+    const li = document.createElement("li");
+    li.textContent = `${h.date} ${h.start}-${h.end} `;
+    const del = document.createElement("button");
+    del.type = "button";
+    del.textContent = "Remove";
+    del.addEventListener("click", () => saveControl({ happy_hours: happyHours.filter((_, j) => j !== i) }));
+    li.append(del);
+    return li;
+  }));
+}
+
+$("happy-add").addEventListener("click", () => {
+  const h = { date: $("happy-date").value, start: $("happy-start").value, end: $("happy-end").value };
+  if (!h.date || !h.start || !h.end) return;
+  saveControl({ happy_hours: [...happyHours, h] });
+});
+
 // Everything in the card saves the whole settings object; this builds it from
 // the last saved state plus whatever the caller changes.
 async function saveControl(changes = {}) {
@@ -308,6 +333,7 @@ async function saveControl(changes = {}) {
   try {
     renderControl(await postSettings("/api/control", {
       enabled: t.enabled, hold_cheap: t.hold_cheap, grid_charge: t.grid_charge, charge_dispatch: t.charge_dispatch,
+      charge_happy: t.charge_happy, happy_hours: happyHours,
       charge_power_w: t.charge_power_w, charge_target_soc: t.charge_target_soc,
       schedules, ...changes,
     }));
@@ -410,6 +436,7 @@ $("control-form").addEventListener("submit", async (e) => {
   controlDirty = false;
   if (await saveControl({
     hold_cheap: $("control-hold").checked, grid_charge: $("control-charge").checked, charge_dispatch: $("control-dispatch").checked,
+    charge_happy: $("control-happy").checked,
     charge_power_w: Number($("control-power").value) || 1500, charge_target_soc: Number($("control-target").value) || DEFAULT_TARGET,
   })) {
     $("control-saved").textContent = "Saved";

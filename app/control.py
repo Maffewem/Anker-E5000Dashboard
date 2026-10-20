@@ -22,7 +22,7 @@ import os
 import time
 from collections import deque
 from dataclasses import asdict, dataclass, fields, replace
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Callable
 
 from .registers import OPERATING_MODES, THIRD_PARTY_MODE
@@ -38,6 +38,7 @@ DISCHARGE = "discharge"
 ACTIONS = (CHARGE, HOLD, DISCHARGE)
 DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 MAX_SCHEDULES = 20
+MAX_HAPPY = 20
 OVERRIDE_MAX_MINUTES = 12 * 60
 # What the battery itself accepts for its own limits (from Anker's integration):
 # it refuses a charge limit under 80% or a discharge limit over 20%.
@@ -139,12 +140,15 @@ class ControlSettings:
     charge_power_w: int = 1500
     charge_target_soc: int = DEFAULT_CHARGE_TARGET  # stop grid charging here; easier on the cells than 100%
     charge_dispatch: bool = True  # charge (and never discharge) in Intelligent Go smart-charge slots
+    charge_happy: bool = True  # charge (and never discharge) in booked Octopus Happy Hours
+    happy_hours: tuple[dict, ...] = ()  # booked Happy Hours: {"date": "YYYY-MM-DD", "start": "HH:MM", "end": "HH:MM"}, local time
     schedules: tuple[Schedule, ...] = ()  # your own windows; they win over cheap hours
 
     @classmethod
     def from_dict(cls, data: dict | None) -> "ControlSettings":
         known = {f.name for f in fields(cls)}
         data = {k: v for k, v in (data or {}).items() if k in known}
+        data["happy_hours"] = tuple(dict(h) for h in data.get("happy_hours") or ())
         data["schedules"] = tuple(s if isinstance(s, Schedule) else Schedule.from_dict(s)
                                   for s in data.get("schedules") or ())
         return cls(**data)
@@ -158,10 +162,40 @@ class ControlSettings:
             raise ValueError(f"Up to {MAX_SCHEDULES} schedules")
         schedules = tuple(s.validate() for s in self.schedules)
         _check_overlaps(schedules)
+        happy = tuple(_check_happy(h) for h in self.happy_hours)
+        if len(happy) > MAX_HAPPY:
+            raise ValueError(f"Up to {MAX_HAPPY} Happy Hours")
         return ControlSettings(enabled=bool(self.enabled), hold_cheap=bool(self.hold_cheap),
                                grid_charge=bool(self.grid_charge), charge_power_w=int(self.charge_power_w),
                                charge_target_soc=int(self.charge_target_soc), charge_dispatch=bool(self.charge_dispatch),
-                               schedules=schedules)
+                               charge_happy=bool(self.charge_happy), happy_hours=happy, schedules=schedules)
+
+
+def _check_happy(h: dict) -> dict:
+    try:
+        day = date.fromisoformat(str(h.get("date")))
+    except ValueError:
+        raise ValueError("A Happy Hour needs a date") from None
+    start, end = str(h.get("start")), str(h.get("end"))
+    _hhmm(start), _hhmm(end)
+    if start == end:
+        raise ValueError("A Happy Hour can't start and end at the same time")
+    return {"date": day.isoformat(), "start": start, "end": end}
+
+
+def happy_windows(happy_hours, tz, now: datetime) -> list[Window]:
+    """Booked Happy Hours as concrete windows, dropping ones that ended over a day ago."""
+    out = []
+    for h in happy_hours:
+        day = date.fromisoformat(h["date"])
+        a, b = _hhmm(h["start"]), _hhmm(h["end"])
+        start = datetime(day.year, day.month, day.day, *a, tzinfo=tz).astimezone(timezone.utc)
+        end = datetime(day.year, day.month, day.day, *b, tzinfo=tz).astimezone(timezone.utc)
+        if end <= start:
+            end += timedelta(days=1)
+        if end > now - timedelta(days=1):
+            out.append(Window(start, end, f"Octopus Happy Hour {h['start']}-{h['end']}", "octopus", happy=True))
+    return sorted(out, key=lambda w: w.start)
 
 
 def _check_overlaps(schedules) -> None:
@@ -186,6 +220,7 @@ class Window:
     why: str
     source: str = "octopus"  # for the event log: "octopus" or "schedule" (typed off-peak hours, your schedules)
     schedule: Schedule | None = None  # set for your own schedules
+    happy: bool = False  # a booked Octopus Happy Hour: free electricity, so fill the battery
     dispatch: bool = False  # an Intelligent Go smart-charge slot: the whole home pays the off-peak price
 
 
@@ -248,6 +283,14 @@ def decide(settings: ControlSettings, windows: list[Window], snapshot: dict, now
     if not settings.enabled:
         return APP, 0, "Control is off", None
     soc = snapshot.get("soc")
+    happy = next((w for w in windows if w.happy and w.start <= now < w.end), None) if settings.charge_happy else None
+    if happy:
+        # Free power, so charge as fast as the battery allows and never discharge.
+        # Beats every schedule; the normal plan resumes when the hour ends.
+        if soc is not None and soc < settings.charge_target_soc:
+            power = int(snapshot.get("max_charge_w") or settings.charge_power_w)
+            return CHARGE, -power, f"Charging at {power} W to {settings.charge_target_soc}% ({happy.why})", happy
+        return HOLD, 0, f"Holding the battery (target reached; {happy.why})", happy
     mine = next((w for w in windows if w.schedule and w.start <= now < w.end), None)
     slot = next((w for w in windows if w.dispatch and w.start <= now < w.end), None) if settings.charge_dispatch else None
     if slot and not (mine and mine.schedule.action == CHARGE):

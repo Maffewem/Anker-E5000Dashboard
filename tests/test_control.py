@@ -511,3 +511,26 @@ def test_new_limit_while_control_is_capping_is_put_back_afterwards(monkeypatch):
     assert c.writes[-1] == ("charging_limit_soc", 85)  # stricter than the cap, so it applies now
     asyncio.run(ctl.tick(OUT))
     assert c.writes[-1] == ("charging_limit_soc", 85) and store["state"]["saved_limits"] == {}
+
+
+def test_happy_hour_charges_at_full_power_and_beats_schedules():
+    from app.control import Schedule, happy_windows
+    tz = ZoneInfo("Europe/London")
+    hh = ({"date": "2026-10-10", "start": "11:00", "end": "12:00"},)
+    sch = Schedule("discharge", "10:00", "13:00", (0, 1, 2, 3, 4, 5, 6), 1500, 20, True)
+    on = ControlSettings(enabled=True, charge_target_soc=90, happy_hours=hh, schedules=(sch,)).validate()
+    from app.control import schedule_windows
+    inside = datetime(2026, 10, 10, 10, 30, tzinfo=UTC)  # 11:30 BST
+    ws = schedule_windows(on.schedules, tz, inside) + happy_windows(on.happy_hours, tz, inside)
+    action, setpoint, reason, w = decide(on, ws, {"soc": 50, "max_charge_w": 2500}, inside)
+    assert (action, setpoint) == (CHARGE, -2500) and w.happy and "Happy Hour" in reason
+    assert decide(on, ws, {"soc": 95}, inside)[:2] == (HOLD, 0)  # full: still no discharge
+    after = datetime(2026, 10, 10, 11, 30, tzinfo=UTC)
+    assert decide(on, ws, {"soc": 50}, after)[0] == "discharge"  # schedule resumes
+    off = ControlSettings(enabled=True, charge_happy=False, happy_hours=hh, schedules=(sch,))
+    assert decide(off, ws, {"soc": 50}, inside)[0] == "discharge"
+
+
+def test_happy_hour_validation():
+    with pytest.raises(ValueError):
+        ControlSettings(happy_hours=({"date": "nope", "start": "11:00", "end": "12:00"},)).validate()

@@ -25,6 +25,12 @@ class ScheduleIn(BaseModel):
     enabled: bool = True
 
 
+class HappyHourIn(BaseModel):
+    date: str
+    start: str
+    end: str
+
+
 class ControlIn(BaseModel):
     enabled: bool = False
     hold_cheap: bool = True
@@ -32,6 +38,8 @@ class ControlIn(BaseModel):
     charge_power_w: int = 1500
     charge_target_soc: int = DEFAULT_CHARGE_TARGET
     charge_dispatch: bool = True
+    charge_happy: bool = True
+    happy_hours: list[HappyHourIn] = []
     schedules: list[ScheduleIn] = []
 
 
