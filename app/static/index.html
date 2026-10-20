@@ -458,14 +458,14 @@
         </div>
       </div>
       <div class="control-section" id="limits-row">
-        <h3>Battery limits</h3>
+        <h3>Battery reserve and limits</h3>
         <p class="hint">The battery's own limits, the same as in the Anker app. They apply all the time, solar charging included, whether or not dashboard control is on. <span id="limits-current"></span></p>
         <form id="limits-form" class="control-form edit" novalidate>
           <div class="row">
             <div><label for="limit-charge">Charge limit (%)</label><input id="limit-charge" type="number" min="80" max="100" step="1"></div>
-            <div><label for="limit-discharge">Discharge limit (%)</label><input id="limit-discharge" type="number" min="0" max="20" step="1"></div>
+            <div><label for="limit-discharge">Battery reserve (%)</label><input id="limit-discharge" type="number" min="0" max="20" step="1"></div>
           </div>
-          <p class="hint" id="limits-hint">For a longer battery life, stop at 80–90% most days (a full charge now and then is fine) and keep about 10% in reserve. The battery accepts a charge limit of 80–100% and a discharge limit of 0–20%.</p>
+          <p class="hint" id="limits-hint">For a longer battery life, stop at 80–90% most days (a full charge now and then is fine) and keep a 10–15% reserve. The reserve is the lowest the battery discharges to (the Anker app's discharge limit, 0–20%); dashboard schedules and holds respect it. The charge limit accepts 80–100%.</p>
           <div class="dialog-actions"><span class="setup-msg ok" id="limits-saved"></span><button type="button" class="secondary" id="limits-recommended">Use recommended</button><button type="submit" class="primary">Set limits</button></div>
         </form>
       </div>

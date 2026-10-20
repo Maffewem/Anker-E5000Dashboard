@@ -534,3 +534,14 @@ def test_happy_hour_charges_at_full_power_and_beats_schedules():
 def test_happy_hour_validation():
     with pytest.raises(ValueError):
         ControlSettings(happy_hours=({"date": "nope", "start": "11:00", "end": "12:00"},)).validate()
+
+
+def test_discharge_schedule_stops_at_the_battery_reserve():
+    from datetime import datetime, timezone
+    sch = Schedule(DISCHARGE, "00:00", "23:59", tuple(range(7)), 1000, 5)
+    now = datetime(2026, 10, 20, 12, 0, tzinfo=timezone.utc)
+    win = Window(now - timedelta(hours=1), now + timedelta(hours=1), "test", "schedule", sch)
+    st = ControlSettings(enabled=True)
+    snap = {"soc": 12, "max_discharge_w": 2400, "reserve_soc": 15}
+    assert decide(st, [win], snap, now)[0] == HOLD
+    assert decide(st, [win], {**snap, "soc": 30}, now)[0] == DISCHARGE
