@@ -81,6 +81,7 @@ def _make_controller(app: FastAPI, store: ConnectionStore, storage: Storage) -> 
         load=lambda: {"settings": store.load_section("control"), "state": store.load_section("control_state")},
         save_state=lambda state: store.save_section("control_state", state),
         windows=windows,
+        last_full=storage.last_full,
     )
 
 

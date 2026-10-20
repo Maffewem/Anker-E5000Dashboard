@@ -68,7 +68,7 @@ def test_live_hold_then_hand_back(monkeypatch):
     ctl = make(c, {"enabled": True}, store)
     asyncio.run(ctl.tick(IN))
     assert c.writes == [("operating_mode", 3), ("battery_power_setpoint", 0)]
-    assert store["state"] == {"saved_mode": 6, "in_control": True, "saved_limits": {}, "override": None}
+    assert store["state"] == {"saved_mode": 6, "in_control": True, "saved_limits": {}, "override": None, "full_at": None}
     asyncio.run(ctl.tick(IN + timedelta(seconds=15)))
     assert len(c.writes) == 2  # nothing new to say
     asyncio.run(ctl.tick(OUT))
@@ -545,3 +545,27 @@ def test_discharge_schedule_stops_at_the_battery_reserve():
     snap = {"soc": 12, "max_discharge_w": 2400, "reserve_soc": 15}
     assert decide(st, [win], snap, now)[0] == HOLD
     assert decide(st, [win], {**snap, "soc": 30}, now)[0] == DISCHARGE
+
+
+def test_auto_balance_charges_to_100_in_a_cheap_window():
+    plain = ControlSettings(enabled=True, hold_cheap=False, grid_charge=False, charge_target_soc=80)
+    assert decide(plain, [NIGHT], {"soc": 85}, IN)[0] == APP
+    action, setpoint, reason, _ = decide(plain, [NIGHT], {"soc": 85, "max_charge_w": 2000}, IN, balance=True)
+    assert (action, setpoint) == (CHARGE, -1500) and "100%" in reason
+    assert decide(plain, [NIGHT], {"soc": 100}, IN, balance=True)[:2] == (HOLD, 0)
+    assert decide(plain, [NIGHT], {"soc": 85}, OUT, balance=True)[0] == APP  # only inside a window
+
+
+def test_balance_due_follows_last_full(monkeypatch):
+    monkeypatch.setenv("CONTROL_LIVE", "1")
+    monkeypatch.setenv("CONTROL_LIMITS", "1")
+    now = datetime(2026, 10, 20, tzinfo=UTC)
+    store = {"settings": {"enabled": True, "auto_balance": True, "balance_days": 28}, "state": {}}
+    last = (now - timedelta(days=10)).timestamp()
+    c = Controller(None, lambda: store, lambda st: None, lambda n: [], last_full=lambda: last)
+    assert not c.balance_due(now)
+    c.full_at = (now - timedelta(days=40)).timestamp()
+    c._history_full = lambda: None
+    assert c.balance_due(now)
+    c.settings = ControlSettings(enabled=True)
+    assert not c.balance_due(now)  # off

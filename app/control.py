@@ -39,6 +39,7 @@ ACTIONS = (CHARGE, HOLD, DISCHARGE)
 DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 MAX_SCHEDULES = 20
 MAX_HAPPY = 20
+FULL_SOC = 99  # counts as full
 OVERRIDE_MAX_MINUTES = 12 * 60
 # What the battery itself accepts for its own limits (from Anker's integration):
 # it refuses a charge limit under 80% or a discharge limit over 20%.
@@ -140,6 +141,8 @@ class ControlSettings:
     charge_power_w: int = 1500
     charge_target_soc: int = DEFAULT_CHARGE_TARGET  # stop grid charging here; easier on the cells than 100%
     charge_dispatch: bool = True  # charge (and never discharge) in Intelligent Go smart-charge slots
+    auto_balance: bool = False  # now and then charge to 100% so the battery's level estimate stays accurate
+    balance_days: int = 28  # how long after the last full charge it counts as due
     charge_happy: bool = True  # charge (and never discharge) in booked Octopus Happy Hours
     happy_hours: tuple[dict, ...] = ()  # booked Happy Hours: {"date": "YYYY-MM-DD", "start": "HH:MM", "end": "HH:MM"}, local time
     schedules: tuple[Schedule, ...] = ()  # your own windows; they win over cheap hours
@@ -162,13 +165,16 @@ class ControlSettings:
             raise ValueError(f"Up to {MAX_SCHEDULES} schedules")
         schedules = tuple(s.validate() for s in self.schedules)
         _check_overlaps(schedules)
+        if not 7 <= int(self.balance_days) <= 120:
+            raise ValueError("Balance interval must be between 7 and 120 days")
         happy = tuple(_check_happy(h) for h in self.happy_hours)
         if len(happy) > MAX_HAPPY:
             raise ValueError(f"Up to {MAX_HAPPY} Happy Hours")
         return ControlSettings(enabled=bool(self.enabled), hold_cheap=bool(self.hold_cheap),
                                grid_charge=bool(self.grid_charge), charge_power_w=int(self.charge_power_w),
                                charge_target_soc=int(self.charge_target_soc), charge_dispatch=bool(self.charge_dispatch),
-                               charge_happy=bool(self.charge_happy), happy_hours=happy, schedules=schedules)
+                               charge_happy=bool(self.charge_happy),
+                               auto_balance=bool(self.auto_balance), balance_days=int(self.balance_days), happy_hours=happy, schedules=schedules)
 
 
 def _check_happy(h: dict) -> dict:
@@ -296,13 +302,19 @@ def planned_charges(settings: ControlSettings, windows: list[Window], now: datet
     return sorted(out)
 
 
-def decide(settings: ControlSettings, windows: list[Window], snapshot: dict, now: datetime) -> tuple[str, int, str, Window | None]:
+def decide(settings: ControlSettings, windows: list[Window], snapshot: dict, now: datetime,
+           balance: bool = False) -> tuple[str, int, str, Window | None]:
     """(action, setpoint W, reason, window) for this moment.
+
+    With `balance`, any charging in a cheap, free or scheduled window goes to
+    100% instead of the usual target, even if grid charging is otherwise off.
 
     Your own schedules come first; cheap-hour windows only apply when the
     cheap-hour options are ticked."""
     if not settings.enabled:
         return APP, 0, "Control is off", None
+    if balance:
+        settings = replace(settings, charge_target_soc=100, grid_charge=True)
     soc = snapshot.get("soc")
     happy = next((w for w in windows if w.happy and w.start <= now < w.end), None) if settings.charge_happy else None
     if happy:
@@ -326,9 +338,10 @@ def decide(settings: ControlSettings, windows: list[Window], snapshot: dict, now
         return HOLD, 0, f"Holding the battery (target reached; {slot.why})", slot
     if mine:
         sch = mine.schedule
-        if sch.action == CHARGE and soc is not None and soc < sch.target_soc:
+        target = 100 if balance and mine.source == "schedule" else sch.target_soc
+        if sch.action == CHARGE and soc is not None and soc < target:
             power = min(sch.power_w, int(snapshot["max_charge_w"])) if snapshot.get("max_charge_w") else sch.power_w
-            return CHARGE, -power, f"Charging at {power} W to {sch.target_soc}% ({mine.why})", mine
+            return CHARGE, -power, f"Charging at {power} W to {target}% ({mine.why})", mine
         floor = max(sch.target_soc, snapshot.get("reserve_soc") or 0)
         if sch.action == DISCHARGE and soc is not None and soc > floor:
             power = min(sch.power_w, int(snapshot["max_discharge_w"])) if snapshot.get("max_discharge_w") else sch.power_w
@@ -353,11 +366,13 @@ def decide(settings: ControlSettings, windows: list[Window], snapshot: dict, now
 
 class Controller:
     def __init__(self, collector, load: Callable[[], dict], save_state: Callable[[dict], None],
-                 windows: Callable[[datetime], list[Window]]) -> None:
+                 windows: Callable[[datetime], list[Window]],
+                 last_full: Callable[[], float | None] = lambda: None) -> None:
         self.collector = collector
         self._load = load  # -> {"settings": {...}, "state": {...}}
         self._save_state = save_state
         self._windows = windows
+        self._history_full = last_full  # unix time the battery was last seen full, from the recorded history
         stored = load()
         self.settings = ControlSettings.from_dict(stored.get("settings"))
         state = stored.get("state") or {}
@@ -368,6 +383,8 @@ class Controller:
         self.saved_limits: dict[str, int] = dict(state.get("saved_limits") or {})
         self._last_cap: dict[str, int] = {}
         self.override: dict | None = state.get("override") or None
+        self.full_at: float | None = state.get("full_at")  # last time we saw it full, kept across restarts
+        self.balancing = False
         self.action = APP
         self.reason = "Starting"
         self.window: Window | None = None
@@ -414,7 +431,18 @@ class Controller:
 
     def _persist(self) -> None:
         self._save_state({"saved_mode": self.saved_mode, "in_control": self.in_control,
-                          "saved_limits": self.saved_limits, "override": self.override})
+                          "saved_limits": self.saved_limits, "override": self.override, "full_at": self.full_at})
+
+    def _last_full(self) -> float | None:
+        seen = [t for t in (self.full_at, self._history_full()) if t]
+        return max(seen) if seen else None
+
+    def balance_due(self, now: datetime) -> bool:
+        """Auto balance is on, the battery can take a 100% limit, and it's been too long since it was full."""
+        if not self.settings.auto_balance or not limits_allowed():
+            return False
+        last = self._last_full()
+        return last is None or now.timestamp() - last >= self.settings.balance_days * 86400
 
     async def _write(self, key: str, value: int) -> None:
         if not self.live:
@@ -440,7 +468,22 @@ class Controller:
         reserve = self.saved_limits.get("discharge_limit_soc", self.collector.raw.get("discharge_limit_soc"))
         if isinstance(reserve, int):
             snap = {**snap, "reserve_soc": reserve}
-        action, setpoint, reason, window = decide(settings, windows, snap, now)
+        soc = snap.get("soc")
+        if isinstance(soc, (int, float)) and soc >= FULL_SOC and (not self.full_at or now.timestamp() - self.full_at > 3600):
+            was = self.balancing
+            self.full_at = now.timestamp()
+            self._persist()
+            if was:
+                self._event("Auto balance finished: the battery reached 100%", "auto_balance", "charging", "done", "dashboard", always=True)
+        balance = self.balance_due(now) and not quick
+        action, setpoint, reason, window = decide(settings, windows, snap, now, balance)
+        balancing = balance and action == CHARGE and (soc is None or soc < FULL_SOC)
+        if balancing and not self.balancing:
+            self._event(f"Auto balance: charging to 100% ({window.why if window else reason})", "auto_balance", "due",
+                        "charging", window.source if window else "dashboard", always=True)
+        self.balancing = balancing
+        if balancing:
+            reason = f"Auto balance: {reason}"
         mode = self.collector.raw.get("operating_mode")
         if (self.live and self.in_control and isinstance(mode, int) and mode != THIRD_PARTY_MODE
                 and time.monotonic() - self.took_control_at > 3 * REASSERT_SECONDS):
@@ -554,7 +597,7 @@ class Controller:
         sch = window.schedule if window else None
         if limits_allowed():
             if action == CHARGE:
-                want = ("charging_limit_soc", sch.target_soc if sch else self.settings.charge_target_soc)
+                want = ("charging_limit_soc", 100 if self.balancing else sch.target_soc if sch else self.settings.charge_target_soc)
             elif action == DISCHARGE and sch:
                 want = ("discharge_limit_soc", max(sch.target_soc, self.saved_limits.get("discharge_limit_soc", 0)))
         for key in [k for k in self.saved_limits if not want or k != want[0]]:
@@ -571,7 +614,10 @@ class Controller:
         saved = self.saved_limits[key]
         lo, hi = LIMIT_RANGES[key]
         # Never widen your own limit, and stay inside what the battery accepts.
-        value = min(max(value, lo), saved) if key == "charging_limit_soc" else max(min(value, hi), saved)
+        if self.balancing and key == "charging_limit_soc":
+            value = max(value, saved)  # a balance run is the one time we raise your own limit; it goes back afterwards
+        else:
+            value = min(max(value, lo), saved) if key == "charging_limit_soc" else max(min(value, hi), saved)
         if self._last_cap.get(key) == value:
             return
         await self._write(key, value)
@@ -690,6 +736,8 @@ class Controller:
             "in_control": self.in_control,
             "saved_mode": OPERATING_MODES.get(self.saved_mode) if self.saved_mode is not None else None,
             "override": self.override,
+            "balance": {"due": self.balance_due(datetime.now(timezone.utc)), "active": self.balancing,
+                        "last_full": self._last_full()},
             "window": {"start": w.start.isoformat(), "end": w.end.isoformat(), "why": w.why} if w else None,
             "modes": [{"value": k, "name": v} for k, v in OPERATING_MODES.items() if k != THIRD_PARTY_MODE],
             "limits": {k: self.saved_limits.get(k, self.collector.raw.get(k)) if self.collector.connected else None
