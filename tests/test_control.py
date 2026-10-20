@@ -569,3 +569,16 @@ def test_balance_due_follows_last_full(monkeypatch):
     assert c.balance_due(now)
     c.settings = ControlSettings(enabled=True)
     assert not c.balance_due(now)  # off
+
+
+def test_active_charge_is_the_charging_window_in_progress():
+    from datetime import timedelta
+    from app.control import ControlSettings, Schedule, Window, active_charge, planned_charges
+    now = datetime(2026, 10, 21, 0, 39, tzinfo=timezone.utc)
+    sch = Schedule(CHARGE, "00:30", "05:30")
+    on = ControlSettings(enabled=True, schedules=(sch,))
+    wins = [Window(now - timedelta(minutes=9), now + timedelta(hours=4, minutes=51), "mine", "schedule", sch),
+            Window(now + timedelta(hours=23, minutes=51), now + timedelta(hours=28, minutes=51), "mine", "schedule", sch)]
+    assert active_charge(on, wins, now) == (wins[0].end, "mine")
+    assert planned_charges(on, wins, now) == [(wins[1].start, "mine")]
+    assert active_charge(ControlSettings(enabled=False, schedules=(sch,)), wins, now) is None

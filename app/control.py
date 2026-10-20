@@ -281,25 +281,30 @@ def cheap_windows(octopus_status: dict | None, offpeak: tuple[str, str] | None, 
     return out
 
 
+def _charges(settings: ControlSettings, w: Window) -> bool:
+    """Whether the controller charges the battery in this window."""
+    if w.schedule:
+        return w.schedule.action == CHARGE
+    if w.happy:
+        return settings.charge_happy
+    if w.dispatch:
+        return settings.charge_dispatch
+    return settings.grid_charge
+
+
 def planned_charges(settings: ControlSettings, windows: list[Window], now: datetime) -> list[tuple[datetime, str]]:
     """When the controller will next start charging the battery, and why."""
     if not settings.enabled:
         return []
-    out = []
-    for w in windows:
-        if w.start <= now:
-            continue
-        if w.schedule:
-            wanted = w.schedule.action == CHARGE
-        elif w.happy:
-            wanted = settings.charge_happy
-        elif w.dispatch:
-            wanted = settings.charge_dispatch
-        else:
-            wanted = settings.grid_charge
-        if wanted:
-            out.append((w.start, w.why))
-    return sorted(out)
+    return sorted((w.start, w.why) for w in windows if w.start > now and _charges(settings, w))
+
+
+def active_charge(settings: ControlSettings, windows: list[Window], now: datetime) -> tuple[datetime, str] | None:
+    """The end and description of the charging window in progress, if there is one."""
+    if not settings.enabled:
+        return None
+    ends = sorted((w.end, w.why) for w in windows if w.start <= now < w.end and _charges(settings, w))
+    return ends[-1] if ends else None
 
 
 def decide(settings: ControlSettings, windows: list[Window], snapshot: dict, now: datetime,
