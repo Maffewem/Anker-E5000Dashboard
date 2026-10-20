@@ -95,6 +95,12 @@ To do this it puts the battery in Anker's third-party control mode. Outside chea
 
 **Battery care** gives tips from the battery's limits and history: time spent full or empty, charge and discharge limits, and cycles so far.
 
+## Trends
+
+**Trends** shows solar, home use, grid import and export (Energy), grid cost, export earnings and battery savings (Money), or measured battery capacity and cycles (Battery), per week or month. The current week or month has its projected rest drawn paler on top, from the average of the last 14 recorded days. Below it: this month so far against a month-end projection and last month, savings over time with a projected payback date at the recent rate, and the battery's measured capacity against its rating.
+
+It all comes from the half-hour history, which is kept for good, so trends cover everything recorded even past `RETENTION_DAYS`. Older installs get solar, home, import and export added to that history from the minute readings still kept. Costs are unit prices only (no standing charge). The battery doesn't report its state of health, so capacity is measured from long discharges (energy out ÷ battery level used); watch its trend rather than the exact number.
+
 ## Security
 
 Out of the box the dashboard trusts everyone who can reach it, which is fine on your home network. Anyone who can open it can also change the battery's mode and schedules, so before you make it reachable from anywhere else:
@@ -110,6 +116,6 @@ What's protected either way: the Octopus API key is never sent to the browser (v
 - **Event log:** the dashboard logs when the Solarbank starts or stops charging or discharging (once the new state has lasted a minute), changes mode, charge or discharge limit, backup reserve or firmware, and when either device connects, drops or gets a new address. Changes made while the dashboard was stopped are logged when it starts again.
 - **Export:** the Export data card at the bottom of the dashboard downloads readings as CSV or JSON for any date range, or a full backup of the database.
 - **Try it without hardware:** `docker compose -f docker-compose.demo.yml up --build` runs simulated devices.
-- **API:** `/api/live`, `/api/history?hours=24`, `/api/energy?days=14`, `/api/runtime` (when the battery runs empty or fills), `/api/payback`, `/api/octopus`, `/api/compare` (tariff comparison), `/api/control`, `/api/battery-care`, `/api/export?data=minutes&start=2026-01-01&end=2026-01-31` (also `daily`, `meter`, `slots`, `events`; add `&format=json` for JSON), `/api/export/backup` (the whole SQLite database), `/api/events?kind=charging,mode` (the event log, newest first), `/api/raw` (every register, for troubleshooting) and `/healthz`.
+- **API:** `/api/live`, `/api/history?hours=24`, `/api/energy?days=14`, `/api/runtime` (when the battery runs empty or fills), `/api/payback`, `/api/trends?period=week` (or `month`), `/api/octopus`, `/api/compare` (tariff comparison), `/api/control`, `/api/battery-care`, `/api/export?data=minutes&start=2026-01-01&end=2026-01-31` (also `daily`, `meter`, `slots`, `events`; add `&format=json` for JSON), `/api/export/backup` (the whole SQLite database), `/api/events?kind=charging,mode` (the event log, newest first), `/api/raw` (every register, for troubleshooting) and `/healthz`.
 - **Development:** `pip install -r requirements-dev.txt && python -m pytest`, then `python -m simulator.sim --meter-port 5021` and `python -m app`.
 - The register maps come from Anker's MIT-licensed [official Home Assistant integration](https://github.com/anker-charging/ha-anker-solix-official). See [NOTICE.md](NOTICE.md).
