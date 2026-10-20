@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException
 
 from pydantic import BaseModel
 
-from ..control import ControlSettings, Controller, Schedule
+from ..control import DEFAULT_CHARGE_TARGET, ControlSettings, Controller, Schedule
 
 router = APIRouter()
 
@@ -21,7 +21,7 @@ class ScheduleIn(BaseModel):
     end: str = "05:30"
     days: list[int] = [0, 1, 2, 3, 4, 5, 6]
     power_w: int = 1500
-    target_soc: int = 90
+    target_soc: int = DEFAULT_CHARGE_TARGET
     enabled: bool = True
 
 
@@ -30,13 +30,18 @@ class ControlIn(BaseModel):
     hold_cheap: bool = True
     grid_charge: bool = False
     charge_power_w: int = 1500
-    charge_target_soc: int = 90
+    charge_target_soc: int = DEFAULT_CHARGE_TARGET
     charge_dispatch: bool = True
     schedules: list[ScheduleIn] = []
 
 
 class ModeIn(BaseModel):
     mode: int
+
+
+class LimitsIn(BaseModel):
+    charging_limit_soc: int | None = None
+    discharge_limit_soc: int | None = None
 
 
 class OverrideIn(BaseModel):
@@ -91,6 +96,22 @@ async def set_battery_mode(body: ModeIn) -> dict:
         raise HTTPException(status_code=409, detail="The battery isn't connected")
     try:
         await controller.set_mode(body.mode)
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+    except Exception as err:
+        raise HTTPException(status_code=502, detail=f"The battery didn't accept the change: {err}") from err
+    return controller.status()
+
+
+@router.post("/api/control/limits")
+async def set_battery_limits(body: LimitsIn) -> dict:
+    """Set the battery's own charge and discharge limits now."""
+    controller: Controller = state.controller
+    if not state.collectors["battery"].connected:
+        raise HTTPException(status_code=409, detail="The battery isn't connected")
+    limits = {k: v for k, v in body.model_dump().items() if v is not None}
+    try:
+        await controller.set_limits(limits)
     except ValueError as err:
         raise HTTPException(status_code=422, detail=str(err)) from err
     except Exception as err:

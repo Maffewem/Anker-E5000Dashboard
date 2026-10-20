@@ -26,18 +26,18 @@ def care(snapshot: dict, soc: dict, control: dict | None = None) -> dict:
     if top is not None and top >= 100 and enough and full is not None and full > 0.25:
         tip("suggest", "Often sitting full",
             f"The battery was at 98% or more for {full:.0%} of the last {min(30, round(soc['days']))} days. "
-            "Setting the charge limit to 90–95% in the Anker app keeps it out of the top of its range, "
-            "at the cost of a little capacity.")
+            "A charge limit of 80–90% (Battery limits in the Battery control card, or the Anker app) keeps it "
+            "out of the top of its range, at the cost of a little capacity.")
     elif top is not None and top >= 100:
         tip("info", "Charge limit is 100%",
-            "That's fine if the battery empties most evenings. If it often stays full for hours, 90–95% is gentler.")
+            "That's fine if the battery empties most evenings. If it often stays full for hours, 80–90% is gentler.")
     elif top is not None:
         tip("good", f"Charge limit {top:.0f}%", "Stopping short of full reduces wear on the cells.")
 
     if bottom is not None and bottom < 5:
         tip("suggest", f"Discharge limit {bottom:.0f}%",
-            "Letting it run completely flat is the hardest use for the cells. A limit of 5–10% in the Anker app "
-            "keeps a small reserve.")
+            "Letting it run completely flat is the hardest use for the cells. A discharge limit of about 10% "
+            "(Battery limits in the Battery control card, or the Anker app) keeps a small reserve.")
     elif enough and empty is not None and empty > 0.25:
         tip("suggest", "Often sitting empty",
             f"The battery was at 7% or less for {empty:.0%} of the time. That usually means it's smaller than the "
@@ -45,7 +45,7 @@ def care(snapshot: dict, soc: dict, control: dict | None = None) -> dict:
 
     if control and control.get("grid_charge") and control.get("charge_target_soc", 0) >= 100:
         tip("suggest", "Grid charging to 100%",
-            "Charging from the grid to 90% leaves room for morning solar and avoids sitting full overnight.")
+            "Charging from the grid to 80–90% leaves room for morning solar and avoids sitting full overnight.")
 
     if cycles is not None:
         tip("info", f"About {cycles:g} full cycles so far",

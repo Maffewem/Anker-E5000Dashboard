@@ -39,6 +39,24 @@ ACTIONS = (CHARGE, HOLD, DISCHARGE)
 DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 MAX_SCHEDULES = 20
 OVERRIDE_MAX_MINUTES = 12 * 60
+# What the battery itself accepts for its own limits (from Anker's integration):
+# it refuses a charge limit under 80% or a discharge limit over 20%.
+LIMIT_RANGES = {"charging_limit_soc": (80, 100), "discharge_limit_soc": (0, 20)}
+# Gentle on LFP cells: stop short of full most days, keep a small reserve.
+RECOMMENDED_LIMITS = {"charging_limit_soc": 80, "discharge_limit_soc": 10}
+
+
+def _env_soc(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, default))
+    except ValueError:
+        return default
+    return value if 20 <= value <= 100 else default
+
+
+# Where the dashboard stops charging (cheap hours, smart-charge slots, new
+# schedules) until you change it on the dashboard. CHARGE_TARGET_SOC sets it.
+DEFAULT_CHARGE_TARGET = _env_soc("CHARGE_TARGET_SOC", 80)
 
 
 def live_writes_allowed() -> bool:
@@ -69,7 +87,7 @@ class Schedule:
     end: str = "05:30"
     days: tuple[int, ...] = (0, 1, 2, 3, 4, 5, 6)  # Monday = 0; the day the window starts
     power_w: int = 1500  # charge or discharge power
-    target_soc: int = 90  # charge: stop here; discharge: stop here (a floor)
+    target_soc: int = DEFAULT_CHARGE_TARGET  # charge: stop here; discharge: stop here (a floor)
     enabled: bool = True
 
     @classmethod
@@ -119,7 +137,7 @@ class ControlSettings:
     hold_cheap: bool = True  # don't discharge while electricity is cheap
     grid_charge: bool = False  # also charge from the grid in the cheapest hours
     charge_power_w: int = 1500
-    charge_target_soc: int = 90  # stop grid charging here; easier on the cells than 100%
+    charge_target_soc: int = DEFAULT_CHARGE_TARGET  # stop grid charging here; easier on the cells than 100%
     charge_dispatch: bool = True  # charge (and never discharge) in Intelligent Go smart-charge slots
     schedules: tuple[Schedule, ...] = ()  # your own windows; they win over cheap hours
 
@@ -482,7 +500,9 @@ class Controller:
             self.saved_limits[key] = current
             self._persist()  # before writing, so a crash can still restore it
         saved = self.saved_limits[key]
-        value = min(value, saved) if key == "charging_limit_soc" else max(value, saved)  # never widen your own limit
+        lo, hi = LIMIT_RANGES[key]
+        # Never widen your own limit, and stay inside what the battery accepts.
+        value = min(max(value, lo), saved) if key == "charging_limit_soc" else max(min(value, hi), saved)
         if self._last_cap.get(key) == value:
             return
         await self._write(key, value)
@@ -510,6 +530,42 @@ class Controller:
                 self.last_error = str(err)
                 self._note(f"Couldn't put the battery's {key} back yet: {err}")
                 return
+
+    async def set_limits(self, limits: dict[str, int]) -> None:
+        """Set the battery's own charge and/or discharge limit, as in the Anker app.
+
+        These hold all the time, solar charging included. If control is
+        narrowing a limit right now, the new value is what gets put back
+        afterwards (and it is written now if it is stricter)."""
+        for key, value in limits.items():
+            lo, hi = LIMIT_RANGES.get(key, (None, None))
+            if lo is None:
+                raise ValueError(f"{key} isn't a battery limit")
+            if not lo <= int(value) <= hi:
+                name = "Charge limit" if key == "charging_limit_soc" else "Discharge limit"
+                raise ValueError(f"{name} must be between {lo}% and {hi}% (the battery won't accept other values)")
+        async with self._lock:
+            for key, value in limits.items():
+                value = int(value)
+                old = self.collector.raw.get(key)
+                name = "charge" if key == "charging_limit_soc" else "discharge"
+                if key in self.saved_limits:
+                    self.saved_limits[key] = value
+                    self._last_cap.pop(key, None)  # the next tick writes the stricter of the cap and this
+                    self._persist()
+                    self._note(f"Battery {name} limit will be {value}% once control stops narrowing it")
+                    self._event(f"Battery {name} limit set to {value}% from the dashboard (applies after the current window)",
+                                key, old, value, "dashboard")
+                    continue
+                if old == value:
+                    continue
+                await self._write(key, value)
+                if self.live:
+                    self.collector.raw[key] = value  # show it now, before the next poll reads it back
+                self._note(f"Battery {name} limit set to {value}% from the dashboard")
+                self._event(f"Battery {name} limit set to {value}% from the dashboard", key, old, value, "dashboard")
+            self.last_error = None
+        self._wake.set()
 
     async def set_mode(self, mode: int) -> None:
         """Switch the battery to one of the Anker app's modes now.
@@ -567,6 +623,10 @@ class Controller:
             "override": self.override,
             "window": {"start": w.start.isoformat(), "end": w.end.isoformat(), "why": w.why} if w else None,
             "modes": [{"value": k, "name": v} for k, v in OPERATING_MODES.items() if k != THIRD_PARTY_MODE],
+            "limits": {k: self.saved_limits.get(k, self.collector.raw.get(k)) if self.collector.connected else None
+                       for k in LIMIT_RANGES},
+            "limit_ranges": LIMIT_RANGES,
+            "recommended_limits": RECOMMENDED_LIMITS,
             "battery_mode": self.collector.raw.get("operating_mode") if self.collector.connected else None,
             "last_error": self.last_error,
             "log": list(self.log)[:20],

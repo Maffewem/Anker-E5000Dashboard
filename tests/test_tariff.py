@@ -4,7 +4,7 @@ from datetime import date
 import pytest
 
 from app.storage import MinuteBucket, Storage
-from app.tariff import Tariff, payback
+from app.tariff import Tariff, daily_costs, payback
 
 
 def test_offpeak_window_can_cross_midnight():
@@ -77,3 +77,29 @@ def test_validate_rejects_bad_times():
         Tariff(installed="2999-01-01").validate()
     with pytest.raises(ValueError):
         Tariff(installed="last year").validate()
+
+
+def test_daily_costs_per_day():
+    tariff = Tariff(peak_rate=30, offpeak_rate=10, offpeak_start="00:00", offpeak_end="05:00", export_rate=15)
+    slots = [
+        {"day": "2026-10-08", "slot": 2, "discharge_wh": 0, "grid_charge_wh": 5000, "solar_charge_wh": 0},  # 01:00
+        {"day": "2026-10-08", "slot": 36, "discharge_wh": 4000, "grid_charge_wh": 0, "solar_charge_wh": 0},  # 18:00
+        {"day": "2026-10-09", "slot": 30, "discharge_wh": 0, "grid_charge_wh": 1000, "solar_charge_wh": 2000},  # 15:00
+        {"day": "2026-09-01", "slot": 2, "discharge_wh": 0, "grid_charge_wh": 9000, "solar_charge_wh": 0},  # too old
+    ]
+    c = daily_costs(tariff, slots, date(2026, 10, 10), days=7)
+    assert [d["day"] for d in c["days"]][:3] == ["2026-10-10", "2026-10-09", "2026-10-08"]
+    assert len(c["days"]) == 7 and not c["days"][0]["recorded"]
+    oct9, oct8 = c["days"][1], c["days"][2]
+    assert oct8["grid_charge_kwh"] == 5 and oct8["grid_charge_cost"] == 0.50 and oct8["grid_charge_p_per_kwh"] == 10
+    assert oct8["discharge_value"] == 1.20 and oct8["saved"] == 0.70
+    assert oct9["grid_charge_cost"] == 0.30 and oct9["solar_charge_cost"] == 0.30 and oct9["saved"] == -0.60
+    assert c["today"]["grid_charge_cost"] == 0 and c["week"] == {"days": 2, "grid_charge_kwh": 6, "grid_charge_cost": 0.80, "saved": 0.10}
+    assert c["average_per_day"] == 0.40
+
+
+def test_daily_costs_use_actual_prices():
+    tariff = Tariff(peak_rate=30, offpeak_rate=30)
+    slots = [{"day": "2026-10-09", "slot": 4, "discharge_wh": 0, "grid_charge_wh": 2000, "solar_charge_wh": 0}]
+    c = daily_costs(tariff, slots, date(2026, 10, 9), days=1, prices={("2026-10-09", 4): (7.5, None)})
+    assert c["days"][0]["grid_charge_cost"] == 0.15

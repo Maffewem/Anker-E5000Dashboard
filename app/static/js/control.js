@@ -59,6 +59,7 @@ function renderControl(c) {
   schedules = (t.schedules || []).map((s) => ({ ...s }));
   renderSchedules();
   renderModes(c);
+  renderLimits(c);
   renderOverride(c);
   syncControlInputs();
   $("control-log").replaceChildren(...(c.log.length ? c.log : [{ text: "Nothing yet." }]).map((e) => {
@@ -116,6 +117,48 @@ $("mode-set").addEventListener("click", async () => {
     $("control-error").textContent = err.message;
   } finally {
     $("mode-set").disabled = false;
+  }
+});
+
+// ----- the battery's own charge and discharge limits -----
+let limitsDirty = false;
+const DEFAULT_TARGET = 80; // if the server hasn't said otherwise
+
+function renderLimits(c) {
+  const l = c.limits || {};
+  const known = l.charging_limit_soc != null;
+  $("limits-current").textContent = known
+    ? `Now: charge to ${l.charging_limit_soc}%, discharge down to ${l.discharge_limit_soc ?? "?"}%.` : "";
+  if (!limitsDirty && !$("limits-form").contains(document.activeElement)) {
+    $("limit-charge").value = l.charging_limit_soc ?? "";
+    $("limit-discharge").value = l.discharge_limit_soc ?? "";
+  }
+  for (const el of $("limits-form").querySelectorAll("input, button")) el.disabled = !known;
+}
+
+for (const ev of ["input", "change"]) $("limits-form").addEventListener(ev, () => { limitsDirty = true; $("limits-saved").textContent = ""; });
+
+$("limits-recommended").addEventListener("click", () => {
+  const r = (control && control.recommended_limits) || { charging_limit_soc: 80, discharge_limit_soc: 10 };
+  $("limit-charge").value = r.charging_limit_soc;
+  $("limit-discharge").value = r.discharge_limit_soc;
+  limitsDirty = true;
+  $("limits-saved").textContent = "Press Set limits to send them to the battery";
+});
+
+$("limits-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const body = { charging_limit_soc: Number($("limit-charge").value), discharge_limit_soc: Number($("limit-discharge").value) };
+  if (!confirm(`Set the battery to charge to ${body.charging_limit_soc}% and discharge down to ${body.discharge_limit_soc}%?`)) return;
+  try {
+    renderControl(await postSettings("/api/control/limits", body));
+    limitsDirty = false;
+    renderLimits(control);
+    $("limits-saved").textContent = control.live ? "Set" : "Dry run: nothing written (CONTROL_LIVE isn't set)";
+    document.activeElement?.blur();
+  } catch (err) {
+    $("control-error").hidden = false;
+    $("control-error").textContent = err.message;
   }
 });
 
@@ -304,7 +347,7 @@ $("sd-action").addEventListener("change", () => {
 function openSchedule(i, preset = {}) {
   editing = i;
   const s = i >= 0 ? schedules[i] : { action: "charge", start: "00:30", end: "05:30", days: [0, 1, 2, 3, 4, 5, 6],
-    power_w: 1500, target_soc: 90, enabled: true, ...preset };
+    power_w: 1500, target_soc: control?.settings.charge_target_soc ?? DEFAULT_TARGET, enabled: true, ...preset };
   $("schedule-title").textContent = i >= 0 ? "Edit schedule" : "New schedule";
   $("sd-action").value = s.action;
   $("sd-start").value = s.start;
@@ -332,7 +375,7 @@ $("schedule-form").addEventListener("submit", async (e) => {
   const s = {
     action: $("sd-action").value, start: $("sd-start").value, end: $("sd-end").value,
     days: [...$("sd-days").querySelectorAll("[data-day]")].filter((b) => b.checked).map((b) => Number(b.dataset.day)),
-    power_w: Number($("sd-power").value) || 1500, target_soc: Number($("sd-target").value) || 90,
+    power_w: Number($("sd-power").value) || 1500, target_soc: Number($("sd-target").value) || DEFAULT_TARGET,
     enabled: editing >= 0 ? schedules[editing].enabled : true,
   };
   if (!s.start || !s.end) { $("schedule-error").textContent = "Pick a start and end time."; return; }
@@ -367,7 +410,7 @@ $("control-form").addEventListener("submit", async (e) => {
   controlDirty = false;
   if (await saveControl({
     hold_cheap: $("control-hold").checked, grid_charge: $("control-charge").checked, charge_dispatch: $("control-dispatch").checked,
-    charge_power_w: Number($("control-power").value) || 1500, charge_target_soc: Number($("control-target").value) || 90,
+    charge_power_w: Number($("control-power").value) || 1500, charge_target_soc: Number($("control-target").value) || DEFAULT_TARGET,
   })) {
     $("control-saved").textContent = "Saved";
     document.activeElement?.blur();

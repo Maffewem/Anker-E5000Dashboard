@@ -141,6 +141,50 @@ function renderPayback(p) {
 
 async function refreshPayback() {
   try { renderPayback(await (await fetch("/api/payback", { cache: "no-store" })).json()); } catch (_) {}
+  refreshSpend();
+}
+
+// ---------- Charging spend per day ----------
+
+const SPEND_DAYS = 14;
+
+function renderSpend(c) {
+  const shown = c.days.slice(0, SPEND_DAYS);
+  const any = c.days.some((d) => d.recorded);
+  $("spend-empty").hidden = any;
+  $("spend-table").hidden = !any;
+  const total = (t) => (t.days ? `${money(t.grid_charge_cost)} (${kwh(t.grid_charge_kwh)})` : null);
+  factList($("spend-facts"), any ? [
+    ["Today so far", total(c.today) || money(0)],
+    ["Last 7 days", total(c.week)],
+    ["Last 30 days", total(c.month)],
+    ["Average per day", money(c.average_per_day)],
+  ] : []);
+  const most = Math.max(0.01, ...shown.map((d) => d.grid_charge_cost));
+  const label = (iso) => new Date(`${iso}T12:00:00`).toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+  $("spend-table").tBodies[0].replaceChildren(...shown.map((d) => {
+    const tr = document.createElement("tr");
+    const cells = d.recorded
+      ? [label(d.day), kwh(d.grid_charge_kwh), money(d.grid_charge_cost), "",
+        d.grid_charge_p_per_kwh != null ? pence(d.grid_charge_p_per_kwh) : "–", money(d.saved)]
+      : [label(d.day), "–", "–", "", "–", "–"];
+    cells.forEach((text, i) => {
+      const td = document.createElement("td");
+      if (i === 3) {
+        td.className = "spend-bar-col";
+        const bar = document.createElement("span");
+        bar.className = "spend-bar";
+        bar.style.width = `${Math.round((d.grid_charge_cost / most) * 100)}%`;
+        td.append(bar);
+      } else td.textContent = text;
+      tr.append(td);
+    });
+    return tr;
+  }));
+}
+
+async function refreshSpend() {
+  try { renderSpend(await (await fetch("/api/charging-costs?days=30", { cache: "no-store" })).json()); } catch (_) {}
 }
 
 $("open-costs").addEventListener("click", () => {
