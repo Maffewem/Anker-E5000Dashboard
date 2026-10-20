@@ -39,6 +39,8 @@ class ControlIn(BaseModel):
     charge_target_soc: int = DEFAULT_CHARGE_TARGET
     charge_dispatch: bool = True
     charge_happy: bool = True
+    auto_balance: bool = False
+    balance_days: int = 28
     happy_hours: list[HappyHourIn] = []
     schedules: list[ScheduleIn] = []
 

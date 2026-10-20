@@ -531,6 +531,17 @@ class Storage:
             "avg_soc": round(r["avg"], 1) if r["avg"] is not None else None,
         }
 
+    def last_full(self, soc: float = 99) -> float | None:
+        """Unix time the battery was last at or above `soc`%, from the minutes or the older daily summaries."""
+        with self._lock:
+            r = self._db.execute("SELECT MAX(ts) FROM minutes WHERE soc >= ?", (soc,)).fetchone()[0]
+            if r is not None:
+                return float(r)
+            day = self._db.execute("SELECT MAX(day) FROM day_summaries WHERE soc_max >= ?", (soc,)).fetchone()[0]
+        if day is None:
+            return None
+        return datetime.fromisoformat(day).replace(hour=12, tzinfo=self.tz).timestamp()
+
     def first_slot_day(self) -> str | None:
         with self._lock:
             return self._db.execute("SELECT MIN(day) FROM slots").fetchone()[0]

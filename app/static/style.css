@@ -228,7 +228,7 @@ dialog input:focus-visible { outline: 2px solid var(--solar); outline-offset: 1p
 .tips span { color: var(--text-secondary); }
 .compare-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
 .compare-actions select { font: inherit; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--page); color: var(--text-primary); }
-.control-form input.text, .control-form input[type=time] { width: 100%; font: inherit; font-size: 16px; padding: 8px 10px; border-radius: 8px;
+.control-form input.text, .control-form input[type=time], .control-form input[type=date] { width: 100%; font: inherit; font-size: 16px; padding: 8px 10px; border-radius: 8px;
   border: 1px solid var(--border); background: var(--page); color: var(--text-primary); }
 #custom-list li { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
 dialog .compare { display: flex; margin: 12px 0 0; }
@@ -346,3 +346,10 @@ dialog input:disabled { opacity: 0.6; }
 dialog select { width: 100%; font: inherit; font-size: 16px; padding: 8px 10px; border-radius: 8px;
   border: 1px solid var(--axis); background: var(--page); color: var(--text-primary); }
 #setup-supplier-row .note { margin-top: 6px; }
+
+/* Booked Happy Hours: a list, then one row of fields that stacks on phones. */
+.happy-list { list-style: none; padding: 0; margin: 0 0 8px; display: grid; gap: 6px; font-size: 14px; }
+.happy-list li { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+.happy-row { display: grid; grid-template-columns: 1.4fr 1fr 1fr auto; gap: 12px; align-items: end; }
+.happy-row button { padding: 9px 16px; }
+@media (max-width: 560px) { .happy-row { grid-template-columns: 1fr 1fr; } .happy-row > div:first-child { grid-column: 1 / -1; } .happy-row button { grid-column: 1 / -1; } }

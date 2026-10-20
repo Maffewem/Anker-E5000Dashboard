@@ -491,14 +491,19 @@
         <label class="compare"><input type="checkbox" id="control-happy"> Octopus Happy Hours: charge at full power and don't discharge during the hours you add below</label>
         <div id="happy-box">
           <ul class="happy-list" id="happy-list"></ul>
-          <div class="row">
+          <div class="happy-row">
             <div><label for="happy-date">Date</label><input id="happy-date" type="date"></div>
             <div><label for="happy-start">From</label><input id="happy-start" type="time" value="11:00"></div>
             <div><label for="happy-end">To</label><input id="happy-end" type="time" value="12:00"></div>
-            <div><button type="button" id="happy-add">Add</button></div>
+            <button type="button" id="happy-add" class="primary">Add</button>
           </div>
           <p class="hint">Octopus doesn't publish booked Happy Hours to customers, so enter the slot you booked. Charging stops at the level below.</p>
         </div>
+        <label class="compare"><input type="checkbox" id="control-balance"> Auto balance: now and then charge to 100% in a cheap or free window so the battery's level reading stays accurate</label>
+        <div class="row" id="balance-box">
+          <div><label for="control-balance-days">Every (days since last full)</label><input id="control-balance-days" type="number" min="7" max="120" step="1" placeholder="28"></div>
+        </div>
+        <p class="hint" id="balance-status"></p>
         <div class="row">
           <div><label for="control-power">Charge power (W)</label><input id="control-power" type="number" min="100" max="5000" step="100"></div>
           <div><label for="control-target">Stop charging at (%)</label><input id="control-target" type="number" min="20" max="100" step="5" placeholder="80"></div>

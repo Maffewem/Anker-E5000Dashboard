@@ -53,10 +53,16 @@ function renderControl(c) {
     $("control-charge").checked = t.grid_charge;
     $("control-dispatch").checked = t.charge_dispatch;
     $("control-happy").checked = t.charge_happy;
+    $("control-balance").checked = t.auto_balance;
+    $("control-balance-days").value = t.balance_days;
     $("control-power").value = t.charge_power_w;
     $("control-target").value = t.charge_target_soc;
     controlLoaded = true;
   }
+  const b = c.balance || {};
+  const last = b.last_full ? `Last full ${new Date(b.last_full * 1000).toLocaleDateString()}.` : "No full charge recorded yet.";
+  $("balance-status").textContent = !t.auto_balance ? "" : b.active ? "Balancing now: charging to 100%."
+    : b.due ? `${last} A balance charge is due and will run in the next cheap, free or scheduled charge window.` : `${last} Not due yet.`;
   happyHours = (t.happy_hours || []).map((h) => ({ ...h }));
   renderHappy();
   schedules = (t.schedules || []).map((s) => ({ ...s }));
@@ -314,6 +320,7 @@ function renderHappy() {
     const del = document.createElement("button");
     del.type = "button";
     del.textContent = "Remove";
+    del.className = "secondary";
     del.addEventListener("click", () => saveControl({ happy_hours: happyHours.filter((_, j) => j !== i) }));
     li.append(del);
     return li;
@@ -334,6 +341,7 @@ async function saveControl(changes = {}) {
     renderControl(await postSettings("/api/control", {
       enabled: t.enabled, hold_cheap: t.hold_cheap, grid_charge: t.grid_charge, charge_dispatch: t.charge_dispatch,
       charge_happy: t.charge_happy, happy_hours: happyHours,
+      auto_balance: t.auto_balance, balance_days: t.balance_days,
       charge_power_w: t.charge_power_w, charge_target_soc: t.charge_target_soc,
       schedules, ...changes,
     }));
@@ -437,6 +445,7 @@ $("control-form").addEventListener("submit", async (e) => {
   if (await saveControl({
     hold_cheap: $("control-hold").checked, grid_charge: $("control-charge").checked, charge_dispatch: $("control-dispatch").checked,
     charge_happy: $("control-happy").checked,
+    auto_balance: $("control-balance").checked, balance_days: Number($("control-balance-days").value) || 28,
     charge_power_w: Number($("control-power").value) || 1500, charge_target_soc: Number($("control-target").value) || DEFAULT_TARGET,
   })) {
     $("control-saved").textContent = "Saved";
