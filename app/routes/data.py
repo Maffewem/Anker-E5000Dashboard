@@ -11,7 +11,7 @@ import os
 import tempfile
 import time
 from dataclasses import asdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from starlette.background import BackgroundTask
@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 
 from ..battery_care import care
+from ..control import planned_charges
 from ..runtime import PATTERN_DAYS, estimate, pattern_from_minutes
 from ..storage import EVENT_KINDS, Storage
 
@@ -36,7 +37,9 @@ def runtime() -> dict:
         rows = storage.battery_power_since(int(now) - PATTERN_DAYS * 86400)
         cache.update(zip(("pattern", "hours"), pattern_from_minutes(rows, storage.tz)), at=now)
     snap = state.collectors["battery"].snapshot
-    return estimate(snap, cache["pattern"], cache["hours"], datetime.now(storage.tz))
+    local = datetime.now(storage.tz)
+    charges = planned_charges(state.controller.settings, state.controller._windows(local.astimezone(timezone.utc)), local)
+    return estimate(snap, cache["pattern"], cache["hours"], local, charges)
 
 
 @router.get("/api/history")

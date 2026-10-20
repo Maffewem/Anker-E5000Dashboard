@@ -275,6 +275,27 @@ def cheap_windows(octopus_status: dict | None, offpeak: tuple[str, str] | None, 
     return out
 
 
+def planned_charges(settings: ControlSettings, windows: list[Window], now: datetime) -> list[tuple[datetime, str]]:
+    """When the controller will next start charging the battery, and why."""
+    if not settings.enabled:
+        return []
+    out = []
+    for w in windows:
+        if w.start <= now:
+            continue
+        if w.schedule:
+            wanted = w.schedule.action == CHARGE
+        elif w.happy:
+            wanted = settings.charge_happy
+        elif w.dispatch:
+            wanted = settings.charge_dispatch
+        else:
+            wanted = settings.grid_charge
+        if wanted:
+            out.append((w.start, w.why))
+    return sorted(out)
+
+
 def decide(settings: ControlSettings, windows: list[Window], snapshot: dict, now: datetime) -> tuple[str, int, str, Window | None]:
     """(action, setpoint W, reason, window) for this moment.
 
