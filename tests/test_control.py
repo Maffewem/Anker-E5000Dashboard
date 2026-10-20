@@ -582,3 +582,14 @@ def test_active_charge_is_the_charging_window_in_progress():
     assert active_charge(on, wins, now) == (wins[0].end, "mine")
     assert planned_charges(on, wins, now) == [(wins[1].start, "mine")]
     assert active_charge(ControlSettings(enabled=False, schedules=(sch,)), wins, now) is None
+
+
+def test_active_target_is_where_the_charge_in_progress_stops():
+    from app.control import ControlSettings, Schedule, Window, active_target
+    now = datetime(2026, 10, 21, 0, 39, tzinfo=timezone.utc)
+    sch = Schedule(CHARGE, "00:30", "05:30", target_soc=80)
+    on = ControlSettings(enabled=True, schedules=(sch,))
+    win = Window(now - timedelta(minutes=9), now + timedelta(hours=4), "mine", "schedule", sch)
+    assert active_target(on, [win], now) == 80
+    assert active_target(on, [win], now, balance=True) == 100
+    assert active_target(on, [], now) is None

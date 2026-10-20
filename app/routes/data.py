@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 
 from ..battery_care import care
-from ..control import active_charge, planned_charges
+from ..control import active_charge, active_target, planned_charges
 from ..runtime import PATTERN_DAYS, estimate, pattern_from_minutes
 from ..storage import EVENT_KINDS, Storage
 
@@ -40,7 +40,8 @@ def runtime() -> dict:
     local = datetime.now(storage.tz)
     settings, windows = state.controller.settings, state.controller._windows(local.astimezone(timezone.utc))
     return estimate(snap, cache["pattern"], cache["hours"], local, planned_charges(settings, windows, local),
-                    active_charge(settings, windows, local))
+                    active_charge(settings, windows, local),
+                    active_target(settings, windows, local, state.controller.balance_due(local)))
 
 
 @router.get("/api/history")

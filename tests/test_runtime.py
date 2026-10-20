@@ -106,3 +106,16 @@ def test_a_scheduled_charge_in_progress_is_reported_and_not_called_a_wait_for_so
     assert e["charging_by"] == "your schedule 00:30-05:30"
     idle = estimate(snap(soc=10, power=0, floor=10), p, 100, now, [(nxt, "x")], (end, "x"))
     assert not idle["charging"] and idle["charging_until"] is None
+
+
+def test_full_time_while_charging_follows_the_live_power_to_the_target():
+    p = [0.0] * 48  # the usual pattern says nothing useful about this charge
+    now = datetime(2026, 10, 21, 0, 39, tzinfo=TZ)
+    s = snap(soc=10, power=-2500, floor=10)
+    e = estimate(s, p, 100, now, None, None, 90)
+    # 80% of 5 kWh = 4 kWh at 2.5 kW is 1.6 h
+    assert e["charge_target"] == 90 and e["full_at"] == "2026-10-21T02:15:00+01:00"
+    e = estimate(s, p, 100, now)
+    assert e["charge_target"] == 100 and e["full_at"] == "2026-10-21T02:27:00+01:00"
+    e = estimate(s, [None] * 48, 2, now, None, None, 90)
+    assert e["full_at"] == "2026-10-21T02:15:00+01:00"

@@ -148,7 +148,8 @@ function runtimeText(r) {
   const short = r.empty_at && !(r.recharges_at && new Date(r.recharges_at) - new Date(r.empty_at) < RUNTIME_MARGIN_MS);
   const low = short ? `down to ${floor}% around ${atTime(r.empty_at)}` : null;
   const planned = r.charging_until ? `scheduled charge until ${atTime(r.charging_until)}` : "";
-  if (charging && r.full_at) return `Full around ${atTime(r.full_at)}${planned ? `, ${planned}` : ""}${low ? `, then ${low}` : ""}`;
+  const goal = r.charge_target && r.charge_target < 100 ? `${Math.round(r.charge_target)}%` : "Full";
+  if (charging && r.full_at) return `${goal} around ${atTime(r.full_at)}${planned ? `, ${planned}` : ""}${low ? `, then ${low}` : ""}`;
   if (charging && planned) return `Charging, ${planned}`;
   if (low) return `Down to ${floor}% around ${atTime(r.empty_at)}${r.recharges_at ? `, before ${how}` : ""}`;
   if (r.recharges_at) return `Lasts${next}`;
