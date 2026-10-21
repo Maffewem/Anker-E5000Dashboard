@@ -47,7 +47,7 @@ OVERRIDE_MAX_MINUTES = 12 * 60
 PACE_MIN_W = 300  # paced charging doesn't go below this; very low power is inefficient
 PACE_SETTLE_SECONDS = 10 * 60  # after changing the paced power, leave it alone this long unless it's well off pace
 PACE_STEP_W = 100  # paced power moves in steps of this, so the setpoint (and event log) stays calm
-DEFAULT_PACE_MARGIN = 90  # minutes before the window ends that a paced charge aims to be done
+DEFAULT_PACE_MARGIN = 45  # minutes before the window ends that a paced charge aims to be done
 # What the battery itself accepts for its own limits (from Anker's integration):
 # it refuses a charge limit under 80% or a discharge limit over 20%.
 LIMIT_RANGES = {"charging_limit_soc": (80, 100), "discharge_limit_soc": (0, 20)}

@@ -461,7 +461,7 @@ $("control-form").addEventListener("submit", async (e) => {
     hold_cheap: $("control-hold").checked, grid_charge: $("control-charge").checked, charge_dispatch: $("control-dispatch").checked,
     charge_happy: $("control-happy").checked,
     auto_balance: $("control-balance").checked, balance_days: Number($("control-balance-days").value) || 28,
-    pace_charge: $("control-pace").checked, pace_margin_min: Number($("control-pace-margin").value) || 90,
+    pace_charge: $("control-pace").checked, pace_margin_min: Number($("control-pace-margin").value) || 45,
     charge_power_w: Number($("control-power").value) || 1500, charge_target_soc: Number($("control-target").value) || DEFAULT_TARGET,
   })) {
     $("control-saved").textContent = "Saved";

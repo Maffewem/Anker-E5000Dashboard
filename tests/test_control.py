@@ -696,9 +696,9 @@ def test_pace_spreads_the_charge_and_leaves_the_margin():
     snap = {"soc": 20, "rated_kwh": 5.0, "max_charge_w": 2500}
     action, setpoint, reason, _ = decide(_paced(), [PACE_WINDOW], snap, IN, pace={})
     assert action == CHARGE
-    # 60% of 5 kWh (3.16 kWh from the grid) over 3 h (01:00 to 04:00 with 90 min spare): ~1050 W, so 1100
-    assert -setpoint == 1100 and "paced" in reason
-    plan = pace_charge(IN, PACE_WINDOW, 20, 80, 5.0, 2500, 90)
+    # 60% of 5 kWh (3.16 kWh from the grid) over 3.75 h (01:00 to 04:45 with the default 45 min spare): ~850 W, so 900
+    assert -setpoint == 900 and "paced" in reason
+    plan = pace_charge(IN, PACE_WINDOW, 20, 80, 5.0, 2500, 90)  # an explicit 90 min margin
     assert plan["deadline"] == datetime(2026, 10, 10, 4, 0, tzinfo=UTC) and plan["finish"] <= plan["deadline"]
 
 
@@ -753,7 +753,7 @@ def test_controller_paces_logs_once_and_respects_live_guard(monkeypatch):
                      save_state=lambda s: None, windows=lambda now: [PACE_WINDOW])
     monkeypatch.delenv("CONTROL_LIVE", raising=False)
     asyncio.run(ctl.tick(IN))
-    assert c.writes == [] and ctl.pace["kind"] == "even" and ctl.pace["power_w"] == 1100  # dry run: nothing written
+    assert c.writes == [] and ctl.pace["kind"] == "even" and ctl.pace["power_w"] == 900  # dry run: nothing written
     notes = [e["text"] for e in ctl.log if e["text"].startswith("Pacing the charge")]
     asyncio.run(ctl.tick(IN + timedelta(seconds=15)))
     assert [e["text"] for e in ctl.log if e["text"].startswith("Pacing the charge")] == notes and len(notes) == 1
