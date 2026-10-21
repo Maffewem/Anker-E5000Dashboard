@@ -100,7 +100,7 @@ def test_slots_keep_trend_energy_and_older_databases_migrate(tmp_path):
     s.write_minute({"ts": 0, "solar_wh": 10.0, "home_wh": 4.0, "export_wh": 6.0})
     assert s.energy_slots() == [{"day": "1970-01-01", "slot": 0, "discharge_wh": 0, "grid_charge_wh": 0,
                                  "solar_charge_wh": 0, "import_wh": 0, "export_wh": 6.0, "solar_wh": 10.0,
-                                 "home_wh": 4.0}]
+                                 "home_wh": 4.0, "discharge_export_wh": 0}]
 
     path = str(tmp_path / "old.db")
     db = sqlite3.connect(path)

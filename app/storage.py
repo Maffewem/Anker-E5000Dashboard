@@ -141,7 +141,7 @@ METER_FIELDS = ("grid_w", "voltage", "import_total_kwh", "export_total_kwh")
 
 # Energy per half hour beyond the battery's own, for trends; added to `slots`
 # after it was created, so older databases get them by migration.
-SLOT_EXTRA = ("import_wh", "export_wh", "solar_wh", "home_wh")
+SLOT_EXTRA = ("import_wh", "export_wh", "solar_wh", "home_wh", "discharge_export_wh")
 SLOT_FIELDS = ("discharge_wh", "grid_charge_wh", "solar_charge_wh", *SLOT_EXTRA)
 
 # A discharge counts towards the capacity estimate when it takes at least this
@@ -394,11 +394,17 @@ class Storage:
         charge = row.get("charge_wh") or 0.0
         # Charging while importing is counted as grid charging; the rest came from solar.
         grid_charge = min(charge, row.get("import_wh") or 0.0)
+        discharge = row.get("discharge_wh") or 0.0
+        # Discharge beyond what the house used went to the grid and earned the
+        # export price, not the import price. Solar surplus goes out first.
+        surplus = max(0.0, (row.get("solar_wh") or 0.0) - (row.get("home_wh") or 0.0))
+        discharge_export = min(discharge, max(0.0, (row.get("export_wh") or 0.0) - surplus))
         values = {
-            "discharge_wh": row.get("discharge_wh") or 0.0,
+            "discharge_wh": discharge,
+            "discharge_export_wh": discharge_export,
             "grid_charge_wh": grid_charge,
             "solar_charge_wh": charge - grid_charge,
-            **{f: row.get(f) or 0.0 for f in SLOT_EXTRA},
+            **{f: row.get(f) or 0.0 for f in SLOT_EXTRA if f != "discharge_export_wh"},
         }
         values = {f: values[f] for f in fields}
         if not any(values.values()):
@@ -421,7 +427,7 @@ class Storage:
             for f in missing:
                 self._db.execute(f"ALTER TABLE slots ADD COLUMN {f} REAL NOT NULL DEFAULT 0")
             if self._db.execute("SELECT 1 FROM slots LIMIT 1").fetchone():
-                rows = self._db.execute(f"SELECT ts, {', '.join(missing)} FROM minutes").fetchall()
+                rows = self._db.execute(f"SELECT ts, {', '.join(ENERGY_FIELDS)} FROM minutes").fetchall()
                 for r in rows:
                     self._add_slot(dict(r), tuple(missing))
             self._db.commit()
@@ -446,7 +452,7 @@ class Storage:
     def battery_slots(self) -> list[dict]:
         with self._lock:
             rows = self._db.execute(
-                "SELECT day, slot, discharge_wh, grid_charge_wh, solar_charge_wh FROM slots"
+                "SELECT day, slot, discharge_wh, discharge_export_wh, grid_charge_wh, solar_charge_wh FROM slots"
             ).fetchall()
         return [dict(r) for r in rows]
 

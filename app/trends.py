@@ -12,7 +12,7 @@ from __future__ import annotations
 import calendar
 from datetime import date, timedelta
 
-from .tariff import Tariff, _pricer
+from .tariff import Tariff, _pricer, discharge_value
 
 # Projections use the average of this many recent full days: long enough to
 # smooth one sunny or grey day, short enough to follow the season.
@@ -39,7 +39,8 @@ def daily_totals(tariff: Tariff, slots: list[dict], prices: dict | None = None) 
         d["export_earned"] += kwh["export"] * exp
         # As in the payback: discharge saves buying at this half hour's price;
         # grid charging costs that price, solar charging the export it gave up.
-        d["battery_saved"] += (kwh["discharge"] * imp - (r.get("grid_charge_wh") or 0.0) / 1000 * imp
+        d["battery_saved"] += (discharge_value({"discharge_wh": r.get("discharge_wh") or 0.0,
+                                                "discharge_export_wh": r.get("discharge_export_wh")}, imp, exp) - (r.get("grid_charge_wh") or 0.0) / 1000 * imp
                                - (r.get("solar_charge_wh") or 0.0) / 1000 * exp)
     for d in days.values():
         d["net_cost"] = d["import_cost"] - d["export_earned"]

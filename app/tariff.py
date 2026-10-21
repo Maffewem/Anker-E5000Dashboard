@@ -121,7 +121,7 @@ def payback(tariff: Tariff, slots: list[dict], today: date,
     days = set()
     for r in slots:
         rate, export = price(r["day"], r["slot"])
-        value += r["discharge_wh"] / 1000 * rate
+        value += discharge_value(r, rate, export)
         grid_cost += r["grid_charge_wh"] / 1000 * rate
         solar_cost += r["solar_charge_wh"] / 1000 * export
         days.add(r["day"])
@@ -187,6 +187,14 @@ def _pricer(tariff: Tariff, prices: dict | None):
     return price
 
 
+def discharge_value(r: dict, rate: float, export: float) -> float:
+    """Pounds a half hour's discharge was worth: the part that met the house's
+    demand saved the import price, the part sent to the grid earned the export price."""
+    total = r["discharge_wh"] / 1000
+    exported = min(total, (r.get("discharge_export_wh") or 0.0) / 1000)
+    return (total - exported) * rate + exported * export
+
+
 class PriceHistory:
     """Prices per (day, slot) for `_pricer`: fetched prices where there are
     any, else the typed prices that were in force that day.
@@ -245,7 +253,7 @@ def daily_costs(tariff: Tariff, slots: list[dict], today: date, days: int = 30,
         d["solar_wh"] += r["solar_charge_wh"]
         d["solar_cost"] += r["solar_charge_wh"] / 1000 * export
         d["discharge_wh"] += r["discharge_wh"]
-        d["discharge_value"] += r["discharge_wh"] / 1000 * rate
+        d["discharge_value"] += discharge_value(r, rate, export)
 
     rows = []
     for i in range(days):
