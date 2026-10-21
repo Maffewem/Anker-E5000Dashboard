@@ -194,6 +194,17 @@ def _pricer(tariff: Tariff, prices: dict | None):
     return price
 
 
+class FreeSlots:
+    """`prices` with grid power in the given (day, slot) half hours at 0p (Happy Hours)."""
+
+    def __init__(self, prices, free: set) -> None:
+        self.prices, self.free = prices, free
+
+    def get(self, key: tuple[str, int], default=(None, None)) -> tuple:
+        base = self.prices.get(key, default) if self.prices is not None else default
+        return (0.0, base[1]) if key in self.free else base
+
+
 def discharge_value(r: dict, rate: float, export: float) -> float:
     """Pounds a half hour's discharge was worth: the part that met the house's
     demand saved the import price, the part sent to the grid earned the export price."""

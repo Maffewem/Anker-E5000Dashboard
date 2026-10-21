@@ -40,6 +40,9 @@ DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 MAX_SCHEDULES = 20
 MAX_HAPPY = 20
 FULL_SOC = 99  # counts as full
+HEADROOM_HOURS = 36  # a Happy Hour starting this soon makes the charge before it leave room
+MIN_BEFORE_HAPPY = 30  # but never cut a charge below this level (or the battery reserve)
+CHARGE_EFFICIENCY = 0.95  # grid energy in to energy stored
 OVERRIDE_MAX_MINUTES = 12 * 60
 # What the battery itself accepts for its own limits (from Anker's integration):
 # it refuses a charge limit under 80% or a discharge limit over 20%.
@@ -204,6 +207,18 @@ def happy_windows(happy_hours, tz, now: datetime) -> list[Window]:
     return sorted(out, key=lambda w: w.start)
 
 
+def happy_slots(happy_hours, tz) -> set[tuple[str, int]]:
+    """The local (day, half hour) pairs the booked Happy Hours cover."""
+    out = set()
+    for w in happy_windows(happy_hours, tz, datetime.min.replace(tzinfo=timezone.utc) + timedelta(days=2)):
+        t = w.start.astimezone(tz)
+        t = t.replace(minute=t.minute // 30 * 30, second=0, microsecond=0)
+        while t < w.end.astimezone(tz):
+            out.add((t.date().isoformat(), t.hour * 2 + t.minute // 30))
+            t += timedelta(minutes=30)
+    return out
+
+
 def _check_overlaps(schedules) -> None:
     """Two enabled schedules can't cover the same minute: which should win would be a guess."""
     week = 7 * 1440
@@ -320,6 +335,33 @@ def active_target(settings: ControlSettings, windows: list[Window], now: datetim
     return 100 if balance else settings.charge_target_soc
 
 
+def happy_headroom(settings: ControlSettings, windows: list[Window], snapshot: dict, now: datetime) -> dict | None:
+    """Room to leave for the next booked Happy Hour, if one starts within a day and a half.
+
+    The free session can take the battery's max charge power for as long as it
+    runs, so a charge before it stops short by that much energy: 2 hours at
+    2.5 kW leaves about 5 kWh. The target is never cut below the battery
+    reserve or MIN_BEFORE_HAPPY. Morning use of the battery isn't estimated;
+    it only makes the room bigger."""
+    rated = snapshot.get("rated_kwh")
+    if not settings.charge_happy or not rated:
+        return None
+    nxt = next((w for w in windows if w.happy and w.start > now and w.start - now <= timedelta(hours=HEADROOM_HOURS)), None)
+    if not nxt:
+        return None
+    power = int(snapshot.get("max_charge_w") or settings.charge_power_w)
+    kwh = power / 1000 * (nxt.end - nxt.start).total_seconds() / 3600 * CHARGE_EFFICIENCY
+    return {"window": nxt, "kwh": round(kwh, 1), "pct": kwh / rated * 100,
+            "floor": max(int(snapshot.get("reserve_soc") or 0), MIN_BEFORE_HAPPY)}
+
+
+def lowered(target: int, room: dict | None) -> int:
+    """`target` with the Happy Hour room taken off (unchanged when there is none)."""
+    if not room:
+        return target
+    return min(target, max(room["floor"], round(target - room["pct"])))
+
+
 def decide(settings: ControlSettings, windows: list[Window], snapshot: dict, now: datetime,
            balance: bool = False) -> tuple[str, int, str, Window | None]:
     """(action, setpoint W, reason, window) for this moment.
@@ -331,10 +373,15 @@ def decide(settings: ControlSettings, windows: list[Window], snapshot: dict, now
     cheap-hour options are ticked."""
     if not settings.enabled:
         return APP, 0, "Control is off", None
-    if balance:
-        settings = replace(settings, charge_target_soc=100, grid_charge=True)
     soc = snapshot.get("soc")
     happy = next((w for w in windows if w.happy and w.start <= now < w.end), None) if settings.charge_happy else None
+    room = None if happy else happy_headroom(settings, windows, snapshot, now)
+    if balance and room:
+        balance = False  # the free session is the place for the full charge; don't pay for one tonight
+    if balance:
+        settings = replace(settings, charge_target_soc=100, grid_charge=True)
+    note = f"; leaving room for the {room['window'].why}" if room else ""
+    cheap_target = lowered(settings.charge_target_soc, room)
     if happy:
         # Free power, so charge as fast as the battery allows and never discharge.
         # Beats every schedule; the normal plan resumes when the hour ends.
@@ -348,18 +395,20 @@ def decide(settings: ControlSettings, windows: list[Window], snapshot: dict, now
         # Smart-charge slots come at short notice, at any time of day, and
         # price the whole home at off-peak: top the battery up and let the
         # house run on the grid rather than spend stored energy now.
-        if soc is not None and soc < settings.charge_target_soc:
+        if soc is not None and soc < cheap_target:
             power = settings.charge_power_w
             if snapshot.get("max_charge_w"):
                 power = min(power, int(snapshot["max_charge_w"]))
-            return CHARGE, -power, f"Charging at {power} W to {settings.charge_target_soc}% ({slot.why})", slot
+            return CHARGE, -power, f"Charging at {power} W to {cheap_target}% ({slot.why}{note})", slot
         return HOLD, 0, f"Holding the battery (target reached; {slot.why})", slot
     if mine:
         sch = mine.schedule
         target = 100 if balance and mine.source == "schedule" else sch.target_soc
+        if mine.source == "schedule":  # not a quick override
+            target = lowered(target, room)
         if sch.action == CHARGE and soc is not None and soc < target:
             power = min(sch.power_w, int(snapshot["max_charge_w"])) if snapshot.get("max_charge_w") else sch.power_w
-            return CHARGE, -power, f"Charging at {power} W to {target}% ({mine.why})", mine
+            return CHARGE, -power, f"Charging at {power} W to {target}% ({mine.why}{note})", mine
         floor = max(sch.target_soc, snapshot.get("reserve_soc") or 0)
         if sch.action == DISCHARGE and soc is not None and soc > floor:
             power = min(sch.power_w, int(snapshot["max_discharge_w"])) if snapshot.get("max_discharge_w") else sch.power_w
@@ -372,11 +421,11 @@ def decide(settings: ControlSettings, windows: list[Window], snapshot: dict, now
     if current is None:
         nxt = next((w for w in windows if w.start > now), None)
         return APP, 0, "No schedule or cheap window now: the Anker app is in charge", nxt
-    if settings.grid_charge and soc is not None and soc < settings.charge_target_soc:
+    if settings.grid_charge and soc is not None and soc < cheap_target:
         power = settings.charge_power_w
         if snapshot.get("max_charge_w"):
             power = min(power, int(snapshot["max_charge_w"]))
-        return CHARGE, -power, f"Charging from the grid to {settings.charge_target_soc}% ({current.why})", current
+        return CHARGE, -power, f"Charging from the grid to {cheap_target}% ({current.why}{note})", current
     if settings.hold_cheap or settings.grid_charge:
         return HOLD, 0, f"Holding the battery so the house uses cheap grid power ({current.why})", current
     return APP, 0, "Normal price: the Anker app is in charge", None
@@ -403,6 +452,9 @@ class Controller:
         self.override: dict | None = state.get("override") or None
         self.full_at: float | None = state.get("full_at")  # last time we saw it full, kept across restarts
         self.balancing = False
+        self.room: dict | None = None  # room being left for a booked Happy Hour, for the card
+        self._room_raw: dict | None = None
+        self._room_logged: tuple | None = None
         self.action = APP
         self.reason = "Starting"
         self.window: Window | None = None
@@ -500,6 +552,22 @@ class Controller:
             self._event(f"Auto balance: charging to 100% ({window.why if window else reason})", "auto_balance", "due",
                         "charging", window.source if window else "dashboard", always=True)
         self.balancing = balancing
+        happy_now = any(w.happy and w.start <= now < w.end for w in windows)
+        room = None if happy_now or balancing else happy_headroom(settings, windows, snap, now)
+        if settings.enabled and room and action == CHARGE and window is not None and window.source != "override":
+            base = window.schedule.target_soc if window.schedule else settings.charge_target_soc
+            target = lowered(base, room)
+            self._room_raw = room
+            self.room = {"kwh": room["kwh"], "target": target, "slot": room["window"].why,
+                         "start": room["window"].start.isoformat()}
+            key = (self.room["start"], target)
+            if key != self._room_logged:
+                self._room_logged = key
+                self._event(f"Leaving room for the {room['window'].why}: charging to {target}% instead of "
+                            f"{base}% so it can take about {room['kwh']:g} kWh free",
+                            "happy_headroom", None, target, window.source, always=True)
+        else:
+            self.room = self._room_raw = None
         if balancing:
             reason = f"Auto balance: {reason}"
         mode = self.collector.raw.get("operating_mode")
@@ -615,7 +683,9 @@ class Controller:
         sch = window.schedule if window else None
         if limits_allowed():
             if action == CHARGE:
-                want = ("charging_limit_soc", 100 if self.balancing else sch.target_soc if sch else self.settings.charge_target_soc)
+                base = sch.target_soc if sch else self.settings.charge_target_soc
+                want = ("charging_limit_soc", 100 if self.balancing else
+                        lowered(base, self._room_raw) if not (window and window.source == "override") else base)
             elif action == DISCHARGE and sch:
                 want = ("discharge_limit_soc", max(sch.target_soc, self.saved_limits.get("discharge_limit_soc", 0)))
         for key in [k for k in self.saved_limits if not want or k != want[0]]:
@@ -754,6 +824,7 @@ class Controller:
             "in_control": self.in_control,
             "saved_mode": OPERATING_MODES.get(self.saved_mode) if self.saved_mode is not None else None,
             "override": self.override,
+            "happy_room": self.room,
             "balance": {"due": self.balance_due(datetime.now(timezone.utc)), "active": self.balancing,
                         "last_full": self._last_full()},
             "window": {"start": w.start.isoformat(), "end": w.end.isoformat(), "why": w.why} if w else None,

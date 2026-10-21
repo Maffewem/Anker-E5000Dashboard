@@ -123,6 +123,13 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS events_ts ON events (ts);
 -- The last value seen for each watched reading, so a change made while the
 -- dashboard was stopped still shows up when it starts again.
+-- Half hours of a booked Octopus Happy Hour: grid power in them is free. Kept
+-- after the day so past charging costs stay at 0p.
+CREATE TABLE IF NOT EXISTS free_slots (
+    day TEXT NOT NULL,
+    slot INTEGER NOT NULL,
+    PRIMARY KEY (day, slot)
+);
 CREATE TABLE IF NOT EXISTS event_state (
     device TEXT NOT NULL,
     field TEXT NOT NULL,
@@ -562,6 +569,17 @@ class Storage:
                 rows,
             )
             self._db.commit()
+
+    def set_free_slots(self, slots: set[tuple[str, int]], from_day: str) -> None:
+        """Make `slots` the free half hours from `from_day` on; earlier ones are history and stay."""
+        with self._lock:
+            self._db.execute("DELETE FROM free_slots WHERE day >= ?", (from_day,))
+            self._db.executemany("INSERT OR IGNORE INTO free_slots (day, slot) VALUES (?, ?)", sorted(slots))
+            self._db.commit()
+
+    def free_slots(self) -> set[tuple[str, int]]:
+        with self._lock:
+            return {(r["day"], r["slot"]) for r in self._db.execute("SELECT day, slot FROM free_slots")}
 
     def rates(self, since: str = "") -> dict[tuple[str, int], tuple]:
         with self._lock:
