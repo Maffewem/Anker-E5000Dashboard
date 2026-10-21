@@ -44,6 +44,9 @@ HEADROOM_HOURS = 36  # a Happy Hour starting this soon makes the charge before i
 MIN_BEFORE_HAPPY = 30  # but never cut a charge below this level (or the battery reserve)
 CHARGE_EFFICIENCY = 0.95  # grid energy in to energy stored
 OVERRIDE_MAX_MINUTES = 12 * 60
+PACE_MIN_W = 300  # paced charging doesn't go below this; very low power is inefficient
+PACE_STEP_W = 100  # paced power moves in steps of this, so the setpoint (and event log) stays calm
+DEFAULT_PACE_MARGIN = 90  # minutes before the window ends that a paced charge aims to be done
 # What the battery itself accepts for its own limits (from Anker's integration):
 # it refuses a charge limit under 80% or a discharge limit over 20%.
 LIMIT_RANGES = {"charging_limit_soc": (80, 100), "discharge_limit_soc": (0, 20)}
@@ -149,6 +152,8 @@ class ControlSettings:
     charge_happy: bool = True  # charge (and never discharge) in booked Octopus Happy Hours
     happy_hours: tuple[dict, ...] = ()  # booked Happy Hours: {"date": "YYYY-MM-DD", "start": "HH:MM", "end": "HH:MM"}, local time
     schedules: tuple[Schedule, ...] = ()  # your own windows; they win over cheap hours
+    pace_charge: bool = False  # spread a charge over its window instead of charging flat out and then sitting full
+    pace_margin_min: int = DEFAULT_PACE_MARGIN  # a paced charge aims to be done this long before the window ends
 
     @classmethod
     def from_dict(cls, data: dict | None) -> "ControlSettings":
@@ -170,6 +175,8 @@ class ControlSettings:
         _check_overlaps(schedules)
         if not 7 <= int(self.balance_days) <= 120:
             raise ValueError("Balance interval must be between 7 and 120 days")
+        if not 15 <= int(self.pace_margin_min) <= 240:
+            raise ValueError("Finish paced charging early by between 15 and 240 minutes")
         happy = tuple(_check_happy(h) for h in self.happy_hours)
         if len(happy) > MAX_HAPPY:
             raise ValueError(f"Up to {MAX_HAPPY} Happy Hours")
@@ -177,7 +184,8 @@ class ControlSettings:
                                grid_charge=bool(self.grid_charge), charge_power_w=int(self.charge_power_w),
                                charge_target_soc=int(self.charge_target_soc), charge_dispatch=bool(self.charge_dispatch),
                                charge_happy=bool(self.charge_happy),
-                               auto_balance=bool(self.auto_balance), balance_days=int(self.balance_days), happy_hours=happy, schedules=schedules)
+                               auto_balance=bool(self.auto_balance), balance_days=int(self.balance_days), happy_hours=happy, schedules=schedules,
+                               pace_charge=bool(self.pace_charge), pace_margin_min=int(self.pace_margin_min))
 
 
 def _check_happy(h: dict) -> dict:
@@ -243,6 +251,7 @@ class Window:
     schedule: Schedule | None = None  # set for your own schedules
     happy: bool = False  # a booked Octopus Happy Hour: free electricity, so fill the battery
     dispatch: bool = False  # an Intelligent Go smart-charge slot: the whole home pays the off-peak price
+    prices: tuple[tuple[datetime, float], ...] = ()  # (half-hour start, import p/kWh) when the rate varies in the window
 
 
 def _daily(start: str, end: str, tz, now: datetime, days=range(7)) -> list[tuple[datetime, datetime]]:
@@ -285,7 +294,10 @@ def cheap_windows(octopus_status: dict | None, offpeak: tuple[str, str] | None, 
     if octopus_status and octopus_status.get("prices"):
         for w in octopus_status.get("recommendations") or []:
             if w["kind"] == "charge":
-                out.append(Window(_utc(w["start"]), _utc(w["end"]), f"{w['note']} ({w['avg_p']:.2f}p)"))
+                a, b = _utc(w["start"]), _utc(w["end"])
+                prices = tuple((t, p["import_p"]) for p in octopus_status["prices"]
+                               if p.get("start") and p.get("import_p") is not None and a <= (t := _utc(p["start"])) < b)
+                out.append(Window(a, b, f"{w['note']} ({w['avg_p']:.2f}p)", prices=prices))
         for d in octopus_status.get("dispatches") or []:
             a, b = _utc(d["start"]), _utc(d["end"])
             out.append(Window(a, b, f"Intelligent Go smart-charge slot {a.astimezone(tz):%H:%M}-{b.astimezone(tz):%H:%M}",
@@ -362,15 +374,99 @@ def lowered(target: int, room: dict | None) -> int:
     return min(target, max(room["floor"], round(target - room["pct"])))
 
 
+def pace_charge(now: datetime, window: Window, soc: float, target: int, rated_kwh: float | None, cap_w: int,
+                margin_min: int, delivery: float | None = None, current_w: int | None = None) -> dict | None:
+    """How to spread a charge over its window so it reaches `target` with time to spare.
+
+    The aim is to be done `margin_min` before the window ends (less for a short
+    window), at the lowest steady power that gets there, never above `cap_w`.
+    If the rate varies through the window, the cheapest half hours are used
+    first, at `cap_w`, and the battery is held in between. Called again every
+    tick with the real level, so a slow or interrupted charge speeds up; if it
+    can no longer make it, the answer is full power.
+
+    `delivery` is the share of the commanded power the battery really took.
+    Returns None when there's nothing to pace; else power (W, 0 = wait), kind
+    ("even", "cheapest" or "full") and when it expects to be done."""
+    if not rated_kwh or soc is None or soc >= target or cap_w <= 0:
+        return None
+    length = window.end - window.start
+    deadline = window.end - min(timedelta(minutes=margin_min), length / 2)
+    eff = min(1.0, max(0.5, delivery)) if delivery else CHARGE_EFFICIENCY
+    need_wh = (target - soc) / 100 * rated_kwh * 1000 / eff
+    if target >= 98:
+        need_wh *= 1.1  # the last few percent go in slower
+    left_h = (deadline - now).total_seconds() / 3600
+
+    def full() -> dict:
+        return {"power": cap_w, "kind": "full", "finish": now + timedelta(hours=need_wh / cap_w), "deadline": deadline}
+
+    if left_h <= 0 or need_wh >= cap_w * left_h:
+        return full()
+    slots = [(max(t, now), min(t + timedelta(minutes=30), deadline), p) for t, p in window.prices]
+    slots = [s for s in slots if s[1] > s[0]]
+    if slots and max(p for *_, p in slots) - min(p for *_, p in slots) > 0.01:
+        chosen, got = [], 0.0
+        for lo, hi, p in sorted(slots, key=lambda s: (s[2], s[0])):
+            chosen.append((lo, hi, p))
+            got += cap_w * (hi - lo).total_seconds() / 3600
+            if got >= need_wh:
+                break
+        if got < need_wh:
+            return full()
+        now_slot = next((s for s in chosen if s[0] <= now < s[1]), None)
+        return {"power": cap_w if now_slot else 0, "kind": "cheapest", "finish": max(hi for _, hi, _ in chosen),
+                "deadline": deadline, "price": now_slot[2] if now_slot else None,
+                "next": None if now_slot else min((lo for lo, _, _ in chosen if lo > now), default=None)}
+    power = max(need_wh / left_h, PACE_MIN_W)
+    power = min(cap_w, -(-int(power) // PACE_STEP_W) * PACE_STEP_W)
+    if current_w and power <= current_w <= power + PACE_STEP_W:
+        power = min(current_w, cap_w)  # close enough: don't fiddle with the setpoint
+    return {"power": power, "kind": "even", "finish": now + timedelta(hours=need_wh / power), "deadline": deadline}
+
+
+def _charge(settings: ControlSettings, w: Window, snapshot: dict, now: datetime, soc, target: int, cap: int,
+            text: str, pace: dict | None, grid: bool = False) -> tuple[str, int, str, Window]:
+    """The charge step for a window: flat out at `cap`, or paced if that's switched on.
+
+    `pace` is scratch space shared with the caller: it can hold "delivery",
+    "current_w" and "tz" going in, and gets the plan under "plan" coming out."""
+    plan = None
+    if settings.pace_charge and pace is not None and w.source != "override" and not w.happy:
+        plan = pace_charge(now, w, soc, target, snapshot.get("rated_kwh"), cap, settings.pace_margin_min,
+                           pace.get("delivery"), pace.get("current_w"))
+    if pace is not None:
+        pace["plan"] = plan
+    if plan is None or plan["kind"] == "full":
+        extra = ""
+        if plan is not None and plan["kind"] == "full":
+            extra = "; no time to spare, so flat out"
+        lead = f"Charging from the grid to {target}%" if grid else f"Charging at {cap} W to {target}%"
+        return CHARGE, -cap, f"{lead} ({text}{extra})", w
+    tz = pace.get("tz") or timezone.utc
+    done = f"{plan['finish'].astimezone(tz):%H:%M}"
+    if plan["power"] <= 0:
+        when = f", next at {plan['next'].astimezone(tz):%H:%M}" if plan.get("next") else ""
+        return HOLD, 0, f"Waiting for a cheaper half hour; paced to reach {target}% by about {done}{when} ({text})", w
+    how = f"paced to reach {target}% by about {done}"
+    if plan["kind"] == "cheapest":
+        how = f"cheapest half hours first, done by about {done}"
+    return CHARGE, -plan["power"], f"Charging at {plan['power']} W, {how} ({text})", w
+
+
 def decide(settings: ControlSettings, windows: list[Window], snapshot: dict, now: datetime,
-           balance: bool = False) -> tuple[str, int, str, Window | None]:
+           balance: bool = False, pace: dict | None = None) -> tuple[str, int, str, Window | None]:
     """(action, setpoint W, reason, window) for this moment.
 
     With `balance`, any charging in a cheap, free or scheduled window goes to
     100% instead of the usual target, even if grid charging is otherwise off.
 
     Your own schedules come first; cheap-hour windows only apply when the
-    cheap-hour options are ticked."""
+    cheap-hour options are ticked.
+
+    With paced charging on, charges in schedules, cheap hours and smart-charge
+    slots are spread out (see `pace_charge`); `pace` carries what it needs in
+    and returns the plan. Happy Hours always charge flat out."""
     if not settings.enabled:
         return APP, 0, "Control is off", None
     soc = snapshot.get("soc")
@@ -399,7 +495,7 @@ def decide(settings: ControlSettings, windows: list[Window], snapshot: dict, now
             power = settings.charge_power_w
             if snapshot.get("max_charge_w"):
                 power = min(power, int(snapshot["max_charge_w"]))
-            return CHARGE, -power, f"Charging at {power} W to {cheap_target}% ({slot.why}{note})", slot
+            return _charge(settings, slot, snapshot, now, soc, cheap_target, power, f"{slot.why}{note}", pace)
         return HOLD, 0, f"Holding the battery (target reached; {slot.why})", slot
     if mine:
         sch = mine.schedule
@@ -408,7 +504,7 @@ def decide(settings: ControlSettings, windows: list[Window], snapshot: dict, now
             target = lowered(target, room)
         if sch.action == CHARGE and soc is not None and soc < target:
             power = min(sch.power_w, int(snapshot["max_charge_w"])) if snapshot.get("max_charge_w") else sch.power_w
-            return CHARGE, -power, f"Charging at {power} W to {target}% ({mine.why}{note})", mine
+            return _charge(settings, mine, snapshot, now, soc, target, power, f"{mine.why}{note}", pace)
         floor = max(sch.target_soc, snapshot.get("reserve_soc") or 0)
         if sch.action == DISCHARGE and soc is not None and soc > floor:
             power = min(sch.power_w, int(snapshot["max_discharge_w"])) if snapshot.get("max_discharge_w") else sch.power_w
@@ -425,7 +521,7 @@ def decide(settings: ControlSettings, windows: list[Window], snapshot: dict, now
         power = settings.charge_power_w
         if snapshot.get("max_charge_w"):
             power = min(power, int(snapshot["max_charge_w"]))
-        return CHARGE, -power, f"Charging from the grid to {cheap_target}% ({current.why}{note})", current
+        return _charge(settings, current, snapshot, now, soc, cheap_target, power, f"{current.why}{note}", pace, grid=True)
     if settings.hold_cheap or settings.grid_charge:
         return HOLD, 0, f"Holding the battery so the house uses cheap grid power ({current.why})", current
     return APP, 0, "Normal price: the Anker app is in charge", None
@@ -452,6 +548,9 @@ class Controller:
         self.override: dict | None = state.get("override") or None
         self.full_at: float | None = state.get("full_at")  # last time we saw it full, kept across restarts
         self.balancing = False
+        self.pace: dict | None = None  # the paced charge in progress, for the card
+        self._pace_logged: tuple | None = None
+        self._setpoint_since = 0.0  # when the setpoint last changed (monotonic)
         self.room: dict | None = None  # room being left for a booked Happy Hour, for the card
         self._room_raw: dict | None = None
         self._room_logged: tuple | None = None
@@ -546,7 +645,15 @@ class Controller:
             if was:
                 self._event("Auto balance finished: the battery reached 100%", "auto_balance", "charging", "done", "dashboard", always=True)
         balance = self.balance_due(now) and not quick
-        action, setpoint, reason, window = decide(settings, windows, snap, now, balance)
+        tz = getattr(getattr(self.collector, "storage", None), "tz", None) or timezone.utc
+        pace_io = {"tz": tz}
+        if self.action == CHARGE and self.last_setpoint and self.last_setpoint < 0:
+            pace_io["current_w"] = -self.last_setpoint
+            power = snap.get("battery_w")
+            if isinstance(power, (int, float)) and power < 0 and time.monotonic() - self._setpoint_since > 90:
+                pace_io["delivery"] = -power / -self.last_setpoint  # how much of the commanded power it really took
+        action, setpoint, reason, window = decide(settings, windows, snap, now, balance, pace_io)
+        self._update_pace(pace_io.get("plan") if action in (CHARGE, HOLD) else None, window, now, tz, settings)
         balancing = balance and action == CHARGE and (soc is None or soc < FULL_SOC)
         if balancing and not self.balancing:
             self._event(f"Auto balance: charging to 100% ({window.why if window else reason})", "auto_balance", "due",
@@ -616,6 +723,7 @@ class Controller:
                 if setpoint != self.last_setpoint or due:
                     await self._write("battery_power_setpoint", setpoint)
                     if setpoint != self.last_setpoint:
+                        self._setpoint_since = time.monotonic()
                         what = {HOLD: "Holding the battery at 0 W", CHARGE: f"Charging at {-setpoint} W",
                                 DISCHARGE: f"Discharging at {setpoint} W"}[action]
                         self._note(what)
@@ -628,6 +736,30 @@ class Controller:
         except Exception as err:
             self.last_error = str(err)
             self._note(f"Write failed: {err}")
+
+    def _update_pace(self, plan: dict | None, window: Window | None, now: datetime, tz, settings: ControlSettings) -> None:
+        if plan is None or window is None:
+            self.pace = self._pace_logged = None
+            return
+        self.pace = {"kind": plan["kind"], "power_w": plan["power"], "finish": plan["finish"].isoformat(),
+                     "deadline": plan["deadline"].isoformat(), "margin_min": settings.pace_margin_min}
+        key = (window.start, plan["kind"])
+        if key == self._pace_logged:
+            return
+        behind = self._pace_logged is not None and self._pace_logged[0] == window.start and plan["kind"] == "full"
+        self._pace_logged = key
+        done = f"{plan['finish'].astimezone(tz):%H:%M}"
+        end = f"{window.end.astimezone(tz):%H:%M}"
+        if plan["kind"] == "full":
+            what = ("Charge is behind schedule: back to full power" if behind else
+                    "Not enough time to pace the charge: charging at full power")
+            what += f" (window ends {end})"
+        elif plan["kind"] == "cheapest":
+            what = f"Pacing the charge: cheapest half hours first, done by about {done} (window ends {end})"
+        else:
+            what = f"Pacing the charge at about {plan['power']} W, done by about {done} (window ends {end}, {settings.pace_margin_min} min to spare)"
+        self._note(what)
+        self._event(what, "pace_charge", None, plan["kind"], window.source, always=True)
 
     def _override_window(self, now: datetime) -> Window | None:
         o = self.override
@@ -825,6 +957,7 @@ class Controller:
             "saved_mode": OPERATING_MODES.get(self.saved_mode) if self.saved_mode is not None else None,
             "override": self.override,
             "happy_room": self.room,
+            "pace": self.pace,
             "balance": {"due": self.balance_due(datetime.now(timezone.utc)), "active": self.balancing,
                         "last_full": self._last_full()},
             "window": {"start": w.start.isoformat(), "end": w.end.isoformat(), "why": w.why} if w else None,

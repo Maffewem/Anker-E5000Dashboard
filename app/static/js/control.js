@@ -53,6 +53,8 @@ function renderControl(c) {
     $("control-charge").checked = t.grid_charge;
     $("control-dispatch").checked = t.charge_dispatch;
     $("control-happy").checked = t.charge_happy;
+    $("control-pace").checked = t.pace_charge;
+    $("control-pace-margin").value = t.pace_margin_min;
     $("control-balance").checked = t.auto_balance;
     $("control-balance-days").value = t.balance_days;
     $("control-power").value = t.charge_power_w;
@@ -63,6 +65,14 @@ function renderControl(c) {
   $("happy-status").hidden = !room;
   $("happy-status").textContent = room
     ? `Charging to ${room.target}% now, leaving room for about ${room.kwh} kWh in the ${room.slot}.` : "";
+  const pc = c.pace;
+  $("pace-status").hidden = !pc;
+  if (pc) {
+    const at = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    $("pace-status").textContent = pc.kind === "full" ? "Paced charging: no time to spare, charging at full power."
+      : pc.kind === "cheapest" ? `Paced charging: using the cheapest half hours, done by about ${at(pc.finish)}.`
+      : `Paced charging at about ${pc.power_w} W, done by about ${at(pc.finish)}.`;
+  }
   const b = c.balance || {};
   const last = b.last_full ? `Last full ${new Date(b.last_full * 1000).toLocaleDateString()}.` : "No full charge recorded yet.";
   $("balance-status").textContent = !t.auto_balance ? "" : b.active ? "Balancing now: charging to 100%."
@@ -346,6 +356,7 @@ async function saveControl(changes = {}) {
       enabled: t.enabled, hold_cheap: t.hold_cheap, grid_charge: t.grid_charge, charge_dispatch: t.charge_dispatch,
       charge_happy: t.charge_happy, happy_hours: happyHours,
       auto_balance: t.auto_balance, balance_days: t.balance_days,
+      pace_charge: t.pace_charge, pace_margin_min: t.pace_margin_min,
       charge_power_w: t.charge_power_w, charge_target_soc: t.charge_target_soc,
       schedules, ...changes,
     }));
@@ -450,6 +461,7 @@ $("control-form").addEventListener("submit", async (e) => {
     hold_cheap: $("control-hold").checked, grid_charge: $("control-charge").checked, charge_dispatch: $("control-dispatch").checked,
     charge_happy: $("control-happy").checked,
     auto_balance: $("control-balance").checked, balance_days: Number($("control-balance-days").value) || 28,
+    pace_charge: $("control-pace").checked, pace_margin_min: Number($("control-pace-margin").value) || 90,
     charge_power_w: Number($("control-power").value) || 1500, charge_target_soc: Number($("control-target").value) || DEFAULT_TARGET,
   })) {
     $("control-saved").textContent = "Saved";
