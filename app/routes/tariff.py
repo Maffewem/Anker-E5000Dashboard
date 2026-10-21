@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from ..config import ConnectionStore
 from ..octopus import Octopus, validate as validate_octopus
 from ..storage import Storage
-from ..tariff import SUPPLIERS, PriceHistory, Tariff, daily_costs, payback, prices_changed, with_octopus_prices
+from ..tariff import SUPPLIERS, PriceHistory, Tariff, FreeSlots, daily_costs, payback, prices_changed, with_octopus_prices
 
 log = logging.getLogger("solarbank.web")
 router = APIRouter()
@@ -57,6 +57,9 @@ def _pricing() -> tuple[Tariff, Tariff, dict | None, dict | None]:
         # Typed prices that have changed keep pricing each past day at what it cost then.
         history = storage.tariff_history()
         prices = PriceHistory(history) if history else None
+    free = storage.free_slots()
+    if free:
+        prices = FreeSlots(prices, free)  # Happy Hours cost nothing
     return typed, tariff, profile, prices
 
 

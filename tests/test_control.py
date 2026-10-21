@@ -593,3 +593,81 @@ def test_active_target_is_where_the_charge_in_progress_stops():
     assert active_target(on, [win], now) == 80
     assert active_target(on, [win], now, balance=True) == 100
     assert active_target(on, [], now) is None
+
+
+def _hh(start, end, day="2026-10-11"):
+    from app.control import happy_windows
+    return happy_windows(({"date": day, "start": start, "end": end},), UTC, IN)
+
+
+def test_happy_headroom_lowers_the_overnight_target():
+    from app.control import happy_headroom, lowered
+    ws = [NIGHT, *_hh("11:00", "13:00")]  # two hours tomorrow
+    snap = {"soc": 20, "rated_kwh": 5.0, "max_charge_w": 2500, "reserve_soc": 10}
+    on = ControlSettings(enabled=True, grid_charge=True, charge_target_soc=90)
+    room = happy_headroom(on, ws, snap, IN)
+    assert room["kwh"] == 4.8 and round(room["pct"]) == 95  # 2 h x 2.5 kW x 0.95 of 5 kWh
+    assert lowered(90, room) == 30  # floored, not negative
+    big = {**snap, "rated_kwh": 20.0}
+    room = happy_headroom(on, ws, big, IN)
+    action, setpoint, reason, _ = decide(on, ws, {**big, "soc": 50}, IN)
+    assert (action, setpoint) == (CHARGE, -1500) and "to 66%" in reason and "leaving room" in reason
+    assert decide(on, ws, {**big, "soc": 70}, IN)[:2] == (HOLD, 0)  # already at the lowered target
+    assert happy_headroom(ControlSettings(charge_happy=False), ws, snap, IN) is None
+    assert happy_headroom(on, [NIGHT, *_hh("11:00", "13:00", "2026-10-20")], snap, IN) is None  # too far off
+
+
+def test_headroom_skips_quick_override_and_active_happy_hour():
+    ws = [NIGHT, *_hh("11:00", "12:00")]
+    snap = {"soc": 50, "rated_kwh": 5.0, "max_charge_w": 2500}
+    on = ControlSettings(enabled=True, grid_charge=True, charge_target_soc=90)
+    inside = datetime(2026, 10, 11, 11, 30, tzinfo=UTC)
+    action, setpoint, reason, w = decide(on, ws, snap, inside)
+    assert (action, setpoint) == (CHARGE, -2500) and w.happy and "leaving room" not in reason
+
+
+def test_balance_waits_for_the_happy_hour():
+    ws = [NIGHT, *_hh("11:00", "12:00")]
+    snap = {"soc": 50, "rated_kwh": 20.0, "max_charge_w": 2500}
+    on = ControlSettings(enabled=True, grid_charge=True, charge_target_soc=90)
+    assert "to 100%" not in decide(on, ws, snap, IN, balance=True)[2]
+    inside = datetime(2026, 10, 11, 11, 30, tzinfo=UTC)
+    assert "to 100%" in decide(on, ws, snap, inside, balance=True)[2]
+
+
+def test_happy_hour_energy_is_priced_free(tmp_path):
+    from datetime import date
+    from app.control import happy_slots
+    from app.tariff import FreeSlots, Tariff, daily_costs
+    tz = ZoneInfo("Europe/London")
+    free = happy_slots(({"date": "2026-10-11", "start": "11:00", "end": "12:00"},), tz)
+    assert free == {("2026-10-11", 22), ("2026-10-11", 23)}
+    slot = {"day": "2026-10-11", "slot": 22, "grid_charge_wh": 1000.0, "solar_charge_wh": 0.0, "discharge_wh": 0.0,
+            "import_wh": 1500.0}
+    paid = daily_costs(Tariff(peak_rate=30, offpeak_rate=30), [slot], date(2026, 10, 11), 1)["days"][0]
+    assert paid["grid_charge_cost"] == 0.3
+    got = daily_costs(Tariff(peak_rate=30, offpeak_rate=30), [slot], date(2026, 10, 11), 1, FreeSlots(None, free))["days"][0]
+    assert got["grid_charge_cost"] == 0 and got["grid_charge_kwh"] == 1.0
+    storage = Storage(tmp_path / "s.db", tz)
+    storage.set_free_slots(free, "2026-10-01")
+    storage.set_free_slots(set(), "2026-10-12")  # later days cleared, this one kept as history
+    assert storage.free_slots() == free
+    storage.set_free_slots(set(), "2026-10-11")
+    assert storage.free_slots() == set()
+
+
+def test_controller_reports_and_logs_the_happy_hour_room(monkeypatch):
+    monkeypatch.setenv("CONTROL_LIVE", "1")
+    c = FakeCollector(mode=6, soc=40)
+    c.snapshot = {"soc": 40, "rated_kwh": 20.0, "max_charge_w": 2500}
+    store = {"settings": {"enabled": True, "grid_charge": True, "charge_target_soc": 90}}
+    ctl = Controller(c, load=lambda: dict(store), save_state=lambda s: None,
+                     windows=lambda now: [NIGHT, *_hh("11:00", "13:00")])
+    events = []
+    ctl._event = lambda *a, **k: events.append(a[0])
+    asyncio.run(ctl.tick(IN))
+    assert ctl.room["target"] == 66 and ctl.room["kwh"] == 4.8
+    assert ctl.status()["happy_room"]["target"] == 66
+    assert any("Leaving room" in e and "66%" in e for e in events)
+    asyncio.run(ctl.tick(IN + timedelta(seconds=15)))
+    assert sum("Leaving room" in e for e in events) == 1  # logged once

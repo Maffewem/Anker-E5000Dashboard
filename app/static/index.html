@@ -497,7 +497,8 @@
             <div><label for="happy-end">To</label><input id="happy-end" type="time" value="12:00"></div>
             <button type="button" id="happy-add" class="primary">Add</button>
           </div>
-          <p class="hint">Octopus doesn't publish booked Happy Hours to customers, so enter the slot you booked. Charging stops at the level below.</p>
+          <p class="hint">Octopus doesn't publish booked Happy Hours to customers, so enter the slot you booked. Charging stops at the level below. The charge before a booked slot stops short to leave room for it, and power used in a Happy Hour counts as free in the costs.</p>
+          <p class="hint" id="happy-status" hidden></p>
         </div>
         <label class="compare"><input type="checkbox" id="control-balance"> Auto balance: now and then charge to 100% in a cheap or free window so the battery's level reading stays accurate</label>
         <div class="row" id="balance-box">

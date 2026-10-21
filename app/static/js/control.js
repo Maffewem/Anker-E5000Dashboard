@@ -59,6 +59,10 @@ function renderControl(c) {
     $("control-target").value = t.charge_target_soc;
     controlLoaded = true;
   }
+  const room = c.happy_room;
+  $("happy-status").hidden = !room;
+  $("happy-status").textContent = room
+    ? `Charging to ${room.target}% now, leaving room for about ${room.kwh} kWh in the ${room.slot}.` : "";
   const b = c.balance || {};
   const last = b.last_full ? `Last full ${new Date(b.last_full * 1000).toLocaleDateString()}.` : "No full charge recorded yet.";
   $("balance-status").textContent = !t.auto_balance ? "" : b.active ? "Balancing now: charging to 100%."

@@ -10,7 +10,9 @@ from fastapi import APIRouter, HTTPException
 
 from pydantic import BaseModel
 
-from ..control import DEFAULT_CHARGE_TARGET, ControlSettings, Controller, Schedule
+from datetime import datetime
+
+from ..control import DEFAULT_CHARGE_TARGET, ControlSettings, Controller, Schedule, happy_slots
 
 router = APIRouter()
 
@@ -76,6 +78,8 @@ async def save_control(body: ControlIn) -> dict:
         raise HTTPException(status_code=422, detail=str(err)) from err
     state.connection_store.save_section("control", asdict(settings))
     controller: Controller = state.controller
+    storage = state.storage
+    storage.set_free_slots(happy_slots(settings.happy_hours, storage.tz), datetime.now(storage.tz).date().isoformat())
     controller.update_settings(settings)
     await controller.tick()
     return controller.status()
