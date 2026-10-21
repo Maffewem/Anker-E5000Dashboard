@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from ..config import ConnectionStore
 from ..octopus import Octopus, validate as validate_octopus
 from ..storage import Storage
-from ..tariff import SUPPLIERS, PriceHistory, Tariff, daily_costs, payback, prices_changed
+from ..tariff import SUPPLIERS, PriceHistory, Tariff, daily_costs, payback, prices_changed, with_octopus_prices
 
 log = logging.getLogger("solarbank.web")
 router = APIRouter()
@@ -50,8 +50,7 @@ def _pricing() -> tuple[Tariff, Tariff, dict | None, dict | None]:
     profile = octopus.profile() if use_octopus else None
     if profile:
         # Octopus prices stand in for the typed ones; only the battery cost is kept.
-        tariff = Tariff.from_dict({**{k: v for k, v in profile.items() if v is not None},
-                                   "battery_cost": typed.battery_cost, "installed": typed.installed})
+        tariff = with_octopus_prices(typed, profile)
     if use_octopus:
         prices = storage.rates()
     else:
@@ -91,6 +90,7 @@ def get_payback() -> dict:
     out["supplier"] = supplier(typed)
     out["supplier_picked"] = bool(typed.supplier)
     out["suppliers"] = [{"value": k, **v} for k, v in SUPPLIERS.items()]
+    out["export_from_octopus"] = bool(profile and profile.get("export_rate") is not None)
     out["use_manual"] = typed.use_manual
     out["manual"] = asdict(typed)  # what was typed, even while Octopus prices are shown
     out["tariff_name"] = (octopus.info.get("import") or {}).get("name") if profile else None

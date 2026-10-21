@@ -223,7 +223,9 @@ function syncCostInputs() {
   const fromOctopus = connected && !manual && payback.source === "octopus";
   $("costs-octopus").hidden = !fromOctopus;
   $("costs-octopus-wait").hidden = !(connected && !manual && payback.source !== "octopus");
-  for (const id of ["cost-peak", "cost-offpeak", "cost-from", "cost-to", "cost-export"]) $(id).disabled = fromOctopus;
+  for (const id of ["cost-peak", "cost-offpeak", "cost-from", "cost-to"]) $(id).disabled = fromOctopus;
+  // Octopus has no export price on some accounts; then the typed one is used and stays editable.
+  $("cost-export").disabled = fromOctopus && Boolean(payback.export_from_octopus);
 }
 $("cost-manual").addEventListener("change", syncCostInputs);
 $("costs-form").addEventListener("submit", async (e) => {

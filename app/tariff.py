@@ -76,6 +76,13 @@ class Tariff:
         return fixed_profile(self.peak_rate, self.offpeak_rate, self.offpeak_start, self.offpeak_end)
 
 
+def with_octopus_prices(typed: Tariff, profile: dict) -> Tariff:
+    """The typed tariff with Octopus's prices over it. A price Octopus doesn't
+    have (no export tariff on the account) stays as typed, not the default."""
+    return Tariff.from_dict({**asdict(typed), **{k: v for k, v in profile.items() if v is not None},
+                             "battery_cost": typed.battery_cost, "installed": typed.installed})
+
+
 def slot_of(hhmm: str) -> int:
     """The half hour of the day (0-47) a "HH:MM" time falls in."""
     h, m = map(int, hhmm.split(":"))
@@ -246,8 +253,12 @@ def daily_costs(tariff: Tariff, slots: list[dict], today: date, days: int = 30,
         if r["day"] < first or r["day"] > today.isoformat():
             continue
         d = by_day.setdefault(r["day"], {"grid_wh": 0.0, "grid_cost": 0.0, "solar_wh": 0.0, "solar_cost": 0.0,
-                                         "discharge_wh": 0.0, "discharge_value": 0.0})
+                                         "discharge_wh": 0.0, "discharge_value": 0.0, "import_wh": 0.0,
+                                         "discharge_export_wh": 0.0, "export_p": []})
         rate, export = price(r["day"], r["slot"])
+        d["import_wh"] += r.get("import_wh") or 0.0
+        d["discharge_export_wh"] += min(r["discharge_wh"], r.get("discharge_export_wh") or 0.0)
+        d["export_p"].append(export * 100)
         d["grid_wh"] += r["grid_charge_wh"]
         d["grid_cost"] += r["grid_charge_wh"] / 1000 * rate
         d["solar_wh"] += r["solar_charge_wh"]
@@ -262,7 +273,8 @@ def daily_costs(tariff: Tariff, slots: list[dict], today: date, days: int = 30,
         if d is None:
             rows.append({"day": day, "recorded": False, "grid_charge_kwh": 0.0, "grid_charge_cost": 0.0,
                          "grid_charge_p_per_kwh": None, "solar_charge_kwh": 0.0, "solar_charge_cost": 0.0,
-                         "discharge_kwh": 0.0, "discharge_value": 0.0, "saved": 0.0})
+                         "discharge_kwh": 0.0, "discharge_value": 0.0, "saved": 0.0, "import_kwh": 0.0,
+                         "house_import_kwh": 0.0, "discharge_export_kwh": 0.0, "export_p_per_kwh": None})
             continue
         grid_kwh = d["grid_wh"] / 1000
         rows.append({
@@ -276,6 +288,12 @@ def daily_costs(tariff: Tariff, slots: list[dict], today: date, days: int = 30,
             "discharge_kwh": round(d["discharge_wh"] / 1000, 2),
             "discharge_value": round(d["discharge_value"], 2),
             "saved": round(d["discharge_value"] - d["grid_cost"] - d["solar_cost"], 2),
+            # Everything bought from the grid, and how much of it was the house
+            # rather than the battery; what exporting is priced at.
+            "import_kwh": round(d["import_wh"] / 1000, 2),
+            "house_import_kwh": round(max(0.0, d["import_wh"] - d["grid_wh"]) / 1000, 2),
+            "discharge_export_kwh": round(d["discharge_export_wh"] / 1000, 2),
+            "export_p_per_kwh": round(sum(d["export_p"]) / len(d["export_p"]), 2),
         })
 
     def total(n: int) -> dict:

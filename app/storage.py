@@ -452,7 +452,7 @@ class Storage:
     def battery_slots(self) -> list[dict]:
         with self._lock:
             rows = self._db.execute(
-                "SELECT day, slot, discharge_wh, discharge_export_wh, grid_charge_wh, solar_charge_wh FROM slots"
+                "SELECT day, slot, discharge_wh, discharge_export_wh, grid_charge_wh, solar_charge_wh, import_wh FROM slots"
             ).fetchall()
         return [dict(r) for r in rows]
 
