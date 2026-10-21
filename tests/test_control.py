@@ -761,3 +761,12 @@ def test_controller_paces_logs_once_and_respects_live_guard(monkeypatch):
     asyncio.run(ctl.tick(datetime(2026, 10, 10, 4, 0, tzinfo=UTC)))
     assert ctl.pace["kind"] == "full" and any("behind schedule" in e["text"] for e in ctl.log)
     assert ctl.status()["pace"]["kind"] == "full"
+
+
+def test_pace_holds_a_recent_setpoint_unless_well_off_pace():
+    need = pace_charge(IN, PACE_WINDOW, 20, 80, 5.0, 2500, 90)["power"]  # 1100
+    kept = pace_charge(IN, PACE_WINDOW, 20, 80, 5.0, 2500, 90, current_w=need - 200, settled=True)
+    assert kept["power"] == need - 200  # within 20%: leave it
+    moved = pace_charge(IN, PACE_WINDOW, 20, 80, 5.0, 2500, 90, current_w=need - 400, settled=True)
+    assert moved["power"] == need  # too far short: correct it
+    assert pace_charge(IN, PACE_WINDOW, 20, 80, 5.0, 2500, 90, current_w=need - 200)["power"] == need  # not settled

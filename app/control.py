@@ -45,6 +45,7 @@ MIN_BEFORE_HAPPY = 30  # but never cut a charge below this level (or the battery
 CHARGE_EFFICIENCY = 0.95  # grid energy in to energy stored
 OVERRIDE_MAX_MINUTES = 12 * 60
 PACE_MIN_W = 300  # paced charging doesn't go below this; very low power is inefficient
+PACE_SETTLE_SECONDS = 10 * 60  # after changing the paced power, leave it alone this long unless it's well off pace
 PACE_STEP_W = 100  # paced power moves in steps of this, so the setpoint (and event log) stays calm
 DEFAULT_PACE_MARGIN = 90  # minutes before the window ends that a paced charge aims to be done
 # What the battery itself accepts for its own limits (from Anker's integration):
@@ -375,7 +376,8 @@ def lowered(target: int, room: dict | None) -> int:
 
 
 def pace_charge(now: datetime, window: Window, soc: float, target: int, rated_kwh: float | None, cap_w: int,
-                margin_min: int, delivery: float | None = None, current_w: int | None = None) -> dict | None:
+                margin_min: int, delivery: float | None = None, current_w: int | None = None,
+                settled: bool = False) -> dict | None:
     """How to spread a charge over its window so it reaches `target` with time to spare.
 
     The aim is to be done `margin_min` before the window ends (less for a short
@@ -384,6 +386,9 @@ def pace_charge(now: datetime, window: Window, soc: float, target: int, rated_kw
     first, at `cap_w`, and the battery is held in between. Called again every
     tick with the real level, so a slow or interrupted charge speeds up; if it
     can no longer make it, the answer is full power.
+
+    `settled` means the power was changed recently: it is kept unless it is more
+    than 20% short of what's needed.
 
     `delivery` is the share of the commanded power the battery really took.
     Returns None when there's nothing to pace; else power (W, 0 = wait), kind
@@ -420,7 +425,7 @@ def pace_charge(now: datetime, window: Window, soc: float, target: int, rated_kw
                 "next": None if now_slot else min((lo for lo, _, _ in chosen if lo > now), default=None)}
     power = max(need_wh / left_h, PACE_MIN_W)
     power = min(cap_w, -(-int(power) // PACE_STEP_W) * PACE_STEP_W)
-    if current_w and power <= current_w <= power + PACE_STEP_W:
+    if current_w and (power <= current_w <= power + PACE_STEP_W or (settled and current_w >= power * 0.8)):
         power = min(current_w, cap_w)  # close enough: don't fiddle with the setpoint
     return {"power": power, "kind": "even", "finish": now + timedelta(hours=need_wh / power), "deadline": deadline}
 
@@ -434,7 +439,7 @@ def _charge(settings: ControlSettings, w: Window, snapshot: dict, now: datetime,
     plan = None
     if settings.pace_charge and pace is not None and w.source != "override" and not w.happy:
         plan = pace_charge(now, w, soc, target, snapshot.get("rated_kwh"), cap, settings.pace_margin_min,
-                           pace.get("delivery"), pace.get("current_w"))
+                           pace.get("delivery"), pace.get("current_w"), bool(pace.get("settled")))
     if pace is not None:
         pace["plan"] = plan
     if plan is None or plan["kind"] == "full":
@@ -649,6 +654,7 @@ class Controller:
         pace_io = {"tz": tz}
         if self.action == CHARGE and self.last_setpoint and self.last_setpoint < 0:
             pace_io["current_w"] = -self.last_setpoint
+            pace_io["settled"] = time.monotonic() - self._setpoint_since < PACE_SETTLE_SECONDS
             power = snap.get("battery_w")
             if isinstance(power, (int, float)) and power < 0 and time.monotonic() - self._setpoint_since > 90:
                 pace_io["delivery"] = -power / -self.last_setpoint  # how much of the commanded power it really took
