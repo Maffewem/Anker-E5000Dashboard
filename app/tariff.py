@@ -140,16 +140,20 @@ def payback(tariff: Tariff, slots: list[dict], today: date,
         first = tariff.installed
     saved = recorded + (before or 0.0)
     span = (today - date.fromisoformat(first)).days + 1 if first else 0
-    per_day = saved / span if span else 0.0
+    # The estimate for before recording counts towards the total saved, but it
+    # is a lifetime average, not a measurement: the rate used to project the
+    # payback comes only from the days that were actually recorded.
+    recorded_span = (today - date.fromisoformat(min(days))).days + 1 if days else 0
+    per_day = recorded / recorded_span if recorded_span else 0.0
     remaining = max(0.0, tariff.battery_cost - saved)
 
     payback_days = low = high = None
     too_long = False
     if tariff.battery_cost > 0 and remaining == 0:
         payback_days = low = high = 0
-    elif tariff.battery_cost > 0 and per_day > 0 and span >= MIN_DAYS and remaining / per_day > MAX_DAYS:
+    elif tariff.battery_cost > 0 and per_day > 0 and recorded_span >= MIN_DAYS and remaining / per_day > MAX_DAYS:
         too_long = True
-    elif tariff.battery_cost > 0 and per_day > 0 and span >= MIN_DAYS:
+    elif tariff.battery_cost > 0 and per_day > 0 and recorded_span >= MIN_DAYS:
         payback_days = round(remaining / per_day)
         low = round(remaining / (per_day * (1 + SPREAD)))
         high = round(remaining / (per_day * (1 - SPREAD)))
@@ -161,6 +165,7 @@ def payback(tariff: Tariff, slots: list[dict], today: date,
         "tariff": asdict(tariff),
         "since": first,
         "days": span,
+        "recorded_days": recorded_span,
         "min_days": MIN_DAYS,
         "saved": round(saved, 2),
         "saved_before_recording": None if before is None else round(before, 2),

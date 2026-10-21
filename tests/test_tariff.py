@@ -52,7 +52,8 @@ def test_lifetime_totals_count_savings_from_before_recording():
     # Before recording: 2520 kWh out at 30p, 2800 kWh in at 8p.
     assert p["saved_before_recording"] == 532.0
     assert p["saved"] == 533.9
-    assert p["payback_days"] == round((3000 - 533.9) / (533.9 / 282))
+    assert p["payback_days"] is None and p["recorded_days"] == 1  # one recorded day is too little to project from
+    assert p["per_day"] == 1.9  # the recorded day's £2.70 - £0.80, not the 282-day average
     # Without an install date the lifetime totals aren't used.
     plain = payback(Tariff(battery_cost=3000, peak_rate=30, offpeak_rate=8, export_rate=15), slots,
                     date(2026, 10, 9), lifetime=lifetime)
@@ -170,3 +171,18 @@ def test_daily_costs_break_import_into_battery_and_house():
     d = daily_costs(tariff, slots, date(2026, 10, 9), days=1)["days"][0]
     assert d["import_kwh"] == 6.0 and d["house_import_kwh"] == 2.0  # 4 kWh of it charged the battery
     assert d["export_p_per_kwh"] == 0.0 and d["saved"] == -0.30  # 3 kWh saved at 30p, 4 kWh charged at 30p
+
+
+def test_projection_rate_uses_recorded_days_but_total_includes_before_recording():
+    tariff = Tariff(battery_cost=3000, peak_rate=30, offpeak_rate=8, offpeak_start="00:30",
+                    offpeak_end="05:30", export_rate=15, installed="2026-01-01")
+    slots = []
+    for d in range(3, 10):  # 7 recorded days, each saving £1.90
+        day = f"2026-10-{d:02d}"
+        slots += [{"day": day, "slot": 2, "discharge_wh": 0, "grid_charge_wh": 10000, "solar_charge_wh": 0},
+                  {"day": day, "slot": 36, "discharge_wh": 9000, "grid_charge_wh": 0, "solar_charge_wh": 0}]
+    lifetime = {"charged_kwh": 2800, "discharged_kwh": 2520}  # 280 kWh out and 2800 kWh in by then... plus these days
+    p = payback(tariff, slots, date(2026, 10, 9), lifetime=lifetime)
+    assert p["per_day"] == 1.9 and p["recorded_days"] == 7 and p["days"] == 282
+    assert p["saved"] == pytest.approx(7 * 1.9 + p["saved_before_recording"], abs=0.01)
+    assert p["payback_days"] == round((3000 - p["saved"]) / 1.9)

@@ -116,8 +116,8 @@ function renderPayback(p) {
     eta = `About ${durationRange(p.payback_days_low, p.payback_days_high)} (${a === b ? a : `${a} to ${b}`})`;
   } else if (p.payback_too_long) {
     eta = "More than 50 years at this rate";
-  } else if (p.days < p.min_days) {
-    eta = `Collecting data: ${p.days} of ${p.min_days} days${p.tariff.installed ? "" : ". Add the install date to count the battery's history"}`;
+  } else if (p.recorded_days < p.min_days) {
+    eta = `Collecting data: ${p.recorded_days} of ${p.min_days} days${p.tariff.installed ? "" : ". Add the install date to count the battery's history"}`;
   } else eta = "Not saving yet";
   $("payback-source").hidden = p.source !== "octopus";
   $("payback-source").textContent = p.source === "octopus"
