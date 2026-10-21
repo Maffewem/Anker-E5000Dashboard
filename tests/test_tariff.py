@@ -103,3 +103,70 @@ def test_daily_costs_use_actual_prices():
     slots = [{"day": "2026-10-09", "slot": 4, "discharge_wh": 0, "grid_charge_wh": 2000, "solar_charge_wh": 0}]
     c = daily_costs(tariff, slots, date(2026, 10, 9), days=1, prices={("2026-10-09", 4): (7.5, None)})
     assert c["days"][0]["grid_charge_cost"] == 0.15
+
+
+def test_discharge_sent_to_the_grid_earns_export_not_import():
+    tariff = Tariff(peak_rate=30, offpeak_rate=30, export_rate=10)
+    slots = [{"day": "2026-10-09", "slot": 36, "discharge_wh": 4000, "discharge_export_wh": 1000,
+              "grid_charge_wh": 0, "solar_charge_wh": 0}]
+    # 3 kWh met the house at 30p, 1 kWh was exported at 10p.
+    c = daily_costs(tariff, slots, date(2026, 10, 9), days=1)
+    assert c["days"][0]["discharge_value"] == 1.00
+    assert payback(tariff, slots, date(2026, 10, 9))["discharge_value"] == 1.00
+
+
+def test_storage_counts_battery_export_after_the_solar_surplus():
+    s = Storage(":memory:", 365, "UTC")
+    b = MinuteBucket(int(time.time() // 1800 * 1800))
+    # 1200 W solar, 200 W house: 1000 W surplus. 3000 W leaves for the grid, so
+    # 2000 W of it is battery. The battery gave 2400 W, so 2000 W was exported.
+    b.add({"solar_w": 1200, "home_w": 200, "grid_w": -3000, "battery_w": 2400}, 60)
+    s.write_minute(b.row())
+    (slot,) = s.battery_slots()
+    assert slot["discharge_wh"] == pytest.approx(40)
+    assert slot["discharge_export_wh"] == pytest.approx(2000 / 60)
+
+
+def test_round_trip_losses_are_in_the_measured_energy():
+    # 10 kWh in and 9 kWh out at the battery: the 1 kWh lost is paid for but earns nothing.
+    tariff = Tariff(peak_rate=30, offpeak_rate=10, offpeak_start="00:00", offpeak_end="05:00", export_rate=15)
+    slots = [{"day": "2026-10-09", "slot": 2, "discharge_wh": 0, "grid_charge_wh": 10000, "solar_charge_wh": 0},
+             {"day": "2026-10-09", "slot": 36, "discharge_wh": 9000, "grid_charge_wh": 0, "solar_charge_wh": 0}]
+    assert daily_costs(tariff, slots, date(2026, 10, 9), days=1)["days"][0]["saved"] == 1.70  # 2.70 - 1.00
+
+
+def test_free_window_is_priced_at_zero():
+    tariff = Tariff(peak_rate=30, offpeak_rate=30)
+    slots = [{"day": "2026-10-09", "slot": 26, "discharge_wh": 0, "grid_charge_wh": 3000, "solar_charge_wh": 0}]
+    c = daily_costs(tariff, slots, date(2026, 10, 9), days=1, prices={("2026-10-09", 26): (0.0, 0.0)})
+    assert c["days"][0]["grid_charge_cost"] == 0
+
+
+def test_octopus_without_an_export_price_keeps_the_typed_export_rate():
+    from app.tariff import with_octopus_prices
+    typed = Tariff(peak_rate=28, offpeak_rate=28, export_rate=0.0, battery_cost=3000)
+    profile = {"peak_rate": 35.68, "offpeak_rate": 7.5, "offpeak_start": "00:30", "offpeak_end": "05:30",
+               "export_rate": None}
+    t = with_octopus_prices(typed, profile)
+    assert t.export_rate == 0.0 and t.peak_rate == 35.68 and t.battery_cost == 3000
+    assert with_octopus_prices(typed, {**profile, "export_rate": 4.1}).export_rate == 4.1
+    assert Tariff(export_rate=0).validate().export_rate == 0.0
+
+
+def test_export_valued_at_zero_when_exporting_earns_nothing():
+    tariff = Tariff(peak_rate=30, offpeak_rate=30, export_rate=0.0)
+    slots = [{"day": "2026-10-09", "slot": 36, "discharge_wh": 2000, "discharge_export_wh": 500,
+              "grid_charge_wh": 0, "solar_charge_wh": 1000}]
+    c = daily_costs(tariff, slots, date(2026, 10, 9), days=1)["days"][0]
+    assert c["discharge_value"] == 0.45 and c["solar_charge_cost"] == 0 and c["saved"] == 0.45
+
+
+def test_daily_costs_break_import_into_battery_and_house():
+    tariff = Tariff(peak_rate=30, offpeak_rate=30, export_rate=0.0)
+    slots = [{"day": "2026-10-09", "slot": 2, "discharge_wh": 0, "grid_charge_wh": 4000, "solar_charge_wh": 0,
+              "import_wh": 5000},
+             {"day": "2026-10-09", "slot": 36, "discharge_wh": 3000, "discharge_export_wh": 0,
+              "grid_charge_wh": 0, "solar_charge_wh": 0, "import_wh": 1000}]
+    d = daily_costs(tariff, slots, date(2026, 10, 9), days=1)["days"][0]
+    assert d["import_kwh"] == 6.0 and d["house_import_kwh"] == 2.0  # 4 kWh of it charged the battery
+    assert d["export_p_per_kwh"] == 0.0 and d["saved"] == -0.30  # 3 kWh saved at 30p, 4 kWh charged at 30p
