@@ -28,14 +28,14 @@ def test_payback_values_discharge_and_charging():
     assert p["grid_charge_cost"] == 0.50  # 5 kWh at 10p
     assert p["solar_charge_cost"] == 0.30  # 2 kWh of lost export at 15p
     assert p["saved"] == 1.00
-    assert p["days"] == 2 and p["per_day"] == 0.5
+    assert p["days"] == 2 and p["per_day"] == -0.8  # today (the 9th) is left out of the rate: only the charging day counts
     assert p["remaining"] == 99.0
     assert p["payback_days"] is None  # two days is too little to project from
-    week = payback(tariff, slots, date(2026, 10, 14))  # the same savings over a week
-    assert week["days"] == 7 and week["per_day"] == pytest.approx(1 / 7, abs=0.001)
+    week = payback(tariff, slots, date(2026, 10, 15))  # the same savings over a week of finished days
+    assert week["days"] == 8 and week["per_day"] == pytest.approx(1 / 7, abs=0.001)
     assert week["payback_days"] == 693
     assert (week["payback_days_low"], week["payback_days_high"]) == (554, 924)
-    pricey = payback(Tariff(**{**tariff.__dict__, "battery_cost": 1e5}), slots, date(2026, 10, 14))
+    pricey = payback(Tariff(**{**tariff.__dict__, "battery_cost": 1e5}), slots, date(2026, 10, 15))
     assert pricey["payback_too_long"] and pricey["payback_date"] is None
 
 
@@ -52,8 +52,8 @@ def test_lifetime_totals_count_savings_from_before_recording():
     # Before recording: 2520 kWh out at 30p, 2800 kWh in at 8p.
     assert p["saved_before_recording"] == 532.0
     assert p["saved"] == 533.9
-    assert p["payback_days"] is None and p["recorded_days"] == 1  # one recorded day is too little to project from
-    assert p["per_day"] == 1.9  # the recorded day's £2.70 - £0.80, not the 282-day average
+    assert p["payback_days"] is None and p["recorded_days"] == 0  # the one recorded day is today, too little to project from
+    assert p["per_day"] == 0.0  # nothing finished yet; not the 282-day average
     # Without an install date the lifetime totals aren't used.
     plain = payback(Tariff(battery_cost=3000, peak_rate=30, offpeak_rate=8, export_rate=15), slots,
                     date(2026, 10, 9), lifetime=lifetime)
@@ -177,12 +177,12 @@ def test_projection_rate_uses_recorded_days_but_total_includes_before_recording(
     tariff = Tariff(battery_cost=3000, peak_rate=30, offpeak_rate=8, offpeak_start="00:30",
                     offpeak_end="05:30", export_rate=15, installed="2026-01-01")
     slots = []
-    for d in range(3, 10):  # 7 recorded days, each saving £1.90
+    for d in range(3, 10):  # 7 recorded days (the last is today), each saving £1.90
         day = f"2026-10-{d:02d}"
         slots += [{"day": day, "slot": 2, "discharge_wh": 0, "grid_charge_wh": 10000, "solar_charge_wh": 0},
                   {"day": day, "slot": 36, "discharge_wh": 9000, "grid_charge_wh": 0, "solar_charge_wh": 0}]
     lifetime = {"charged_kwh": 2800, "discharged_kwh": 2520}  # 280 kWh out and 2800 kWh in by then... plus these days
-    p = payback(tariff, slots, date(2026, 10, 9), lifetime=lifetime)
-    assert p["per_day"] == 1.9 and p["recorded_days"] == 7 and p["days"] == 282
+    p = payback(tariff, slots, date(2026, 10, 10), lifetime=lifetime)  # the 10th: all seven days are finished
+    assert p["per_day"] == 1.9 and p["recorded_days"] == 7 and p["days"] == 283
     assert p["saved"] == pytest.approx(7 * 1.9 + p["saved_before_recording"], abs=0.01)
     assert p["payback_days"] == round((3000 - p["saved"]) / 1.9)

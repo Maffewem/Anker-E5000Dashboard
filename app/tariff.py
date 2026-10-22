@@ -124,13 +124,17 @@ def payback(tariff: Tariff, slots: list[dict], today: date,
     whole life rather than the first few hours.
     """
     price = _pricer(tariff, prices)
-    value = grid_cost = solar_cost = 0.0
+    value = grid_cost = solar_cost = done = 0.0
     days = set()
     for r in slots:
         rate, export = price(r["day"], r["slot"])
+        saved_here = (discharge_value(r, rate, export) - r["grid_charge_wh"] / 1000 * rate
+                      - r["solar_charge_wh"] / 1000 * export)
         value += discharge_value(r, rate, export)
         grid_cost += r["grid_charge_wh"] / 1000 * rate
         solar_cost += r["solar_charge_wh"] / 1000 * export
+        if r["day"] < today.isoformat():
+            done += saved_here
         days.add(r["day"])
 
     recorded = value - grid_cost - solar_cost
@@ -142,9 +146,11 @@ def payback(tariff: Tariff, slots: list[dict], today: date,
     span = (today - date.fromisoformat(first)).days + 1 if first else 0
     # The estimate for before recording counts towards the total saved, but it
     # is a lifetime average, not a measurement: the rate used to project the
-    # payback comes only from the days that were actually recorded.
-    recorded_span = (today - date.fromisoformat(min(days))).days + 1 if days else 0
-    per_day = recorded / recorded_span if recorded_span else 0.0
+    # payback comes only from the days that were actually recorded. Today is
+    # left out: the battery is usually charged overnight and discharged later,
+    # so a part-day shows the cost without the saving it pays for.
+    recorded_span = (today - date.fromisoformat(min(days))).days if days else 0
+    per_day = done / recorded_span if recorded_span > 0 else 0.0
     remaining = max(0.0, tariff.battery_cost - saved)
 
     payback_days = low = high = None
