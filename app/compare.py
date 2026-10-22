@@ -88,6 +88,17 @@ class Candidate:
         return v or 0.0
 
 
+def provider(name: str, source: str) -> str:
+    """Supplier a tariff belongs to, for filtering the comparison."""
+    if source == "current":
+        return "Your tariff"
+    n = name.lower()
+    for key, label in (("e.on", "E.ON Next"), ("edf", "EDF"), ("british gas", "British Gas"), ("octopus", "Octopus Energy")):
+        if key in n:
+            return label
+    return "Other"
+
+
 def profile(prices: dict) -> list:
     """Average price per half hour of the day, for days a price list doesn't cover."""
     sums, counts = [0.0] * 48, [0] * 48
@@ -392,7 +403,7 @@ def compare(candidates: list[Candidate], usage: list[dict], cap_kwh: float, powe
     for c in candidates:
         r = simulate(c, days, cap_kwh, power_kw)
         rows.append({"key": c.key, "name": c.name, "export": c.export_name, "standing_p": c.standing_p,
-                     "note": c.note, "source": c.source, **r})
+                     "note": c.note, "source": c.source, "provider": provider(c.name, c.source), **r})
     current = next((c for c in candidates if c.key == "current"), None)
     without = simulate(current, days, cap_kwh, power_kw, battery=False) if current else None
     ranked = sorted([r for r in rows if r["annual"] is not None], key=lambda r: r["annual"])

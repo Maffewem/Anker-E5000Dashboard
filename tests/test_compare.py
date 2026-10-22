@@ -242,3 +242,13 @@ def test_agile_charges_in_negative_and_cheapest_slots():
     assert r["battery_mode"] == "grid" and r["charge_window"] == "03:00-05:00"
     assert r["avg_import_p"] < 22.0
     assert r["cost"] < simulate(c, usage_by_day(usage()), 5, 2.4, battery=False)["cost"]
+
+
+def test_provider_labels():
+    from app.compare import provider
+    assert provider("Your tariff: Agile Octopus", "current") == "Your tariff"
+    assert provider("Octopus Go", "octopus") == "Octopus Energy"
+    assert provider("E.ON Next Drive", "custom") == "E.ON Next"
+    assert provider("EDF GoElectric Overnight", "indicative") == "EDF"
+    assert provider("British Gas Electric Driver", "indicative") == "British Gas"
+    assert provider("Ecotricity Fixed", "custom") == "Other"
