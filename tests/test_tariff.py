@@ -31,12 +31,24 @@ def test_payback_values_discharge_and_charging():
     assert p["days"] == 2 and p["per_day"] == -0.8  # today (the 9th) is left out of the rate: only the charging day counts
     assert p["remaining"] == 99.0
     assert p["payback_days"] is None  # two days is too little to project from
-    week = payback(tariff, slots, date(2026, 10, 15))  # the same savings over a week of finished days
-    assert week["days"] == 8 and week["per_day"] == pytest.approx(1 / 7, abs=0.001)
-    assert week["payback_days"] == 693
-    assert (week["payback_days_low"], week["payback_days_high"]) == (554, 924)
-    pricey = payback(Tariff(**{**tariff.__dict__, "battery_cost": 1e5}), slots, date(2026, 10, 15))
+    # Seven finished days of +£1.00 each (5 kWh in at 10p, 6 kWh out at 30p, 2 kWh solar at 15p).
+    week_slots = [{**r, "day": f"2026-10-{d:02d}"} for d in range(1, 8) for r in slots[:2] + [{**slots[2]}]]
+    week = payback(tariff, week_slots, date(2026, 10, 8))
+    assert week["recorded_days"] == 7 and week["per_day"] == 1.0 and week["early_estimate"]
+    assert week["saved"] == 7.0 and week["payback_days"] == 93
+    assert (week["payback_days_low"], week["payback_days_high"]) == (74, 124)
+    pricey = payback(Tariff(**{**tariff.__dict__, "battery_cost": 1e6}), week_slots, date(2026, 10, 8))
     assert pricey["payback_too_long"] and pricey["payback_date"] is None
+
+
+def test_rate_uses_the_latest_finished_days_and_skips_gaps():
+    tariff = Tariff(battery_cost=1000, peak_rate=30, offpeak_rate=30, export_rate=0)
+    slots = [{"day": f"2026-09-{d:02d}", "slot": 36, "discharge_wh": 1000, "grid_charge_wh": 0, "solar_charge_wh": 0}
+             for d in range(1, 11)]  # 10 slow days at 30p
+    slots += [{"day": f"2026-10-{d:02d}", "slot": 36, "discharge_wh": 10000, "grid_charge_wh": 0, "solar_charge_wh": 0}
+              for d in range(1, 15)]  # 14 good days at £3.00, with nothing recorded between the groups
+    p = payback(tariff, slots, date(2026, 10, 15))
+    assert p["per_day"] == 3.0 and p["recorded_days"] == 24 and not p["early_estimate"]
 
 
 def test_lifetime_totals_count_savings_from_before_recording():
