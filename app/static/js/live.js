@@ -141,7 +141,7 @@ function runtimeText(r) {
   const charging = r.charging;
   const floor = Math.round(r.floor_soc);
   // Say what ends the projection: a charge the dashboard has planned, or the usual pattern.
-  const how = r.recharges_by ? `a scheduled charge at ${atTime(r.recharges_at)}` : `it usually charges, from about ${atTime(r.recharges_at)}`;
+  const how = r.recharges_by ? `a scheduled charge at ${atTime(r.recharges_at)}` : `charging normally starts, around ${atTime(r.recharges_at)}`;
   const next = r.recharges_at ? ` until ${how}` : "";
   if (r.soc < r.floor_soc - 0.5 && !charging) return `Below its ${floor}% reserve (now ${Math.round(r.soc)}%), holding${next}`;
   if (r.soc <= r.floor_soc + 0.5 && !charging) return `At its ${floor}% reserve${next}`;
@@ -151,7 +151,7 @@ function runtimeText(r) {
   const goal = r.charge_target && r.charge_target < 100 ? `${Math.round(r.charge_target)}%` : "Full";
   if (charging && r.full_at) return `${goal} around ${atTime(r.full_at)}${planned ? `, ${planned}` : ""}${low ? `, then ${low}` : ""}`;
   if (charging && planned) return `Charging, ${planned}`;
-  if (low) return `Down to ${floor}% around ${atTime(r.empty_at)}${r.recharges_at ? `, before ${how}` : ""}`;
+  if (low) return `Down to ${floor}% around ${atTime(r.empty_at)}${r.recharges_at ? `, before ${r.recharges_by ? how : `it normally starts charging around ${atTime(r.recharges_at)}`}` : ""}`;
   if (r.recharges_at) return `Lasts${next}`;
   if (r.full_at) return `Full around ${atTime(r.full_at)}`;
   return r.method === "pattern" ? "Lasts beyond the next 2 days" : "";
