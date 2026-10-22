@@ -12,6 +12,7 @@ charges, that's all there is to say.
 
 from __future__ import annotations
 
+import statistics
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -135,14 +136,23 @@ def estimate(snap: dict[str, Any], pattern: list[float | None], hours_of_history
 
 
 def pattern_from_minutes(rows: list[tuple[int, float | None]], tz) -> tuple[list[float | None], float]:
-    """Average battery power per local half hour from (ts, battery_w) minute rows."""
-    sums, counts = [0.0] * 48, [0] * 48
+    """Typical battery power per local half hour from (ts, battery_w) minute rows.
+
+    Each day's average for a half hour is taken first and the median across days
+    after, so one odd day (a test charge, a one-off schedule) doesn't read as usual.
+    """
+    sums: dict[tuple, list[float]] = {}
+    hours = 0
     for ts, watts in rows:
         if watts is None:
             continue
         local = datetime.fromtimestamp(ts, tz)
-        slot = (local.hour * 60 + local.minute) // 30
-        sums[slot] += watts
-        counts[slot] += 1
-    pattern = [sums[i] / counts[i] if counts[i] else None for i in range(48)]
-    return pattern, sum(counts) / 60
+        acc = sums.setdefault((local.date(), (local.hour * 60 + local.minute) // 30), [0.0, 0])
+        acc[0] += watts
+        acc[1] += 1
+        hours += 1
+    by_slot: list[list[float]] = [[] for _ in range(48)]
+    for (_, slot), (total, n) in sums.items():
+        by_slot[slot].append(total / n)
+    pattern = [statistics.median(v) if v else None for v in by_slot]
+    return pattern, hours / 60
