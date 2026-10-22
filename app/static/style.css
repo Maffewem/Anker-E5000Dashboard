@@ -368,3 +368,5 @@ html.tabs .top { padding-top: 12px; padding-bottom: 8px; }
 html.tabs .top .sub { display: none; }
 html.tabs .value { font-size: 24px; }
 html.tabs .chart-box { height: 220px; }
+
+#compare-result li.estimate .name { font-style: italic; }

@@ -53,6 +53,9 @@ $("custom-preset").addEventListener("change", () => {
     $("custom-name").value = p.name;
     $("custom-from").value = p.offpeak_start;
     $("custom-to").value = p.offpeak_end;
+    for (const [id, k] of [["custom-peak", "peak_rate"], ["custom-offpeak", "offpeak_rate"], ["custom-standing", "standing_p"], ["custom-export", "export_rate"]]) {
+      if (p[k] != null) $(id).value = p[k];
+    }
     $("custom-peak").focus();
   } else {
     $("custom-name").value = "";
@@ -74,10 +77,55 @@ function batteryPlan(row) {
   return `Cheap and peak prices are too close for grid charging to pay after about 10% charging losses.${solar}`;
 }
 
-$("compare-more").addEventListener("click", () => {
-  for (const li of $("compare-result").children) li.hidden = false;
-  $("compare-more").hidden = true;
-});
+let compareRows = [];
+const SHOWN = 5;
+
+// Cheapest first, optionally for one supplier. The tariff you pay now stays so there's something to compare against.
+function renderRows(showAll = false) {
+  const want = $("compare-provider").value;
+  const rows = compareRows.filter((row) => !want || row.provider === want || row.key === "current");
+  $("compare-result").replaceChildren(...rows.map((row, i) => {
+    const li = rowItem(row, i);
+    li.hidden = !showAll && i >= SHOWN && row.key !== "current";
+    return li;
+  }));
+  const extra = rows.length - [...$("compare-result").children].filter((li) => !li.hidden).length;
+  $("compare-more").hidden = extra <= 0;
+  $("compare-more").textContent = `Show ${extra} more`;
+}
+
+$("compare-more").addEventListener("click", () => renderRows(true));
+$("compare-provider").addEventListener("change", () => renderRows());
+
+function rowItem(row, i) {
+  const li = document.createElement("li");
+  if (i === 0) li.className = "best";
+  if (row.key === "current") li.classList.add("current");
+  if (row.source === "indicative") li.classList.add("estimate");
+  const det = document.createElement("details");
+  const sum = document.createElement("summary");
+  const name = document.createElement("span"); name.className = "name"; name.textContent = row.source === "indicative" ? `${row.name} (est.)` : row.name;
+  const total = document.createElement("span"); total.className = "total"; total.textContent = pounds(row.annual);
+  const vs = document.createElement("span"); vs.className = "vs";
+  if (row.key === "current") vs.textContent = "now";
+  else if (row.vs_current != null) {
+    vs.className += row.vs_current < 0 ? " cheaper" : " dearer";
+    vs.textContent = `${row.vs_current < 0 ? "−" : "+"}${pounds(Math.abs(row.vs_current))}`;
+  }
+  sum.append(name, total, vs);
+  const b = row.breakdown || {};
+  const parts = [["House", b.home], ["Battery charging", b.battery_charging], ["Standing charge", b.standing], ["Export credit", b.export, true]]
+    .filter(([label, v]) => v != null && (v || label === "House"))
+    .map(([label, v, minus]) => `${label} ${minus ? "−" : ""}${pounds(v)}`);
+  if (row.avg_import_p != null) parts.push(`average ${pence(row.avg_import_p)}/kWh from the grid`);
+  const more = document.createElement("div"); more.className = "more";
+  for (const t of [batteryPlan(row), parts.join(" · "), row.export ? `Export: ${row.export}` : "", row.note || ""].filter(Boolean)) {
+    const p = document.createElement("p"); p.textContent = t; more.append(p);
+  }
+  det.append(sum, more);
+  li.append(det);
+return li;
+}
 
 $("compare-run").addEventListener("click", async () => {
   $("compare-msg").className = "setup-msg";
@@ -98,40 +146,13 @@ $("compare-run").addEventListener("click", async () => {
   $("compare-msg").textContent = r.message || (r.problems && r.problems.length ? `Some tariffs were skipped: ${r.problems.join("; ")}` : "");
   $("compare-result").hidden = !r.rows.length;
   $("compare-assumptions").hidden = !r.rows.length;
-  // One compact line per tariff (cheapest first); the details open on a tap.
-  const SHOWN = 5;
-  $("compare-result").replaceChildren(...r.rows.map((row, i) => {
-    const li = document.createElement("li");
-    if (i === 0) li.className = "best";
-    if (row.key === "current") li.classList.add("current");
-    li.hidden = i >= SHOWN && row.key !== "current";
-    const det = document.createElement("details");
-    const sum = document.createElement("summary");
-    const name = document.createElement("span"); name.className = "name"; name.textContent = row.name;
-    const total = document.createElement("span"); total.className = "total"; total.textContent = pounds(row.annual);
-    const vs = document.createElement("span"); vs.className = "vs";
-    if (row.key === "current") vs.textContent = "now";
-    else if (row.vs_current != null) {
-      vs.className += row.vs_current < 0 ? " cheaper" : " dearer";
-      vs.textContent = `${row.vs_current < 0 ? "−" : "+"}${pounds(Math.abs(row.vs_current))}`;
-    }
-    sum.append(name, total, vs);
-    const b = row.breakdown || {};
-    const parts = [["House", b.home], ["Battery charging", b.battery_charging], ["Standing charge", b.standing], ["Export credit", b.export, true]]
-      .filter(([label, v]) => v != null && (v || label === "House"))
-      .map(([label, v, minus]) => `${label} ${minus ? "−" : ""}${pounds(v)}`);
-    if (row.avg_import_p != null) parts.push(`average ${pence(row.avg_import_p)}/kWh from the grid`);
-    const more = document.createElement("div"); more.className = "more";
-    for (const t of [batteryPlan(row), parts.join(" · "), row.export ? `Export: ${row.export}` : "", row.note || ""].filter(Boolean)) {
-      const p = document.createElement("p"); p.textContent = t; more.append(p);
-    }
-    det.append(sum, more);
-    li.append(det);
-    return li;
-  }));
-  const extra = r.rows.length - [...$("compare-result").children].filter((li) => !li.hidden).length;
-  $("compare-more").hidden = extra <= 0;
-  $("compare-more").textContent = `Show ${extra} more`;
+  compareRows = r.rows;
+  const providers = [...new Set(r.rows.filter((x) => x.key !== "current").map((x) => x.provider))];
+  const keep = $("compare-provider").value;
+  $("compare-provider").replaceChildren(new Option("All suppliers", ""), ...providers.map((p) => new Option(p, p)));
+  $("compare-provider").value = providers.includes(keep) ? keep : "";
+  $("compare-provider-row").hidden = providers.length < 2;
+  renderRows();
   const best = r.rows[0];
   const cur = r.rows.find((x) => x.key === "current");
   let summary = "";

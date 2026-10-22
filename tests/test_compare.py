@@ -94,7 +94,12 @@ def test_candidates_from_octopus_products():
         {"name": "E.ON Next Drive", "peak_rate": 27, "offpeak_rate": 7, "offpeak_start": "00:00",
          "offpeak_end": "07:00", "export_rate": 16, "standing_p": 45}])
     names = [c.name for c in cands]
-    assert names == ["Octopus Go", "Intelligent Octopus Go", "Flexible Octopus", "E.ON Next Drive"]
+    # built-in estimates for suppliers the user hasn't typed prices for; the typed E.ON entry replaces its estimate
+    assert names == ["Octopus Go", "Intelligent Octopus Go", "Flexible Octopus", "EDF GoElectric Overnight",
+                     "British Gas Electric Driver", "E.ON Next Drive"]
+    est = cands[3]
+    assert est.source == "indicative" and est.import_p("2026-10-02", 2) == 8.5 and est.import_p("2026-10-02", 20) == 28.0
+    assert cands[5].source == "custom"
     assert problems == []
     go = cands[0]
     assert go.standing_p == 50.0 and go.export_name == "Outgoing Octopus"
@@ -237,3 +242,13 @@ def test_agile_charges_in_negative_and_cheapest_slots():
     assert r["battery_mode"] == "grid" and r["charge_window"] == "03:00-05:00"
     assert r["avg_import_p"] < 22.0
     assert r["cost"] < simulate(c, usage_by_day(usage()), 5, 2.4, battery=False)["cost"]
+
+
+def test_provider_labels():
+    from app.compare import provider
+    assert provider("Your tariff: Agile Octopus", "current") == "Your tariff"
+    assert provider("Octopus Go", "octopus") == "Octopus Energy"
+    assert provider("E.ON Next Drive", "custom") == "E.ON Next"
+    assert provider("EDF GoElectric Overnight", "indicative") == "EDF"
+    assert provider("British Gas Electric Driver", "indicative") == "British Gas"
+    assert provider("Ecotricity Fixed", "custom") == "Other"
