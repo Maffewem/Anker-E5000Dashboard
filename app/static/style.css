@@ -353,3 +353,18 @@ dialog select { width: 100%; font: inherit; font-size: 16px; padding: 8px 10px; 
 .happy-row { display: grid; grid-template-columns: 1.4fr 1fr 1fr auto; gap: 12px; align-items: end; }
 .happy-row button { padding: 9px 16px; }
 @media (max-width: 560px) { .happy-row { grid-template-columns: 1fr 1fr; } .happy-row > div:first-child { grid-column: 1 / -1; } .happy-row button { grid-column: 1 / -1; } }
+
+/* Optional phone layout (?layout=tabs), see js/tabs.js */
+.tabbar { display: none; }
+html.tabs .tabbar { display: grid; grid-template-columns: repeat(5, 1fr); position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+  background: var(--surface); border-top: 1px solid var(--border); padding-bottom: env(safe-area-inset-bottom); }
+html.tabs .tabbar button { border: 0; background: transparent; color: var(--text-muted); font: inherit; font-size: 12px;
+  min-height: 52px; cursor: pointer; border-top: 3px solid transparent; }
+html.tabs .tabbar button[aria-pressed="true"] { color: var(--text-primary); font-weight: 650; border-top-color: var(--battery); }
+html.tabs .tab-off { display: none !important; }
+html.tabs main { padding-bottom: 84px; gap: 12px; }
+html.tabs .footer { padding-bottom: 72px; }
+html.tabs .top { padding-top: 12px; padding-bottom: 8px; }
+html.tabs .top .sub { display: none; }
+html.tabs .value { font-size: 24px; }
+html.tabs .chart-box { height: 220px; }
