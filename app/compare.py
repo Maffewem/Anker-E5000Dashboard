@@ -51,11 +51,17 @@ EXPORT_FAMILIES = (
 )
 EXPORT_FOR = {"agile": "agile_outgoing", "flux": "flux_export"}
 
-# Fixed windows for suppliers without a public price list; the prices are typed in.
+# Fixed-window EV tariffs from suppliers without a public price list. The rates
+# are approximate published unit rates (pence per kWh incl. VAT) and drift as
+# suppliers reprice, so they are shown as estimates: the same entry saved under
+# Compare > your own tariffs overrides it with your real prices.
 PRESETS = [
-    {"name": "E.ON Next Drive", "offpeak_start": "00:00", "offpeak_end": "07:00"},
-    {"name": "EDF GoElectric Overnight", "offpeak_start": "00:00", "offpeak_end": "05:00"},
-    {"name": "British Gas Electric Driver", "offpeak_start": "00:00", "offpeak_end": "05:00"},
+    {"name": "E.ON Next Drive", "offpeak_start": "00:00", "offpeak_end": "07:00",
+     "peak_rate": 27.0, "offpeak_rate": 6.7, "standing_p": 47.0, "export_rate": 15.0},
+    {"name": "EDF GoElectric Overnight", "offpeak_start": "00:00", "offpeak_end": "05:00",
+     "peak_rate": 28.0, "offpeak_rate": 8.5, "standing_p": 55.0, "export_rate": 12.0},
+    {"name": "British Gas Electric Driver", "offpeak_start": "00:00", "offpeak_end": "05:00",
+     "peak_rate": 28.0, "offpeak_rate": 8.5, "standing_p": 55.0, "export_rate": 15.0},
 ]
 
 
@@ -353,6 +359,18 @@ class Comparer:
                 c.note = "Needs a heat pump."
             elif key == "flux":
                 c.note = "Needs solar and a battery; doesn't model exporting from the battery in the evening peak."
+            out.append(c)
+        typed = {t.get("name", "").strip().lower() for t in custom}
+        for t in PRESETS:
+            if t["name"].lower() in typed:
+                continue  # the user's own prices win
+            c = Candidate("indicative", t["name"], t["standing_p"],
+                          import_profile=fixed_profile(t["peak_rate"], t["offpeak_rate"], t["offpeak_start"], t["offpeak_end"]),
+                          export_profile=[t["export_rate"]] * 48, source="indicative",
+                          note=f"Estimate from approximate published rates ({t['peak_rate']:g}p / {t['offpeak_rate']:g}p "
+                               f"{t['offpeak_start']}-{t['offpeak_end']}, {t['standing_p']:g}p standing): check with the supplier, "
+                               "or enter your quote under your own tariffs. Needs an EV.")
+            c.export_name = f"{t['export_rate']:g}p export (assumed)"
             out.append(c)
         for t in custom:
             try:

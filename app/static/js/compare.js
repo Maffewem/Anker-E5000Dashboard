@@ -53,6 +53,9 @@ $("custom-preset").addEventListener("change", () => {
     $("custom-name").value = p.name;
     $("custom-from").value = p.offpeak_start;
     $("custom-to").value = p.offpeak_end;
+    for (const [id, k] of [["custom-peak", "peak_rate"], ["custom-offpeak", "offpeak_rate"], ["custom-standing", "standing_p"], ["custom-export", "export_rate"]]) {
+      if (p[k] != null) $(id).value = p[k];
+    }
     $("custom-peak").focus();
   } else {
     $("custom-name").value = "";
@@ -104,10 +107,11 @@ $("compare-run").addEventListener("click", async () => {
     const li = document.createElement("li");
     if (i === 0) li.className = "best";
     if (row.key === "current") li.classList.add("current");
+    if (row.source === "indicative") li.classList.add("estimate");
     li.hidden = i >= SHOWN && row.key !== "current";
     const det = document.createElement("details");
     const sum = document.createElement("summary");
-    const name = document.createElement("span"); name.className = "name"; name.textContent = row.name;
+    const name = document.createElement("span"); name.className = "name"; name.textContent = row.source === "indicative" ? `${row.name} (est.)` : row.name;
     const total = document.createElement("span"); total.className = "total"; total.textContent = pounds(row.annual);
     const vs = document.createElement("span"); vs.className = "vs";
     if (row.key === "current") vs.textContent = "now";

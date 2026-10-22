@@ -94,7 +94,12 @@ def test_candidates_from_octopus_products():
         {"name": "E.ON Next Drive", "peak_rate": 27, "offpeak_rate": 7, "offpeak_start": "00:00",
          "offpeak_end": "07:00", "export_rate": 16, "standing_p": 45}])
     names = [c.name for c in cands]
-    assert names == ["Octopus Go", "Intelligent Octopus Go", "Flexible Octopus", "E.ON Next Drive"]
+    # built-in estimates for suppliers the user hasn't typed prices for; the typed E.ON entry replaces its estimate
+    assert names == ["Octopus Go", "Intelligent Octopus Go", "Flexible Octopus", "EDF GoElectric Overnight",
+                     "British Gas Electric Driver", "E.ON Next Drive"]
+    est = cands[3]
+    assert est.source == "indicative" and est.import_p("2026-10-02", 2) == 8.5 and est.import_p("2026-10-02", 20) == 28.0
+    assert cands[5].source == "custom"
     assert problems == []
     go = cands[0]
     assert go.standing_p == 50.0 and go.export_name == "Outgoing Octopus"
