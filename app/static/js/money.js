@@ -114,6 +114,7 @@ function renderPayback(p) {
   else if (p.payback_days != null) {
     const [a, b] = [year(p.payback_date_low), year(p.payback_date_high)];
     eta = `About ${durationRange(p.payback_days_low, p.payback_days_high)} (${a === b ? a : `${a} to ${b}`})`;
+    if (p.early_estimate) eta += `. Early guess from ${p.recorded_days} days; it settles after ${p.settled_days}`;
   } else if (p.payback_too_long) {
     eta = "More than 50 years at this rate";
   } else if (p.recorded_days < p.min_days) {
