@@ -7,6 +7,7 @@ are any, override it half hour by half hour.
 from __future__ import annotations
 
 import re
+from statistics import median
 from bisect import bisect_right
 from dataclasses import asdict, dataclass, fields
 from datetime import date, timedelta
@@ -16,8 +17,8 @@ TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 # Days of savings needed before projecting a payback date. Fewer than this
 # and one sunny or grey day swings the answer by decades.
 MIN_DAYS = 7
-# The rate is the average of this many of the latest finished days, so a slow
-# start (before the battery ran every day) stops weighing on it after a while.
+# The rate is the median of this many of the latest finished days, so a
+# part day or a day before the battery ran every day doesn't drag it down.
 RECENT_DAYS = 14
 # Fewer finished days than this and the projection is labelled an early guess.
 SETTLED_DAYS = 14
@@ -158,7 +159,7 @@ def payback(tariff: Tariff, slots: list[dict], today: date,
     # Days with nothing recorded (dashboard off) don't count as zero savings.
     recorded_span = len(by_day)
     recent = [by_day[d] for d in sorted(by_day)[-RECENT_DAYS:]]
-    per_day = sum(recent) / len(recent) if recent else 0.0
+    per_day = median(recent) if recent else 0.0
     remaining = max(0.0, tariff.battery_cost - saved)
 
     payback_days = low = high = None
