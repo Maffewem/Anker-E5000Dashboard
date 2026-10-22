@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from datetime import datetime
 
-from ..control import DEFAULT_CHARGE_TARGET, ControlSettings, Controller, Schedule, happy_slots
+from ..control import DEFAULT_CHARGE_TARGET, DEFAULT_PACE_MARGIN, ControlSettings, Controller, Schedule, happy_slots
 
 router = APIRouter()
 
@@ -43,6 +43,8 @@ class ControlIn(BaseModel):
     charge_happy: bool = True
     auto_balance: bool = False
     balance_days: int = 28
+    pace_charge: bool = False
+    pace_margin_min: int = DEFAULT_PACE_MARGIN
     happy_hours: list[HappyHourIn] = []
     schedules: list[ScheduleIn] = []
 

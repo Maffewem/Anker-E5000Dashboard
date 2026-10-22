@@ -500,6 +500,11 @@
           <p class="hint">Octopus doesn't publish booked Happy Hours to customers, so enter the slot you booked. Charging stops at the level below. The charge before a booked slot stops short to leave room for it, and power used in a Happy Hour counts as free in the costs.</p>
           <p class="hint" id="happy-status" hidden></p>
         </div>
+        <label class="compare"><input type="checkbox" id="control-pace"> Pace charging: spread each cheap-hours, schedule or smart-charge charge over its window instead of charging flat out, and use the cheapest half hours first when the rate varies. Happy Hours still charge at full power.</label>
+        <div class="row" id="pace-box">
+          <div><label for="control-pace-margin">Aim to finish early by (minutes)</label><input id="control-pace-margin" type="number" min="15" max="240" step="15" placeholder="45"></div>
+        </div>
+        <p class="hint" id="pace-status" hidden></p>
         <label class="compare"><input type="checkbox" id="control-balance"> Auto balance: now and then charge to 100% in a cheap or free window so the battery's level reading stays accurate</label>
         <div class="row" id="balance-box">
           <div><label for="control-balance-days">Every (days since last full)</label><input id="control-balance-days" type="number" min="7" max="120" step="1" placeholder="28"></div>

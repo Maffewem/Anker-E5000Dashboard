@@ -671,3 +671,102 @@ def test_controller_reports_and_logs_the_happy_hour_room(monkeypatch):
     assert any("Leaving room" in e and "66%" in e for e in events)
     asyncio.run(ctl.tick(IN + timedelta(seconds=15)))
     assert sum("Leaving room" in e for e in events) == 1  # logged once
+
+
+# ---------- paced charging ----------
+
+from app.control import pace_charge  # noqa: E402
+
+PACE_WINDOW = Window(datetime(2026, 10, 10, 0, 30, tzinfo=UTC), datetime(2026, 10, 10, 5, 30, tzinfo=UTC), "Cheapest rate")
+
+
+def _paced(**kw):
+    return ControlSettings(**{"enabled": True, "grid_charge": True, "charge_power_w": 2500, "charge_target_soc": 80,
+                              "pace_charge": True, **kw})
+
+
+def test_pace_off_by_default_charges_flat_out():
+    assert ControlSettings().pace_charge is False
+    snap = {"soc": 20, "rated_kwh": 5.0, "max_charge_w": 2500}
+    off = _paced(pace_charge=False)
+    assert decide(off, [PACE_WINDOW], snap, IN)[:2] == (CHARGE, -2500)
+
+
+def test_pace_spreads_the_charge_and_leaves_the_margin():
+    snap = {"soc": 20, "rated_kwh": 5.0, "max_charge_w": 2500}
+    action, setpoint, reason, _ = decide(_paced(), [PACE_WINDOW], snap, IN, pace={})
+    assert action == CHARGE
+    # 60% of 5 kWh (3.16 kWh from the grid) over 3.75 h (01:00 to 04:45 with the default 45 min spare): ~850 W, so 900
+    assert -setpoint == 900 and "paced" in reason
+    plan = pace_charge(IN, PACE_WINDOW, 20, 80, 5.0, 2500, 90)  # an explicit 90 min margin
+    assert plan["deadline"] == datetime(2026, 10, 10, 4, 0, tzinfo=UTC) and plan["finish"] <= plan["deadline"]
+
+
+def test_pace_never_exceeds_the_cap_and_falls_back_to_full_power_when_behind():
+    late = datetime(2026, 10, 10, 3, 30, tzinfo=UTC)  # 30 min to the 04:00 deadline, a long way to go
+    assert pace_charge(late, PACE_WINDOW, 20, 80, 5.0, 2500, 90)["kind"] == "full"
+    assert decide(_paced(), [PACE_WINDOW], {"soc": 20, "rated_kwh": 5.0, "max_charge_w": 1000}, late, pace={})[:2] == (CHARGE, -1000)
+    assert pace_charge(IN, PACE_WINDOW, 70, 80, 5.0, 2500, 90)["power"] >= 300  # floor
+
+
+def test_pace_speeds_up_when_the_battery_charges_slower_than_commanded():
+    normal = pace_charge(IN, PACE_WINDOW, 20, 80, 5.0, 2500, 90)["power"]
+    slow = pace_charge(IN, PACE_WINDOW, 20, 80, 5.0, 2500, 90, delivery=0.5)["power"]
+    assert slow > normal
+
+
+def test_pace_keeps_the_current_setpoint_when_close():
+    assert pace_charge(IN, PACE_WINDOW, 20, 80, 5.0, 2500, 90, current_w=1200)["power"] == 1200
+
+
+def test_pace_cheapest_half_hours_first():
+    prices = tuple((PACE_WINDOW.start + timedelta(minutes=30 * i), 5.0 if i in (3, 4) else 10.0) for i in range(10))
+    w = Window(PACE_WINDOW.start, PACE_WINDOW.end, "Agile", prices=prices)
+    snap = {"soc": 60, "rated_kwh": 5.0, "max_charge_w": 2500}
+    # needs ~1 kWh: one cheap half hour at 2.5 kW (02:00); 01:00 is a dear slot, so wait
+    action, setpoint, reason, _ = decide(_paced(), [w], snap, IN, pace={})
+    assert (action, setpoint) == (HOLD, 0) and "cheaper" in reason
+    cheap_now = datetime(2026, 10, 10, 2, 10, tzinfo=UTC)
+    assert decide(_paced(), [w], snap, cheap_now, pace={})[:2] == (CHARGE, -2500)
+
+
+def test_pace_leaves_happy_hours_and_balance_alone():
+    happy = Window(IN - timedelta(minutes=10), IN + timedelta(hours=2), "Happy Hour", "octopus", happy=True)
+    snap = {"soc": 20, "rated_kwh": 5.0, "max_charge_w": 2400}
+    assert decide(_paced(charge_happy=True), [happy], snap, IN, pace={})[:2] == (CHARGE, -2400)
+    # balance aims for 100%, so the same window needs more power than for 80%
+    p80 = -decide(_paced(), [PACE_WINDOW], {**snap, "soc": 50}, IN, pace={})[1]
+    p100 = -decide(_paced(), [PACE_WINDOW], {**snap, "soc": 50}, IN, balance=True, pace={})[1]
+    assert p100 > p80
+
+
+def test_pace_settings_validate():
+    with pytest.raises(ValueError):
+        ControlSettings(pace_margin_min=5).validate()
+    assert ControlSettings(pace_charge=True, pace_margin_min=60).validate().pace_margin_min == 60
+
+
+def test_controller_paces_logs_once_and_respects_live_guard(monkeypatch):
+    c = FakeCollector(mode=6, soc=20)
+    c.snapshot = {"soc": 20, "rated_kwh": 5.0, "max_charge_w": 2500}
+    ctl = Controller(c, load=lambda: {"settings": {"enabled": True, "grid_charge": True, "pace_charge": True}, "state": {}},
+                     save_state=lambda s: None, windows=lambda now: [PACE_WINDOW])
+    monkeypatch.delenv("CONTROL_LIVE", raising=False)
+    asyncio.run(ctl.tick(IN))
+    assert c.writes == [] and ctl.pace["kind"] == "even" and ctl.pace["power_w"] == 900  # dry run: nothing written
+    notes = [e["text"] for e in ctl.log if e["text"].startswith("Pacing the charge")]
+    asyncio.run(ctl.tick(IN + timedelta(seconds=15)))
+    assert [e["text"] for e in ctl.log if e["text"].startswith("Pacing the charge")] == notes and len(notes) == 1
+    # behind schedule later: back to full power, and it says so
+    asyncio.run(ctl.tick(datetime(2026, 10, 10, 4, 0, tzinfo=UTC)))
+    assert ctl.pace["kind"] == "full" and any("behind schedule" in e["text"] for e in ctl.log)
+    assert ctl.status()["pace"]["kind"] == "full"
+
+
+def test_pace_holds_a_recent_setpoint_unless_well_off_pace():
+    need = pace_charge(IN, PACE_WINDOW, 20, 80, 5.0, 2500, 90)["power"]  # 1100
+    kept = pace_charge(IN, PACE_WINDOW, 20, 80, 5.0, 2500, 90, current_w=need - 200, settled=True)
+    assert kept["power"] == need - 200  # within 20%: leave it
+    moved = pace_charge(IN, PACE_WINDOW, 20, 80, 5.0, 2500, 90, current_w=need - 400, settled=True)
+    assert moved["power"] == need  # too far short: correct it
+    assert pace_charge(IN, PACE_WINDOW, 20, 80, 5.0, 2500, 90, current_w=need - 200)["power"] == need  # not settled
