@@ -78,6 +78,12 @@ def test_pattern_averages_by_local_half_hour():
     assert hours == 2 / 60
 
 
+def test_one_off_charge_is_not_the_usual_pattern():
+    rows = [(int(datetime(2026, 10, d, 13, 10, tzinfo=TZ).timestamp()), -2400.0 if d == 5 else 0.0) for d in range(1, 8)]
+    pattern, _ = pattern_from_minutes(rows, TZ)
+    assert pattern[26] == 0.0
+
+
 def test_missing_readings_mean_no_estimate():
     assert estimate({"soc": None}, [None] * 48, 0, NOW) == {"available": False}
 
