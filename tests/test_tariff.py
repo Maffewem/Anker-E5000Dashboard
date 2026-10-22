@@ -198,3 +198,12 @@ def test_projection_rate_uses_recorded_days_but_total_includes_before_recording(
     assert p["per_day"] == 1.9 and p["recorded_days"] == 7 and p["days"] == 283
     assert p["saved"] == pytest.approx(7 * 1.9 + p["saved_before_recording"], abs=0.01)
     assert p["payback_days"] == round((3000 - p["saved"]) / 1.9)
+
+
+def test_rate_ignores_odd_days_like_a_part_day():
+    tariff = Tariff(battery_cost=1000, peak_rate=30, offpeak_rate=30, export_rate=0)
+    save = lambda day, wh: {"day": day, "slot": 36, "discharge_wh": wh, "grid_charge_wh": 0, "solar_charge_wh": 0}  # noqa: E731
+    # A day before 24/7 use (£0.10), a part day (£0.90) and three full days (£1.50 each).
+    slots = [save("2026-10-11", 333), save("2026-10-20", 3000), *(save(f"2026-10-{d}", 5000) for d in (21, 22, 23))]
+    p = payback(tariff, slots, date(2026, 10, 24))
+    assert p["per_day"] == 1.5  # the median, not the £1.00 mean
