@@ -48,6 +48,7 @@ class Tariff:
     offpeak_start: str = "00:30"
     offpeak_end: str = "05:30"
     export_rate: float = 15.0  # p/kWh paid for export; what solar charging gives up
+    standing_p: float = 0.0  # p/day standing charge; counted in the cost trends, not in battery savings
     use_manual: bool = False  # use these prices even when Octopus is connected
     installed: str = ""  # ISO date the battery was installed; lets its lifetime totals count
     supplier: str = ""  # one of SUPPLIERS; empty until picked (then Octopus if connected, else other)
@@ -58,7 +59,7 @@ class Tariff:
         return cls(**{k: v for k, v in (data or {}).items() if k in known})
 
     def validate(self) -> "Tariff":
-        for name in ("battery_cost", "peak_rate", "offpeak_rate", "export_rate"):
+        for name in ("battery_cost", "peak_rate", "offpeak_rate", "export_rate", "standing_p"):
             value = float(getattr(self, name))
             if not 0 <= value <= (100_000 if name == "battery_cost" else 1000):
                 raise ValueError(f"{name.replace('_', ' ').capitalize()} is out of range")
@@ -75,7 +76,7 @@ class Tariff:
             if installed > date.today() or installed.year < 2015:
                 raise ValueError("The install date can't be in the future")
         return Tariff(**{**asdict(self), "use_manual": bool(self.use_manual),
-                         **{n: float(getattr(self, n)) for n in ("battery_cost", "peak_rate", "offpeak_rate", "export_rate")}})
+                         **{n: float(getattr(self, n)) for n in ("battery_cost", "peak_rate", "offpeak_rate", "export_rate", "standing_p")}})
 
     def slot_rates(self) -> list[float]:
         """Price in p/kWh for each half hour of the day (48 slots)."""
@@ -222,6 +223,9 @@ class FreeSlots:
     def __init__(self, prices, free: set) -> None:
         self.prices, self.free = prices, free
 
+    def standing(self, day: str, fallback: float) -> float:
+        return standing_for(self.prices, day, fallback)
+
     def get(self, key: tuple[str, int], default=(None, None)) -> tuple:
         base = self.prices.get(key, default) if self.prices is not None else default
         return (0.0, base[1]) if key in self.free else base
@@ -249,6 +253,12 @@ class PriceHistory:
         self.rates = [t.slot_rates() for t in self.tariffs]
         self.actual = actual or {}
 
+    def standing(self, day: str, fallback: float) -> float:
+        """The typed standing charge in force that day, in p."""
+        if not self.since:
+            return fallback
+        return float(self.tariffs[max(0, bisect_right(self.since, day) - 1)].standing_p or 0.0)
+
     def get(self, key: tuple[str, int], default=(None, None)) -> tuple:
         actual_import, actual_export = self.actual.get(key, (None, None))
         if not self.since or (actual_import is not None and actual_export is not None):
@@ -258,10 +268,17 @@ class PriceHistory:
                 self.tariffs[i].export_rate if actual_export is None else actual_export)
 
 
+def standing_for(prices, day: str, fallback: float) -> float:
+    """Standing charge in p for a day: the one in force then if the prices keep a history, else `fallback`."""
+    fn = getattr(prices, "standing", None)
+    return fn(day, fallback) if fn else fallback
+
+
 def prices_changed(old: Tariff, new: Tariff) -> list[str]:
     """Readable list of the typed prices that differ, e.g. "peak 28p to 30p"."""
     out = []
-    for name, label in (("peak_rate", "peak"), ("offpeak_rate", "off-peak"), ("export_rate", "export")):
+    for name, label in (("peak_rate", "peak"), ("offpeak_rate", "off-peak"), ("export_rate", "export"),
+                         ("standing_p", "standing charge")):
         a, b = getattr(old, name), getattr(new, name)
         if a != b:
             out.append(f"{label} {a:g}p to {b:g}p")

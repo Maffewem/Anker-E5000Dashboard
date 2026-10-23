@@ -3,8 +3,8 @@
 Everything comes from the half-hour `slots` table, which is never pruned,
 so trends cover the whole time the dashboard has been recording. Each half
 hour is priced the same way as the battery payback: Octopus prices where
-they were fetched, the typed tariff otherwise. Costs are unit costs only;
-standing charges aren't included.
+they were fetched, the typed tariff otherwise. Net cost includes the typed
+standing charge (zero until one is entered) for each recorded day.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from __future__ import annotations
 import calendar
 from datetime import date, timedelta
 
-from .tariff import Tariff, _pricer, discharge_value
+from .tariff import Tariff, _pricer, discharge_value, standing_for
 
 # Projections use the average of this many recent full days: long enough to
 # smooth one sunny or grey day, short enough to follow the season.
@@ -21,7 +21,7 @@ RECENT_DAYS = 14
 MIN_RECENT = 3
 
 ENERGY = ("solar", "home", "import", "export", "charge", "discharge")
-MONEY = ("import_cost", "export_earned", "net_cost", "battery_saved")
+MONEY = ("import_cost", "export_earned", "standing_cost", "net_cost", "battery_saved")
 
 
 def daily_totals(tariff: Tariff, slots: list[dict], prices: dict | None = None) -> dict[str, dict]:
@@ -42,8 +42,9 @@ def daily_totals(tariff: Tariff, slots: list[dict], prices: dict | None = None) 
         d["battery_saved"] += (discharge_value({"discharge_wh": r.get("discharge_wh") or 0.0,
                                                 "discharge_export_wh": r.get("discharge_export_wh")}, imp, exp) - (r.get("grid_charge_wh") or 0.0) / 1000 * imp
                                - (r.get("solar_charge_wh") or 0.0) / 1000 * exp)
-    for d in days.values():
-        d["net_cost"] = d["import_cost"] - d["export_earned"]
+    for day, d in days.items():
+        d["standing_cost"] = standing_for(prices, day, tariff.standing_p) / 100
+        d["net_cost"] = d["import_cost"] + d["standing_cost"] - d["export_earned"]
     return days
 
 
@@ -200,6 +201,7 @@ def insights(days: dict[str, dict], today: date, span: int = 30) -> dict:
         "solar_used": round(max(0.0, 1 - t["export"] / t["solar"]) * 100) if t["solar"] > 0.5 else None,
         "battery_saved": round(t["battery_saved"], 2),
         "net_cost": round(t["net_cost"], 2),
+        "standing_cost": round(t["standing_cost"], 2),
         "discharge": round(t["discharge"], 1),
     }
 

@@ -200,6 +200,7 @@ $("open-costs").addEventListener("click", () => {
   $("cost-from").value = t.offpeak_start || "00:30";
   $("cost-to").value = t.offpeak_end || "05:30";
   $("cost-export").value = t.export_rate ?? "";
+  $("cost-standing").value = (payback && payback.manual ? payback.manual.standing_p : t.standing_p) ?? "";
   const connected = Boolean(payback && payback.octopus_connected);
   $("costs-manual-row").hidden = !connected;
   $("cost-manual").checked = Boolean(payback && payback.use_manual);
@@ -238,7 +239,7 @@ $("costs-form").addEventListener("submit", async (e) => {
   try {
     const p = await postSettings("/api/tariff", {
       battery_cost: num("cost-battery"), installed: $("cost-installed").value, peak_rate: num("cost-peak"), offpeak_rate: num("cost-offpeak"),
-      offpeak_start: time("cost-from", "00:00"), offpeak_end: time("cost-to", "00:00"), export_rate: num("cost-export"),
+      offpeak_start: time("cost-from", "00:00"), offpeak_end: time("cost-to", "00:00"), export_rate: num("cost-export"), standing_p: Number($("cost-standing").value) || 0,
       use_manual: $("cost-manual").checked, supplier: $("cost-supplier").value, prices_from: $("cost-prices-from").value,
     });
     renderPayback(p);
