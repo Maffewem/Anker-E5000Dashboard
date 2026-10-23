@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 
 from pydantic import BaseModel
 
-from ..auth import COOKIE, SESSION_SECONDS, Auth
+from ..auth import COOKIE, SESSION_SECONDS, Auth, client_ip
 
 log = logging.getLogger("solarbank.web")
 router = APIRouter()
@@ -32,8 +32,9 @@ async def login(body: LoginIn, request: Request) -> JSONResponse:
     auth: Auth = state.auth
     if not auth.password_set:
         raise HTTPException(status_code=409, detail="No ADMIN_PASSWORD is set, so there's nothing to sign in to.")
-    client = request.client.host if request.client else "unknown"
-    if not auth.check_password(client, body.password[:1024]):
+    client = client_ip(request)
+    # scrypt takes about a tenth of a second and 32 MB: keep it off the event loop.
+    if not await asyncio.to_thread(auth.check_password, client, body.password[:1024]):
         log.warning("Wrong dashboard password from %s", client)
         await asyncio.sleep(1)  # slows guessing
         raise HTTPException(status_code=401, detail="Wrong password")
@@ -67,8 +68,8 @@ async def set_password(body: PasswordIn, request: Request) -> JSONResponse:
     auth: Auth = state.auth
     if auth.source == "env":
         raise HTTPException(status_code=409, detail="The password is set by ADMIN_PASSWORD in the container settings.")
-    client = request.client.host if request.client else "unknown"
-    if auth.password_set and not auth.check_password(client, body.current[:1024]):
+    client = client_ip(request)
+    if auth.password_set and not await asyncio.to_thread(auth.check_password, client, body.current[:1024]):
         await asyncio.sleep(1)
         raise HTTPException(status_code=401, detail="The current password is wrong")
     try:
@@ -83,6 +84,7 @@ async def set_password(body: PasswordIn, request: Request) -> JSONResponse:
 
 @router.post("/api/auth/logout")
 def logout(request: Request) -> JSONResponse:
+    state.auth.revoke(request.cookies.get(COOKIE))
     response = JSONResponse({**state.auth.status(request), "signed_in": False, "csrf": None,
                              "can_edit": not state.auth.read_only and not state.auth.password_set})
     response.delete_cookie(COOKIE, httponly=True, samesite="strict")
