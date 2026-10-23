@@ -15,7 +15,16 @@ dashboard keeps recording, and battery control keeps running on the settings
 it already has.
 
 Sessions are signed with a key made at startup, so restarting the container
-signs everyone out.
+signs everyone out. Signing out also revokes that session's token until then.
+
+A change sent by a page on another site (an Origin that isn't this dashboard's
+own address) is refused whether or not there is a password. Behind a reverse
+proxy that rewrites the Host header, list the public address in
+ALLOWED_ORIGINS (comma separated), e.g. https://solar.example.com.
+
+TRUST_PROXY=true makes failed-login limits count per visitor (Cloudflare's
+CF-Connecting-IP, else X-Forwarded-For) instead of per proxy address. Only
+set it when the dashboard is reachable only through that proxy.
 """
 
 from __future__ import annotations
@@ -26,12 +35,16 @@ import json
 import logging
 import os
 import secrets
+import threading
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import HTTPException, Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
+
+from .config import write_private
 
 COOKIE = "solarbank_session"
 CSRF_HEADER = "x-csrf-token"
@@ -48,6 +61,30 @@ FAILURE_WINDOW = 15 * 60  # ... within this many seconds, then refused until it 
 
 def _flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def client_ip(request: Request) -> str:
+    """The address failed logins are counted against."""
+    if _flag("TRUST_PROXY"):
+        forwarded = request.headers.get("cf-connecting-ip") or request.headers.get("x-forwarded-for", "")
+        forwarded = forwarded.split(",")[0].strip()
+        if forwarded:
+            return forwarded[:64]
+    return request.client.host if request.client else "unknown"
+
+
+def foreign_origin(request: Request) -> bool:
+    """Whether a browser says this request came from a page on some other site."""
+    origin = request.headers.get("origin")
+    if not origin:  # not a browser cross-site request (curl, scripts, same-origin GET-like navigations)
+        return False
+    try:
+        host = urlsplit(origin).netloc.lower()
+    except ValueError:
+        return True
+    allowed = {request.headers.get("host", "").lower(), request.headers.get("x-forwarded-host", "").lower()}
+    allowed |= {urlsplit(o.strip()).netloc.lower() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()}
+    return host not in allowed
 
 
 def hash_password(password: str) -> dict:
@@ -74,6 +111,8 @@ class Auth:
         self.stored = self._load() if not password else None  # a hash set on the dashboard
         self._key = secrets.token_bytes(32)
         self._failures: dict[str, list[float]] = {}
+        self._guess = threading.Lock()  # one guess at a time, so a burst can't outrun the failure count
+        self._revoked: dict[str, int] = {}  # signed-out session tokens -> when they would have expired
 
     @classmethod
     def from_env(cls, path: str | None = None) -> "Auth":
@@ -113,14 +152,19 @@ class Auth:
         if new:
             self.stored = hash_password(new)
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(self.stored))
-            tmp.chmod(0o600)
-            tmp.replace(self.path)
+            write_private(self.path, json.dumps(self.stored))
         else:
             self.stored = None
             self.path.unlink(missing_ok=True)
         self._key = secrets.token_bytes(32)
+        self._revoked.clear()  # the new key already invalidates every old token
+
+    def revoke(self, token: str | None) -> None:
+        """Make a signed-out session's cookie useless even if someone kept a copy."""
+        if token and self.session_valid(token):
+            now = time.time()
+            self._revoked = {t: exp for t, exp in self._revoked.items() if exp > now}
+            self._revoked[token] = int(token.split(".")[0])
 
     def _sign(self, text: str) -> str:
         return hmac.new(self._key, text.encode(), hashlib.sha256).hexdigest()
@@ -133,7 +177,7 @@ class Auth:
         if not token or token.count(".") != 2:
             return False
         body, sig = token.rsplit(".", 1)
-        if not hmac.compare_digest(sig, self._sign(body)):
+        if not hmac.compare_digest(sig, self._sign(body)) or token in self._revoked:
             return False
         try:
             return int(body.split(".")[0]) > time.time()
@@ -164,6 +208,10 @@ class Auth:
 
     def check_password(self, client: str, password: str) -> bool:
         """Compare in constant time, refusing an address after too many misses."""
+        with self._guess:
+            return self._check_password(client, password)
+
+    def _check_password(self, client: str, password: str) -> bool:
         now = time.time()
         recent = [t for t in self._failures.get(client, []) if now - t < FAILURE_WINDOW]
         if len(recent) >= MAX_FAILURES:
@@ -204,6 +252,8 @@ class LockMiddleware(BaseHTTPMiddleware):
     """Refuses changes the viewer isn't allowed to make, and adds safe headers."""
 
     async def dispatch(self, request: Request, call_next):
+        if request.method not in SAFE_METHODS and foreign_origin(request):
+            return self._harden(JSONResponse({"detail": "Changes must come from the dashboard itself."}, status_code=403))
         if request.method not in SAFE_METHODS and request.url.path not in OPEN_PATHS:
             denied = request.app.state.auth.denial(request)
             if denied is not None:
