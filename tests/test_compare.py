@@ -96,10 +96,10 @@ def test_candidates_from_octopus_products():
     names = [c.name for c in cands]
     # built-in estimates for suppliers the user hasn't typed prices for; the typed E.ON entry replaces its estimate
     assert names == ["Octopus Go", "Intelligent Octopus Go", "Flexible Octopus", "EDF GoElectric Overnight",
-                     "British Gas Electric Driver", "E.ON Next Drive"]
+                     "EDF GoElectric 18m", "British Gas Electric Driver", "E.ON Next Drive"]
     est = cands[3]
     assert est.source == "indicative" and est.import_p("2026-10-02", 2) == 8.5 and est.import_p("2026-10-02", 20) == 28.0
-    assert cands[5].source == "custom"
+    assert cands[6].source == "custom"
     assert problems == []
     go = cands[0]
     assert go.standing_p == 50.0 and go.export_name == "Outgoing Octopus"
