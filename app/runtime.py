@@ -13,7 +13,7 @@ charges, that's all there is to say.
 from __future__ import annotations
 
 import statistics
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 HORIZON_HOURS = 48
@@ -55,6 +55,15 @@ def estimate(snap: dict[str, Any], pattern: list[float | None], hours_of_history
     `pattern` is the average battery power in W for each of the 48 local
     half hours (+ discharging, - charging; None where there's no history).
     """
+    # Step through real time (UTC): adding to a local datetime moves the wall
+    # clock, which is wrong across a clock change (a 25 or 23 hour day). Local
+    # time is only for the half hour of the day and the answers given back.
+    tz = now.tzinfo
+    now = now.astimezone(timezone.utc)
+
+    def iso(d: datetime) -> str:
+        return d.astimezone(tz).isoformat()
+
     soc, rated, power = snap.get("soc"), snap.get("rated_kwh"), snap.get("battery_w")
     if soc is None or not rated or power is None:
         return {"available": False}
@@ -75,7 +84,7 @@ def estimate(snap: dict[str, Any], pattern: list[float | None], hours_of_history
         "full_at": None,
         "recharges_at": None,  # when it next starts charging (after empty_at, if it runs out first)
         "charging": power < -CHARGING_W,  # it is charging right now
-        "charging_until": charging_now[0].isoformat() if charging_now and power < -CHARGING_W else None,
+        "charging_until": iso(charging_now[0]) if charging_now and power < -CHARGING_W else None,
         "charging_by": charging_now[1] if charging_now and power < -CHARGING_W else None,
         "charge_target": None,  # the level the charge in progress is heading for
         "recharges_by": None,  # what starts it: a scheduled charge's description, or None for the usual pattern
@@ -84,7 +93,7 @@ def estimate(snap: dict[str, Any], pattern: list[float | None], hours_of_history
         goal = min(ceiling, charge_target) if charge_target else ceiling
         out["charge_target"] = goal
         if soc < goal:
-            out["full_at"] = (now + timedelta(hours=(goal - soc) / 100 * capacity_wh / -power)).isoformat()
+            out["full_at"] = iso(now + timedelta(hours=(goal - soc) / 100 * capacity_wh / -power))
     planned = sorted((a, why) for a, why in (charges or []) if a > now)
     planned = planned[0] if planned else None
     if not use_pattern:
@@ -92,11 +101,11 @@ def estimate(snap: dict[str, Any], pattern: list[float | None], hours_of_history
         # pattern there's no telling when it next charges, so running empty more
         # than a day away isn't worth a warning.
         if power > 5 and 0 < stored_wh / power <= CURRENT_EMPTY_HOURS:
-            out["empty_at"] = (now + timedelta(hours=stored_wh / power)).isoformat()
+            out["empty_at"] = iso(now + timedelta(hours=stored_wh / power))
         elif power < -5 and room_wh > 0 and out["full_at"] is None:
-            out["full_at"] = (now + timedelta(hours=room_wh / -power)).isoformat()
+            out["full_at"] = iso(now + timedelta(hours=room_wh / -power))
         if planned and (out["empty_at"] is None or planned[0] < datetime.fromisoformat(out["empty_at"])):
-            out["recharges_at"], out["recharges_by"] = planned[0].isoformat(), planned[1]
+            out["recharges_at"], out["recharges_by"] = iso(planned[0]), planned[1]
         return out
 
     t = now
@@ -111,24 +120,25 @@ def estimate(snap: dict[str, Any], pattern: list[float | None], hours_of_history
         if planned_now:
             slot_end = max(planned[0], t)
         hours = (slot_end - t).total_seconds() / 3600
-        watts = power if first else pattern[(t.hour * 60 + t.minute) // 30]
+        lt = t.astimezone(tz)
+        watts = power if first else pattern[(lt.hour * 60 + lt.minute) // 30]
         first = False
         if out["empty_at"] is None and watts and watts > 0 and level - watts * hours <= 0:
-            out["empty_at"] = (t + timedelta(hours=max(0.0, level) / watts)).isoformat()
+            out["empty_at"] = iso(t + timedelta(hours=max(0.0, level) / watts))
             level = 0.0  # it sits at the floor until it next charges
         if planned_now:
-            out["recharges_at"], out["recharges_by"] = planned[0].isoformat(), planned[1]
+            out["recharges_at"], out["recharges_by"] = iso(planned[0]), planned[1]
             break
         charging = bool(watts and watts < -CHARGING_W)
         if charging and not was_charging:
             # It starts charging again (after running out, if empty_at is
             # set); what happens after that is the next cycle's story.
-            out["recharges_at"] = t.isoformat()
+            out["recharges_at"] = iso(t)
             break
         was_charging = charging
         if charging:
             if out["full_at"] is None and level < top <= level - watts * hours:
-                out["full_at"] = (t + timedelta(hours=(top - level) / -watts)).isoformat()
+                out["full_at"] = iso(t + timedelta(hours=(top - level) / -watts))
         if out["empty_at"] is None:
             level = min(top, level - (watts or 0) * hours)
         t = slot_end
