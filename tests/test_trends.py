@@ -250,3 +250,12 @@ def test_standing_charge_counts_in_net_cost_not_in_battery_savings():
     hist = PriceHistory([("", {"standing_p": 40}), ("2026-10-02", {"standing_p": 60})])
     assert hist.standing("2026-10-01", 0) == 40 and hist.standing("2026-10-03", 0) == 60
     assert daily_totals(Tariff(), slots, hist)["2026-10-01"]["standing_cost"] == 0.4
+
+
+def test_standing_charge_can_be_switched_off():
+    from app.tariff import Tariff
+    from app.trends import daily_totals
+    slots = [{"day": "2026-10-01", "slot": 20, "import_wh": 1000, "export_wh": 0, "solar_wh": 0, "home_wh": 1000,
+              "discharge_wh": 0, "grid_charge_wh": 0, "solar_charge_wh": 0}]
+    off = daily_totals(Tariff(standing_p=50, include_standing=False), slots)["2026-10-01"]
+    assert off["standing_cost"] == 0.0

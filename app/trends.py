@@ -43,7 +43,7 @@ def daily_totals(tariff: Tariff, slots: list[dict], prices: dict | None = None) 
                                                 "discharge_export_wh": r.get("discharge_export_wh")}, imp, exp) - (r.get("grid_charge_wh") or 0.0) / 1000 * imp
                                - (r.get("solar_charge_wh") or 0.0) / 1000 * exp)
     for day, d in days.items():
-        d["standing_cost"] = standing_for(prices, day, tariff.standing_p) / 100
+        d["standing_cost"] = standing_for(prices, day, tariff.standing_p) / 100 if tariff.include_standing else 0.0
         d["net_cost"] = d["import_cost"] + d["standing_cost"] - d["export_earned"]
     return days
 

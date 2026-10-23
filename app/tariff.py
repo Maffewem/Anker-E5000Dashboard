@@ -49,6 +49,7 @@ class Tariff:
     offpeak_end: str = "05:30"
     export_rate: float = 15.0  # p/kWh paid for export; what solar charging gives up
     standing_p: float = 0.0  # p/day standing charge; counted in the cost trends, not in battery savings
+    include_standing: bool = True  # switch the standing charge off without losing the number
     use_manual: bool = False  # use these prices even when Octopus is connected
     installed: str = ""  # ISO date the battery was installed; lets its lifetime totals count
     supplier: str = ""  # one of SUPPLIERS; empty until picked (then Octopus if connected, else other)
@@ -75,7 +76,7 @@ class Tariff:
                 raise ValueError("Enter the install date as a date") from None
             if installed > date.today() or installed.year < 2015:
                 raise ValueError("The install date can't be in the future")
-        return Tariff(**{**asdict(self), "use_manual": bool(self.use_manual),
+        return Tariff(**{**asdict(self), "use_manual": bool(self.use_manual), "include_standing": bool(self.include_standing),
                          **{n: float(getattr(self, n)) for n in ("battery_cost", "peak_rate", "offpeak_rate", "export_rate", "standing_p")}})
 
     def slot_rates(self) -> list[float]:
