@@ -352,6 +352,33 @@ function previousLine(label, color, data) {
   return { ...line(`${label} · previous`, `${color}80`, data), borderDash: [5, 4], borderWidth: 1.5 };
 }
 
+// Shade the stretches that are estimates (filled in after a gap), not measured.
+const estimateBands = {
+  id: "estimateBands",
+  beforeDatasetsDraw(chart, _args, opts) {
+    const { ctx, chartArea: a, scales: { x } } = chart;
+    if (!opts?.ranges?.length) return;
+    ctx.save();
+    ctx.fillStyle = "rgba(128,128,128,0.18)";
+    for (const [from, to] of opts.ranges) {
+      const l = Math.max(a.left, x.getPixelForValue(from)), r = Math.min(a.right, x.getPixelForValue(to));
+      if (r > l) ctx.fillRect(l, a.top, r - l, a.bottom - a.top);
+    }
+    ctx.restore();
+  },
+};
+
+function estimateRanges(pts, bucketMs) {
+  const ranges = [];
+  for (const p of pts) {
+    if (!p.estimated) continue;
+    const from = p.t * 1000, last = ranges[ranges.length - 1];
+    if (last && from <= last[1]) last[1] = from + bucketMs;
+    else ranges.push([from, from + bucketMs]);
+  }
+  return ranges;
+}
+
 const PERIOD_NAMES = { 1: "hour", 3: "3 hours", 6: "6 hours", 24: "day", 168: "7 days", 720: "30 days" };
 
 async function getHistory(offsetHours) {
@@ -379,7 +406,10 @@ async function refreshHistory() {
   powerOpts.plugins.tooltip.callbacks.label = (c) => `${c.dataset.label}: ${c.parsed.y < 0 ? "−" : ""}${watts(c.parsed.y)}`;
 
   powerChart?.destroy();
-  powerChart = new Chart($("power-chart"), { type: "line", data: { datasets: powerSets }, options: powerOpts });
+  const bands = estimateRanges(pts, bucketMs);
+  $("estimate-note").hidden = !bands.length;
+  powerOpts.plugins.estimateBands = { ranges: bands };
+  powerChart = new Chart($("power-chart"), { type: "line", data: { datasets: powerSets }, options: powerOpts, plugins: [estimateBands] });
 
   const socOpts = timeAxis(baseOptions());
   socOpts.plugins.legend.display = false;
@@ -388,8 +418,9 @@ async function refreshHistory() {
   socOpts.scales.y.ticks.stepSize = 50;
   socOpts.scales.y.ticks.callback = (v) => `${v}%`;
   socOpts.plugins.tooltip.callbacks.label = (c) => `${c.datasetIndex ? "Previous" : "Battery"}: ${c.parsed.y}%`;
+  socOpts.plugins.estimateBands = { ranges: bands };
   socChart?.destroy();
-  socChart = new Chart($("soc-chart"), { type: "line", data: { datasets: [line("Battery level", css("--battery"), series(pts, "soc", bucketMs)),
+  socChart = new Chart($("soc-chart"), { plugins: [estimateBands], type: "line", data: { datasets: [line("Battery level", css("--battery"), series(pts, "soc", bucketMs)),
     ...(prev ? [previousLine("Battery level", css("--battery"), series(prev.points, "soc", bucketMs, shiftMs))] : [])] }, options: socOpts });
 }
 

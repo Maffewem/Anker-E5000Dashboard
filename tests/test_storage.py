@@ -71,3 +71,44 @@ def test_exports_cover_whole_local_days():
     assert [r["import_kwh"] for r in rows] == [0.002, 0.009]
     cols, rows = s.export_rows("slots", day, day)
     assert [(r["slot"], r["grid_charge_wh"], r["solar_charge_wh"]) for r in rows] == [(1, 1.0, 1.0), (47, 1.0, 1.0)]
+
+
+def _minute(s, ts, **snap):
+    b = MinuteBucket(ts)
+    b.add({"solar_w": 0, "home_w": 0, "grid_w": 0, "battery_w": 0, "soc": 50, **snap}, 60)
+    s.write_minute(b.row())
+
+
+def test_gap_is_filled_from_lifetime_counters_and_marked_estimated():
+    s = Storage(":memory:", 365, "UTC")
+    start = int(time.time() // 60 * 60) - 7200
+    _minute(s, start, solar_w=600, home_w=600, soc=50, solar_total_kwh=10.0, charged_total_kwh=5.0, discharged_total_kwh=4.0)
+    # an hour with nothing recorded: the counters say 0.6 kWh solar, 0.2 kWh into the battery
+    _minute(s, start + 3660, solar_w=600, home_w=600, soc=60, solar_total_kwh=10.6, charged_total_kwh=5.2, discharged_total_kwh=4.0)
+    filled = s.fill_gaps()
+    assert len(filled) == 1 and filled[0]["minutes"] == 60 and filled[0]["method"] == "lifetime counters"
+    with s._lock:
+        n, solar, charge = s._db.execute("SELECT COUNT(*), SUM(solar_wh), SUM(charge_wh) FROM minutes WHERE estimated").fetchone()
+    assert n == 60 and round(solar) == 600 and round(charge) == 200
+    assert s.fill_gaps() == []  # nothing more to do the second time
+    assert any("filled with an estimate" in e["message"] for e in s.events())
+
+
+def test_gap_without_counters_interpolates_and_estimates_do_not_count_as_measured():
+    s = Storage(":memory:", 365, "UTC")
+    start = int(time.time() // 60 * 60) - 7200
+    _minute(s, start, solar_w=0, soc=100)
+    _minute(s, start + 1200, solar_w=600, soc=100)
+    assert s.fill_gaps()[0]["method"] == "readings either side of it"
+    with s._lock:
+        solar = s._db.execute("SELECT SUM(solar_wh) FROM minutes WHERE estimated").fetchone()[0]
+    assert 80 < solar < 120  # ~300 W average for 19 minutes
+    assert s.last_full(99) == start + 1200  # estimates aren't evidence of a full battery
+
+
+def test_short_gaps_are_left_alone():
+    s = Storage(":memory:", 365, "UTC")
+    start = int(time.time() // 60 * 60) - 600
+    _minute(s, start)
+    _minute(s, start + 120)
+    assert s.fill_gaps() == []

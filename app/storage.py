@@ -16,6 +16,10 @@ POWER_FIELDS = ("solar_w", "home_w", "battery_w", "grid_w", "soc")
 # (a kettle, the battery ramping) aren't lost in the minute's average. Added
 # after `minutes` was created, so older databases get them by migration.
 PEAK_FIELDS = ("solar_w_max", "home_w_max", "grid_w_max", "grid_w_min", "battery_w_max", "battery_w_min")
+# The battery's own lifetime counters (kWh, 0.1 resolution), last reading in
+# each minute. They keep counting while the dashboard can't see the battery, so
+# the energy of a gap in the history can be recovered from their difference.
+COUNTER_FIELDS = ("solar_total_kwh", "charged_total_kwh", "discharged_total_kwh")
 # Every poll as read, kept for SAMPLE_DAYS (a week by default).
 SAMPLE_FIELDS = ("solar_w", "home_w", "battery_w", "grid_w", "ac_output_w", "soc")
 ENERGY_FIELDS = (
@@ -39,6 +43,7 @@ SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS minutes (
     ts INTEGER PRIMARY KEY,  -- unix seconds, start of the minute (UTC)
     {", ".join(f"{f} REAL" for f in POWER_FIELDS + ENERGY_FIELDS)}
+    -- estimated (1) is added by migration: a minute filled in after a gap, not measured
 );
 -- Every reading as polled (every few seconds), for looking closely at a
 -- recent spike. Pruned after SAMPLE_DAYS.
@@ -156,6 +161,13 @@ SLOT_FIELDS = ("discharge_wh", "grid_charge_wh", "solar_charge_wh", *SLOT_EXTRA)
 # swamped by the level being reported in whole percent.
 CAPACITY_MIN_DROP = 20
 
+# A gap is three or more missing minutes in a row. Gaps longer than MAX_GAP
+# are left empty: estimating days would be fiction. Gaps are looked for within
+# GAP_LOOKBACK of now.
+GAP_SECONDS = 180
+MAX_GAP = 3 * 86400
+GAP_LOOKBACK = 14 * 86400
+
 
 @dataclass
 class MinuteBucket:
@@ -170,8 +182,12 @@ class MinuteBucket:
     counts: dict[str, int] = field(default_factory=dict)
     energy: dict[str, float] = field(default_factory=lambda: dict.fromkeys(ENERGY_FIELDS, 0.0))
     peaks: dict[str, float] = field(default_factory=dict)
+    counters: dict[str, float] = field(default_factory=dict)
 
     def add(self, snapshot: dict, seconds: float) -> None:
+        for key in COUNTER_FIELDS:
+            if snapshot.get(key) is not None:
+                self.counters[key] = snapshot[key]
         for key in POWER_FIELDS:
             v = snapshot.get(key)
             if v is not None:
@@ -207,6 +223,7 @@ class MinuteBucket:
             row[key] = self.sums[key] / n if n else None
         row.update(self.energy)
         row.update({k: self.peaks.get(k) for k in PEAK_FIELDS})
+        row.update({k: self.counters.get(k) for k in COUNTER_FIELDS})
         return row
 
 
@@ -240,11 +257,11 @@ class MeterBucket:
 
 # What each export contains: (table, time column, columns), oldest first.
 EXPORTS = {
-    "minutes": ("minutes", "ts", ("ts", *POWER_FIELDS, *ENERGY_FIELDS, *PEAK_FIELDS)),
+    "minutes": ("minutes", "ts", ("ts", *POWER_FIELDS, *ENERGY_FIELDS, *PEAK_FIELDS, "estimated")),
     "samples": ("samples", "ts", ("ts", *SAMPLE_FIELDS)),
     "meter": ("meter_minutes", "ts", ("ts", *METER_FIELDS)),
     "events": ("events", "ts", ("ts", "device", "kind", "field", "old", "new", "message", "source")),
-    "slots": ("slots", "day", ("day", "slot", *SLOT_FIELDS)),
+    "slots": ("slots", "day", ("day", "slot", *SLOT_FIELDS, "estimated_minutes")),
     "days": ("day_summaries", "day", ("day", "minutes", *DAY_FIELDS)),
     "weather": ("weather", "ts", ("ts", "temp_c", "cloud_pct", "radiation_wm2")),
 }
@@ -296,14 +313,16 @@ class Storage:
             self.tz = ZoneInfo("UTC")
         self._migrate_slots()
         self._backfill_slots()
-        self._add_columns("minutes", PEAK_FIELDS)
+        self._add_columns("minutes", PEAK_FIELDS + COUNTER_FIELDS)
+        self._add_columns("minutes", ("estimated",), "INTEGER NOT NULL DEFAULT 0")
+        self._add_columns("slots", ("estimated_minutes",), "INTEGER NOT NULL DEFAULT 0")
 
-    def _add_columns(self, table: str, names: tuple[str, ...]) -> None:
+    def _add_columns(self, table: str, names: tuple[str, ...], kind: str = "REAL") -> None:
         with self._lock:
             have = {r["name"] for r in self._db.execute(f"PRAGMA table_info({table})")}
             for name in names:
                 if name not in have:
-                    self._db.execute(f"ALTER TABLE {table} ADD COLUMN {name} REAL")
+                    self._db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
             self._db.commit()
 
     def write_sample(self, ts: float, snapshot: dict) -> None:
@@ -318,7 +337,7 @@ class Storage:
             self._db.commit()
 
     def write_minute(self, row: dict) -> None:
-        cols = ["ts", *POWER_FIELDS, *ENERGY_FIELDS, *PEAK_FIELDS]
+        cols = ["ts", *POWER_FIELDS, *ENERGY_FIELDS, *PEAK_FIELDS, *COUNTER_FIELDS]
         with self._lock:
             self._db.execute(
                 f"INSERT OR REPLACE INTO minutes ({','.join(cols)}) "
@@ -397,7 +416,7 @@ class Storage:
             )
             self._db.commit()
 
-    def _add_slot(self, row: dict, fields: tuple[str, ...] = SLOT_FIELDS) -> None:
+    def _add_slot(self, row: dict, fields: tuple[str, ...] = SLOT_FIELDS, estimated: bool = False) -> None:
         charge = row.get("charge_wh") or 0.0
         # Charging while importing is counted as grid charging; the rest came from solar.
         grid_charge = min(charge, row.get("import_wh") or 0.0)
@@ -416,6 +435,8 @@ class Storage:
         values = {f: values[f] for f in fields}
         if not any(values.values()):
             return
+        if estimated:
+            values["estimated_minutes"] = 1
         local = datetime.fromtimestamp(row["ts"], self.tz)
         cols = ", ".join(values)
         self._db.execute(
@@ -488,7 +509,7 @@ class Storage:
         start, end = self._day_start(day), self._day_start(day + timedelta(days=1))
         with self._lock:
             rows = self._db.execute(
-                "SELECT ts, soc, charge_wh, discharge_wh FROM minutes WHERE ts >= ? AND ts < ? ORDER BY ts",
+                "SELECT ts, soc, charge_wh, discharge_wh FROM minutes WHERE ts >= ? AND ts < ? AND NOT estimated ORDER BY ts",
                 (start, end),
             ).fetchall()
         if not rows:
@@ -533,7 +554,7 @@ class Storage:
         with self._lock:
             r = self._db.execute(
                 "SELECT COUNT(soc) AS n, SUM(soc >= 98) AS full, SUM(soc <= 7) AS empty, AVG(soc) AS avg, "
-                "MIN(ts) AS first FROM minutes WHERE ts >= ? AND soc IS NOT NULL", (since,)
+                "MIN(ts) AS first FROM minutes WHERE ts >= ? AND soc IS NOT NULL AND NOT estimated", (since,)
             ).fetchone()
         n = r["n"] or 0
         return {
@@ -547,7 +568,7 @@ class Storage:
     def last_full(self, soc: float = 99) -> float | None:
         """Unix time the battery was last at or above `soc`%, from the minutes or the older daily summaries."""
         with self._lock:
-            r = self._db.execute("SELECT MAX(ts) FROM minutes WHERE soc >= ?", (soc,)).fetchone()[0]
+            r = self._db.execute("SELECT MAX(ts) FROM minutes WHERE soc >= ? AND NOT estimated", (soc,)).fetchone()[0]
             if r is not None:
                 return float(r)
             day = self._db.execute("SELECT MAX(day) FROM day_summaries WHERE soc_max >= ?", (soc,)).fetchone()[0]
@@ -595,6 +616,111 @@ class Storage:
         with self._lock:
             self._db.execute("DELETE FROM rates")
             self._db.commit()
+
+    def fill_gaps(self, now: float | None = None) -> list[dict]:
+        """Estimate the minutes missing between recorded ones, e.g. after a network outage.
+
+        Looks back GAP_LOOKBACK for runs of three or more missing minutes and
+        fills each with rows marked `estimated`. Real rows are never touched,
+        so this is safe to call as often as wanted. Returns one dict per gap
+        filled: start, end (unix seconds) and the method used.
+        """
+        now = now if now is not None else time.time()
+        with self._lock:
+            stamps = [r[0] for r in self._db.execute(
+                "SELECT ts FROM minutes WHERE ts >= ? AND NOT estimated ORDER BY ts", (int(now - GAP_LOOKBACK),))]
+        filled = []
+        for a, b in zip(stamps, stamps[1:]):
+            if GAP_SECONDS < b - a <= MAX_GAP:
+                result = self._fill_gap(a, b)
+                if result:
+                    filled.append(result)
+        return filled
+
+    def _fill_gap(self, a: int, b: int) -> dict | None:
+        with self._lock:
+            if self._db.execute("SELECT 1 FROM minutes WHERE ts > ? AND ts < ?", (a, b)).fetchone():
+                return None  # already filled
+            ra = dict(self._db.execute("SELECT * FROM minutes WHERE ts = ?", (a,)).fetchone())
+            rb = dict(self._db.execute("SELECT * FROM minutes WHERE ts = ?", (b,)).fetchone())
+            meter_a = self._db.execute(
+                "SELECT ts, import_total_kwh, export_total_kwh FROM meter_minutes WHERE ts <= ? AND ts >= ? "
+                "AND import_total_kwh IS NOT NULL ORDER BY ts DESC LIMIT 1", (a, a - 120)).fetchone()
+            meter_b = self._db.execute(
+                "SELECT ts, import_total_kwh, export_total_kwh FROM meter_minutes WHERE ts >= ? AND ts <= ? "
+                "AND import_total_kwh IS NOT NULL ORDER BY ts LIMIT 1", (b, b + 120)).fetchone()
+        stamps = list(range(a + 60, b, 60))
+        hours = (b - a) / 3600
+        # Nothing here exceeds what the inverter can do; a bigger counter jump is a reset or a glitch.
+        plausible = lambda kwh: kwh is not None and 0 <= kwh <= 20 * hours  # noqa: E731
+
+        def lerp(field: str) -> list[float | None]:
+            lo, hi = ra.get(field), rb.get(field)
+            if lo is None and hi is None:
+                return [None] * len(stamps)
+            lo, hi = (hi if lo is None else lo), (lo if hi is None else hi)
+            return [lo + (hi - lo) * (t - a) / (b - a) for t in stamps]
+
+        solar_w, home_w, grid_w, batt_w, soc = (lerp(f) for f in ("solar_w", "home_w", "grid_w", "battery_w", "soc"))
+        positive = lambda w, sign=1: [max(0.0, sign * (x or 0.0)) / 60 for x in w]  # noqa: E731
+        wh = {
+            "solar_wh": positive(solar_w), "home_wh": positive(home_w),
+            "import_wh": positive(grid_w), "export_wh": positive(grid_w, -1),
+            "discharge_wh": positive(batt_w), "charge_wh": positive(batt_w, -1),
+        }
+
+        def delta(lo, hi) -> float | None:
+            kwh = None if lo is None or hi is None else hi - lo
+            return kwh * 1000 if plausible(kwh) else None
+
+        counted = {
+            "solar_wh": delta(ra.get("solar_total_kwh"), rb.get("solar_total_kwh")),
+            "charge_wh": delta(ra.get("charged_total_kwh"), rb.get("charged_total_kwh")),
+            "discharge_wh": delta(ra.get("discharged_total_kwh"), rb.get("discharged_total_kwh")),
+        }
+        if meter_a and meter_b:
+            counted["import_wh"] = delta(meter_a["import_total_kwh"], meter_b["import_total_kwh"])
+            counted["export_wh"] = delta(meter_a["export_total_kwh"], meter_b["export_total_kwh"])
+        used = [f for f, total in counted.items() if total is not None]
+        for f in used:
+            shape = wh[f]
+            weight = sum(shape)
+            wh[f] = [counted[f] * (x / weight if weight > 0 else 1 / len(stamps)) for x in shape]
+        if used:
+            # The house used whatever came in and didn't go out or into the battery.
+            wh["home_wh"] = [
+                max(0.0, wh["solar_wh"][i] + wh["discharge_wh"][i] + wh["import_wh"][i]
+                    - wh["charge_wh"][i] - wh["export_wh"][i])
+                for i in range(len(stamps))
+            ]
+
+        with self._lock:
+            for i, ts in enumerate(stamps):
+                row = {"ts": ts, **{f: wh[f][i] for f in ENERGY_FIELDS}}
+                row.update({
+                    "solar_w": row["solar_wh"] * 60, "home_w": row["home_wh"] * 60,
+                    "grid_w": (row["import_wh"] - row["export_wh"]) * 60,
+                    "battery_w": (row["discharge_wh"] - row["charge_wh"]) * 60,
+                    "soc": soc[i],
+                })
+                cols = ["ts", *POWER_FIELDS, *ENERGY_FIELDS]
+                cur = self._db.execute(
+                    f"INSERT OR IGNORE INTO minutes ({','.join(cols)}, estimated) VALUES ({','.join('?' * len(cols))}, 1)",
+                    [row.get(c) for c in cols])
+                if cur.rowcount:
+                    self._add_slot(row, estimated=True)
+            self._db.commit()
+        method = "lifetime counters" if used else "readings either side of it"
+        start, end = datetime.fromtimestamp(a + 60, self.tz), datetime.fromtimestamp(b, self.tz)
+        mins = len(stamps)
+        length = f"{mins // 60}h {mins % 60:02d}m" if mins >= 60 else f"{mins}m"
+        clock = "%H:%M" if start.date() == end.date() else "%d %b %H:%M"
+        self.record_event(
+            "connection",
+            f"No readings recorded {start.strftime(clock)} to {end.strftime('%H:%M')} ({length}); filled with an estimate from {method}",
+            source="dashboard", ts=a + 60,
+        )
+        return {"start": a + 60, "end": b, "minutes": mins, "method": method, "counters": sorted(used)}
 
     def prune(self) -> None:
         # Summarise finished days first, so nothing goes before it is kept.
@@ -728,7 +854,7 @@ class Storage:
         end = int(time.time()) - offset_hours * 3600
         start = end - hours * 3600
         bucket = max(60, (hours * 3600 // max_points) // 60 * 60)
-        avgs = ", ".join(f"AVG({f}) AS {f}" for f in POWER_FIELDS)
+        avgs = ", ".join(f"AVG({f}) AS {f}" for f in POWER_FIELDS) + ", MAX(estimated) AS estimated"
         with self._lock:
             rows = self._db.execute(
                 f"SELECT (ts / ?) * ? AS t, {avgs} FROM minutes "
@@ -750,22 +876,24 @@ class Storage:
         days = (last - first).days + 1
         with self._lock:
             rows = self._db.execute(
-                f"SELECT ts, {', '.join(ENERGY_FIELDS)} FROM minutes WHERE ts >= ? AND ts < ?",
+                f"SELECT ts, estimated, {', '.join(ENERGY_FIELDS)} FROM minutes WHERE ts >= ? AND ts < ?",
                 (self._day_start(first), self._day_start(last + timedelta(days=1))),
             ).fetchall()
 
         totals: dict[str, dict[str, float]] = {}
         for i in range(days):
             day = (first + timedelta(days=i)).isoformat()
-            totals[day] = dict.fromkeys(ENERGY_FIELDS, 0.0)
+            totals[day] = {**dict.fromkeys(ENERGY_FIELDS, 0.0), "estimated": 0}
         for r in rows:
             day = datetime.fromtimestamp(r["ts"], self.tz).date().isoformat()
             if day in totals:
+                totals[day]["estimated"] += r["estimated"] or 0
                 for f in ENERGY_FIELDS:
                     totals[day][f] += r[f] or 0.0
 
         return [
-            {"date": day, **{f.replace("_wh", "_kwh"): round(v[f] / 1000, 3) for f in ENERGY_FIELDS}}
+            {"date": day, **{f.replace("_wh", "_kwh"): round(v[f] / 1000, 3) for f in ENERGY_FIELDS},
+             "estimated_minutes": int(v["estimated"])}
             for day, v in totals.items()
         ]
 
