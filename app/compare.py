@@ -60,6 +60,8 @@ PRESETS = [
      "peak_rate": 27.0, "offpeak_rate": 6.7, "standing_p": 47.0, "export_rate": 15.0},
     {"name": "EDF GoElectric Overnight", "offpeak_start": "00:00", "offpeak_end": "05:00",
      "peak_rate": 28.0, "offpeak_rate": 8.5, "standing_p": 55.0, "export_rate": 12.0},
+    {"name": "EDF GoElectric 18m", "offpeak_start": "23:00", "offpeak_end": "06:00",
+     "peak_rate": 31.14, "offpeak_rate": 6.66, "standing_p": 61.23, "export_rate": 12.0},
     {"name": "British Gas Electric Driver", "offpeak_start": "00:00", "offpeak_end": "05:00",
      "peak_rate": 28.0, "offpeak_rate": 8.5, "standing_p": 55.0, "export_rate": 15.0},
 ]
