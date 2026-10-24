@@ -331,3 +331,9 @@ def test_supplier_picks_whether_octopus_prices_are_used(tmp_path, monkeypatch):
         pb = c.post("/api/supplier", json={"supplier": "edf"}).json()
         assert pb["source"] == "manual" and not pb["octopus_connected"] and pb["tariff"]["peak_rate"] == 27
         assert c.get("/api/octopus").json()["supplier"] == "edf"
+
+
+def test_profile_carries_the_octopus_standing_charge(storage):
+    o = make(storage, FakeOctopus())
+    o.sync(NOW)
+    assert o.profile()["standing_p"] == 48.0

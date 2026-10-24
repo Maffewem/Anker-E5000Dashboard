@@ -111,6 +111,7 @@ function renderInsights() {
     ["Solar used or stored (not exported)", pct(i.solar_used)],
     ["Battery saved", money(i.battery_saved)],
     ["Net grid cost", money(i.net_cost)],
+    ...(i.standing_cost ? [["…of which standing charge", money(i.standing_cost)]] : []),
     ["Over", `the last ${i.days} recorded day${i.days === 1 ? "" : "s"}`],
   ] : []);
 }

@@ -86,6 +86,10 @@
       </div>
       <label for="cost-export">Export price</label>
       <input id="cost-export" type="number" min="0" step="0.01" inputmode="decimal">
+      <label for="cost-standing">Standing charge (p per day)</label>
+      <input id="cost-standing" type="number" min="0" step="0.01" inputmode="decimal">
+      <label class="check"><input type="checkbox" id="cost-include-standing"> Include the standing charge in cost trends</label>
+      <p class="hint" id="cost-standing-hint">Optional. Counted in the cost trends and projections; it doesn't change the battery's savings.</p>
       <p class="setup-msg" id="costs-msg" role="status" aria-live="polite"></p>
       <div class="dialog-actions">
         <button type="button" class="secondary" id="costs-cancel">Cancel</button>
@@ -334,7 +338,7 @@
       </details>
       <details>
         <summary>How this is worked out</summary>
-        <p class="note">Totals come from the half-hour history, which is kept for good, so these trends cover everything recorded. Each half hour is priced like the battery payback: your Octopus prices where they were fetched, otherwise the prices in Edit costs. Grid cost is unit prices only; the standing charge isn't included. Projections assume the rest of the period goes like the average of the last 14 recorded days, so they follow the season but swing with the weather; the paler part of each bar is the projected rest of the current week or month.</p>
+        <p class="note">Totals come from the half-hour history, which is kept for good, so these trends cover everything recorded. Each half hour is priced like the battery payback: your Octopus prices where they were fetched, otherwise the prices in Edit costs. Grid cost includes your standing charge (Edit costs) unless you switch it off. Projections assume the rest of the period goes like the average of the last 14 recorded days, so they follow the season but swing with the weather; the paler part of each bar is the projected rest of the current week or month.</p>
         <p class="note">Weather comes from Open-Meteo (free, no account) for the latitude and longitude you give, rounded to about a kilometre; nothing else is sent. It is kept for good, so solar output can be set against the sunshine it had (solar yield, kWh per kWh/m² of sunshine) and capacity against temperature. Peaks are the highest single reading in a minute. The Solarbank 4's Modbus map has no battery temperature or per-cell voltages, so outdoor temperature and the Smart Meter's grid voltage stand in for them.</p>
         <p class="note">The battery doesn't report its state of health over Modbus, so capacity is measured: on each long discharge (at least 20 points of battery level with no charging in between), the energy discharged is divided by the share of the battery level it used. Battery levels come in whole percent, so a single week's figure can move a few percent either way, and it reads a little under the rated capacity because of the battery's own losses. A slow fall over months is the thing to watch.</p>
       </details>
@@ -449,6 +453,11 @@
           <button type="button" class="secondary" data-override="discharge">Discharge</button>
           <button type="button" class="secondary" data-override="off" id="override-cancel" hidden>Cancel</button>
         </div>
+      </div>
+      <div class="control-section">
+        <h3>Emergency stop</h3>
+        <p class="hint">Switches dashboard control off, cancels any override and gives the battery back to the Anker app straight away. If the dashboard loses contact with the battery for 3 minutes while driving it, it tries to do this by itself.</p>
+        <div class="compare-actions edit"><button type="button" class="secondary" id="control-stop">Stop control now</button></div>
       </div>
       <div class="control-section mode-row">
         <h3>Anker app mode</h3>

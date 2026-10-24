@@ -33,7 +33,7 @@ DAY_FIELDS = (
     "solar_peak_w", "home_peak_w", "import_peak_w", "export_peak_w", "charge_peak_w", "discharge_peak_w",
     "voltage_min", "voltage_avg", "voltage_max",
 )
-TARIFF_PRICES = ("peak_rate", "offpeak_rate", "offpeak_start", "offpeak_end", "export_rate")
+TARIFF_PRICES = ("peak_rate", "offpeak_rate", "offpeak_start", "offpeak_end", "export_rate", "standing_p")
 
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS minutes (
