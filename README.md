@@ -110,6 +110,12 @@ Besides the minute averages, each minute now keeps the highest and lowest readin
 
 The Solarbank 4's Modbus map (Anker's official integration) has no battery temperature or per-cell voltages, so those can't be recorded; outdoor temperature and grid voltage stand in. Trends now opens on days, with headline figures (self-sufficiency, solar used, savings).
 
+### Gaps in the history
+
+If the dashboard misses readings for three minutes or more (Wi-Fi down, container restarted), it fills the gap once it can read the devices again. The Solarbank and Smart Meter keep their own lifetime energy counters running, so the energy over the gap is the difference between the counters either side of it, spread across the missing minutes. Counters are stored per minute from now on, so only gaps after this update get exact totals from the battery's counters; an earlier gap, or a device without counters, is interpolated between the readings either side. The Smart Meter's counters are used for grid import and export when it is connected. Counters have 0.1 kWh resolution, so short gaps are rough. Gaps over 3 days are left empty.
+
+Filled minutes are stored with `estimated = 1` (and half hours count them in `estimated_minutes`), appear in the CSV exports with that marking, are shaded on the power and battery level charts, and are noted in the event log. Their energy counts in daily totals, costs, trends and payback, but not in the battery capacity measurement or the "last full" time.
+
 ## Security
 
 Out of the box the dashboard trusts everyone who can reach it, which is fine on your home network. Anyone who can open it can also change the battery's mode and schedules, so before you make it reachable from anywhere else:

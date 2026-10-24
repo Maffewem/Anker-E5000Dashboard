@@ -51,6 +51,8 @@ class Collector:
         self._bucket: MinuteBucket | MeterBucket | None = None
         self._last_sample: float | None = None
         self._last_prune = 0.0
+        # Look for a gap in the history at start-up and after every reconnect.
+        self._check_gaps = True
         self._unavailable_blocks: set[tuple[str, int]] = set()
         # Held while talking to the device, so the setup test never opens a
         # second socket alongside the poller: some Anker devices accept only one.
@@ -187,6 +189,7 @@ class Collector:
             log.info("%s connected at %s:%s (model %s, serial %s)", DEVICE_NAMES[self.profile.name], conn.host,
                      conn.port, self.snapshot.get("model"), self.snapshot.get("serial"))
             self._event("connection", f"Connected at {conn.host}:{conn.port}", ts=now)
+            self._check_gaps = True
         if self.watcher is not None:
             self.watcher.observe(self.snapshot, now)
         self.connected = True
@@ -231,6 +234,13 @@ class Collector:
             self.storage.write_meter_minute(bucket.row())
         else:
             self.storage.write_minute(bucket.row())
+            if self._check_gaps:
+                self._check_gaps = False
+                try:
+                    for gap in self.storage.fill_gaps():
+                        log.info("Filled %s missing minutes from %s from %s", gap["minutes"], gap["start"], gap["method"])
+                except Exception:
+                    log.exception("Filling gaps in the history failed")
 
     def flush(self) -> None:
         if self._bucket and self.storage is not None:
