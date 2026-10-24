@@ -34,7 +34,8 @@ MAX_DAYS = 50 * 365
 SUPPLIERS = {
     "octopus": {"name": "Octopus Energy", "presets": []},
     "eon": {"name": "E.ON Next", "presets": [{"name": "Next Drive", "offpeak_start": "00:00", "offpeak_end": "07:00"}]},
-    "edf": {"name": "EDF", "presets": [{"name": "GoElectric Overnight", "offpeak_start": "00:00", "offpeak_end": "05:00"}]},
+    "edf": {"name": "EDF", "presets": [{"name": "GoElectric Overnight", "offpeak_start": "00:00", "offpeak_end": "05:00"},
+                                      {"name": "GoElectric 18m", "offpeak_start": "23:00", "offpeak_end": "06:00"}]},
     "british_gas": {"name": "British Gas", "presets": [{"name": "Electric Driver", "offpeak_start": "00:00", "offpeak_end": "05:00"}]},
     "other": {"name": "Other", "presets": []},
 }

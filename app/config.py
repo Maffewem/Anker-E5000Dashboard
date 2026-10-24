@@ -6,6 +6,9 @@ import json
 import logging
 import os
 import re
+import shutil
+import tempfile
+import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -39,6 +42,21 @@ class Connection:
         return Connection(host, int(self.port), int(self.unit_id))
 
 
+def write_private(path: Path, text: str) -> None:
+    """Replace `path` with `text` in one step, readable by this user only (even while it is being written)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")  # created 0600
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
 ENV_PREFIX = {"battery": "SOLARBANK", "meter": "METER"}
 
 
@@ -56,6 +74,10 @@ class ConnectionStore:
 
     def __init__(self, path: str) -> None:
         self.path = Path(path)
+        # Saves read the whole file, change one part and write it back, from the web server's
+        # worker threads and the control loop at once; without this, one save loses another's
+        # change or corrupts the file.
+        self._lock = threading.RLock()
 
     def from_env(self, device: str = "battery") -> bool:
         return bool(os.environ.get(f"{ENV_PREFIX[device]}_HOST", "").strip())
@@ -68,6 +90,10 @@ class ConnectionStore:
             return {}
         except (ValueError, OSError) as err:
             log.warning("Ignoring unreadable settings file %s: %s", self.path, err)
+            try:  # the next save would overwrite it; keep a copy to recover from
+                shutil.copyfile(self.path, self.path.with_name(self.path.name + ".corrupt"))
+            except OSError:
+                pass
             return {}
 
     def load(self, device: str = "battery") -> Connection:
@@ -90,26 +116,29 @@ class ConnectionStore:
         return self._read().get("tariff") or {}
 
     def save_tariff(self, tariff: dict) -> None:
-        data = self._read()
-        data["tariff"] = tariff
-        self._write(data)
+        with self._lock:
+            data = self._read()
+            data["tariff"] = tariff
+            self._write(data)
 
     def load_section(self, name: str) -> dict:
         value = self._read().get(name)
         return value if isinstance(value, dict) else {}
 
     def save_section(self, name: str, value: dict) -> None:
-        data = self._read()
-        data[name] = value
-        self._write(data)
+        with self._lock:
+            data = self._read()
+            data[name] = value
+            self._write(data)
 
     def load_lifetime(self) -> dict | None:
         return self._read().get("lifetime") or None
 
     def save_lifetime(self, totals: dict) -> None:
-        data = self._read()
-        data["lifetime"] = totals
-        self._write(data)
+        with self._lock:
+            data = self._read()
+            data["lifetime"] = totals
+            self._write(data)
 
     def octopus_from_env(self) -> bool:
         return bool(os.environ.get("OCTOPUS_API_KEY", "").strip())
@@ -122,31 +151,29 @@ class ConnectionStore:
         return str(data.get("api_key", "")), str(data.get("account", ""))
 
     def save_octopus(self, api_key: str, account: str) -> None:
-        data = self._read()
-        if api_key:
-            data["octopus"] = {"api_key": api_key, "account": account}
-        else:
-            data.pop("octopus", None)
-        self._write(data)
+        with self._lock:
+            data = self._read()
+            if api_key:
+                data["octopus"] = {"api_key": api_key, "account": account}
+            else:
+                data.pop("octopus", None)
+            self._write(data)
 
     def save(self, conn: Connection, device: str = "battery") -> None:
-        data = self._read()
-        fields = asdict(conn)
-        if device == "meter":
-            if conn.host:
-                data["meter"] = fields
+        with self._lock:
+            data = self._read()
+            fields = asdict(conn)
+            if device == "meter":
+                if conn.host:
+                    data["meter"] = fields
+                else:
+                    data.pop("meter", None)
             else:
-                data.pop("meter", None)
-        else:
-            data.update(fields)
-        self._write(data)
+                data.update(fields)
+            self._write(data)
 
     def _write(self, data: dict) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, indent=2))
-        tmp.chmod(0o600)  # it can hold the Octopus API key
-        tmp.replace(self.path)
+        write_private(self.path, json.dumps(data, indent=2))  # it can hold the Octopus API key
 
 
 @dataclass(frozen=True)

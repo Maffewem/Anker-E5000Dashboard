@@ -31,7 +31,6 @@ log = logging.getLogger("solarbank.control")
 
 TICK_SECONDS = 15
 STALE_SECONDS = 180  # no good battery reading for this long while in control: hand back to the Anker app
-SETPOINT_CAP_W = 6000  # no write ever goes beyond this, whatever the settings or the battery's own limits say
 REASSERT_SECONDS = 60  # rewrite the setpoint now and then in case the battery forgot it
 APP = "app"
 HOLD = "hold"
@@ -46,6 +45,7 @@ HEADROOM_HOURS = 36  # a Happy Hour starting this soon makes the charge before i
 MIN_BEFORE_HAPPY = 30  # but never cut a charge below this level (or the battery reserve)
 CHARGE_EFFICIENCY = 0.95  # grid energy in to energy stored
 OVERRIDE_MAX_MINUTES = 12 * 60
+MAX_SETPOINT_W = 5000  # no setpoint beyond this either way, whatever the battery reports as its maximum
 PACE_MIN_W = 300  # paced charging doesn't go below this; very low power is inefficient
 PACE_SETTLE_SECONDS = 10 * 60  # after changing the paced power, leave it alone this long unless it's well off pace
 PACE_STEP_W = 100  # paced power moves in steps of this, so the setpoint (and event log) stays calm
@@ -622,8 +622,21 @@ class Controller:
         return last is None or now.timestamp() - last >= self.settings.balance_days * 86400
 
     async def _write(self, key: str, value: int) -> None:
+        # Last line of defence before the battery: whatever a bug or a bad setting asks for,
+        # nothing outside what the hardware and this dashboard allow reaches a register.
         if key == "battery_power_setpoint":
-            value = self._clamp_setpoint(value)
+            if not -MAX_SETPOINT_W <= value <= MAX_SETPOINT_W:
+                raise ValueError(f"Refusing a {value} W setpoint (limit {MAX_SETPOINT_W} W)")
+        elif key == "operating_mode":
+            if value not in OPERATING_MODES:
+                raise ValueError(f"Refusing unknown operating mode {value}")
+        elif key in LIMIT_RANGES:
+            if not 0 <= value <= 100:  # not LIMIT_RANGES: putting back a limit the battery already had must work
+                raise ValueError(f"Refusing {key} = {value}")
+        else:
+            raise ValueError(f"Refusing to write {key}")
+        if key == "battery_power_setpoint":
+            value = self._clamp_setpoint(value)  # then within the battery's own power limits
         if not self.live:
             self._note(f"Dry run: would write {key} = {value}")
             return
@@ -632,8 +645,8 @@ class Controller:
     def _clamp_setpoint(self, value: int) -> int:
         """Last line of defence: never ask for more than the battery's own power limits (or a fixed cap)."""
         snap = getattr(self.collector, "snapshot", None) or {}
-        charge = min(int(snap.get("max_charge_w") or SETPOINT_CAP_W), SETPOINT_CAP_W)
-        discharge = min(int(snap.get("max_discharge_w") or SETPOINT_CAP_W), SETPOINT_CAP_W)
+        charge = min(int(snap.get("max_charge_w") or MAX_SETPOINT_W), MAX_SETPOINT_W)
+        discharge = min(int(snap.get("max_discharge_w") or MAX_SETPOINT_W), MAX_SETPOINT_W)
         clamped = max(-charge, min(discharge, int(value)))
         if clamped != value:
             self._note(f"Setpoint {value} W is beyond the battery's limits; using {clamped} W")

@@ -45,6 +45,10 @@ services:
       # to turn changes off. Do one of these before publishing the dashboard.
       ADMIN_PASSWORD: "${ADMIN_PASSWORD:-}"
       READ_ONLY: "${READ_ONLY:-false}"
+      # Behind Cloudflare Tunnel / a reverse proxy: count wrong passwords per visitor, and
+      # list the public address if the proxy rewrites the Host header.
+      TRUST_PROXY: "${TRUST_PROXY:-false}"
+      ALLOWED_ORIGINS: "${ALLOWED_ORIGINS:-}"
       # Portainer stack webhook for "Update now" (or paste it on the dashboard),
       # and UPDATE_CHECK=false to stop checking GHCR for newer images.
       UPDATE_WEBHOOK: "${UPDATE_WEBHOOK:-}"

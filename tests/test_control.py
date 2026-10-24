@@ -810,8 +810,8 @@ def test_setpoint_is_clamped_to_the_battery_limits(monkeypatch):
     c, store = FakeCollector(), {}
     c.snapshot = {"soc": 50, "max_charge_w": 2000, "max_discharge_w": 1000}
     ctl = make(c, {"enabled": True}, store)
-    asyncio.run(ctl._write("battery_power_setpoint", -9000))
-    asyncio.run(ctl._write("battery_power_setpoint", 9000))
+    asyncio.run(ctl._write("battery_power_setpoint", -4000))
+    asyncio.run(ctl._write("battery_power_setpoint", 4000))
     assert [w[1] for w in c.writes] == [-2000, 1000]
 
 
