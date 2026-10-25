@@ -8,8 +8,12 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-HISTORY_DAYS = 14
-SAME_WEEKDAY_WEIGHT = 2.0  # weekday and weekend routines differ, so count the same weekday double
+HISTORY_DAYS = 28  # four weeks, so there are a few of any given weekday to go on
+# Weekday and weekend routines differ (a Sunday morning isn't a Tuesday one), so the days
+# being predicted for count most: the same weekday, then the same kind of day, then the rest.
+SAME_WEEKDAY_WEIGHT = 4.0
+SAME_KIND_WEIGHT = 1.0  # weekday for weekday, weekend for weekend
+OTHER_KIND_WEIGHT = 0.2
 MIN_DAYS = 3  # fewer days of history than this and no forecast is made
 
 
@@ -30,11 +34,17 @@ def slot_profile(slots: list[dict], today, days: int = HISTORY_DAYS) -> dict[str
     return out
 
 
+def _weight(past: int, target: int) -> float:
+    if past == target:
+        return SAME_WEEKDAY_WEIGHT
+    return SAME_KIND_WEIGHT if (past >= 5) == (target >= 5) else OTHER_KIND_WEIGHT
+
+
 def predict_kwh(profile: dict[str, dict[int, float]], start: datetime, end: datetime) -> tuple[float, int] | None:
     """Expected battery draw (kWh) from `start` to `end` (local times), and how many days it is based on.
 
     Each half hour is the weighted mean of that half hour on recent days, the
-    same weekday counting extra. A half hour only partly inside the range counts
+    same weekday counting most and the same kind of day (weekday or weekend) next. A half hour only partly inside the range counts
     pro rata. None if there isn't enough history."""
     if end <= start or len(profile) < MIN_DAYS:
         return None
@@ -47,10 +57,17 @@ def predict_kwh(profile: dict[str, dict[int, float]], start: datetime, end: date
         num = den = 0.0
         for day, slots in profile.items():
             if slot in slots:
-                w = SAME_WEEKDAY_WEIGHT if datetime.fromisoformat(day).weekday() == cur.weekday() else 1.0
+                w = _weight(datetime.fromisoformat(day).weekday(), cur.weekday())
                 num += slots[slot] * w
                 den += w
         if den:
             total += num / den * part
         cur = slot_end
     return total, len(profile)
+
+
+def basis(profile: dict[str, dict[int, float]], when: datetime) -> dict:
+    """How many recorded days are the same weekday, or the same kind of day, as `when` (and how many in all)."""
+    days = [datetime.fromisoformat(d).weekday() for d in profile]
+    return {"days": len(days), "same_weekday": sum(d == when.weekday() for d in days),
+            "same_kind": sum((d >= 5) == (when.weekday() >= 5) for d in days)}

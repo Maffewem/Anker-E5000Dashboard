@@ -704,7 +704,7 @@ class Controller:
         return use
 
     def _update_forecast(self, snap: dict, windows: list[Window], now: datetime, use_kwh, room: dict | None,
-                         target: int | None) -> None:
+                         target: int | None, tz=timezone.utc) -> None:
         """What the battery level is likely to be when the next Happy Hour starts, for the card."""
         self.forecast = None
         soc, rated = snap.get("soc"), snap.get("rated_kwh")
@@ -725,7 +725,8 @@ class Controller:
         slot_pct = power / 1000 * (nxt.end - nxt.start).total_seconds() / 3600 * CHARGE_EFFICIENCY / rated * 100
         self.forecast = {"slot": nxt.why, "start": nxt.start.isoformat(), "soc_now": round(soc), "use_kwh": round(used, 1),
                          "soc_at_start": round(at_start), "slot_pct": round(slot_pct),
-                         "soc_after": round(min(100, at_start + slot_pct)), "from": since.isoformat()}
+                         "soc_after": round(min(100, at_start + slot_pct)), "from": since.isoformat(),
+                         "basis": usage_forecast.basis(self._profile[1], nxt.start.astimezone(tz)) if self._profile else None}
     def _clamp_setpoint(self, value: int) -> int:
         """Last line of defence: never ask for more than the battery's own power limits (or a fixed cap)."""
         snap = getattr(self.collector, "snapshot", None) or {}
@@ -837,7 +838,7 @@ class Controller:
                             "happy_headroom", None, target, window.source, always=True)
         else:
             self.room = self._room_raw = None
-        self._update_forecast(snap, windows, now, use_kwh, room, self.room["target"] if self.room else None)
+        self._update_forecast(snap, windows, now, use_kwh, room, self.room["target"] if self.room else None, tz)
         if balancing:
             reason = f"Auto balance: {reason}"
         mode = self.collector.raw.get("operating_mode")

@@ -874,3 +874,26 @@ def test_emergency_stop(monkeypatch):
     assert c.writes[-1] == ("operating_mode", 6)
     assert not ctl.in_control and not ctl.settings.enabled
 
+
+
+def test_usage_forecast_leans_on_the_same_weekday_then_weekend():
+    from app.usage_forecast import predict_kwh, slot_profile
+    # 2026-10-25 is a Sunday: past Sundays use 1 kWh a slot, other weekend days 0.5, weekdays 0.1.
+    kwh = {5: 0.5, 6: 1.0}
+    rows = [{"day": f"2026-10-{d:02d}", "slot": 20, "home_wh": kwh.get(datetime(2026, 10, d).weekday(), 0.1) * 1000,
+             "solar_wh": 0, "minutes": 30} for d in range(1, 25)]
+    prof = slot_profile(rows, datetime(2026, 10, 25).date())
+    sunday = datetime(2026, 10, 25, 10, 0, tzinfo=UTC)
+    got = predict_kwh(prof, sunday, sunday + timedelta(minutes=30))[0]
+    assert 0.7 < got < 1.0  # near the Sunday figure
+    tuesday = datetime(2026, 10, 27, 10, 0, tzinfo=UTC)
+    assert predict_kwh(prof, tuesday, tuesday + timedelta(minutes=30))[0] < 0.3  # weekday leans on weekdays
+
+
+def test_forecast_basis_counts_matching_days():
+    from app.usage_forecast import basis
+    rows = [{"day": f"2026-10-{d:02d}", "slot": 20, "home_wh": 100, "solar_wh": 0, "minutes": 30} for d in range(12, 25)]
+    from app.usage_forecast import slot_profile
+    prof = slot_profile(rows, datetime(2026, 10, 25).date())  # 12th is a Monday; 17th/18th and 24th are weekend days
+    b = basis(prof, datetime(2026, 10, 25, 11, 0))  # a Sunday
+    assert b == {"days": 13, "same_weekday": 1, "same_kind": 3}

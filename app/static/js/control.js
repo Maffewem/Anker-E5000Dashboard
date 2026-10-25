@@ -72,7 +72,7 @@ function renderControl(c) {
     const at = new Date(hf.start).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
     $("happy-forecast").textContent =
       `Expected ${hf.soc_at_start}% at ${at} (${hf.soc_now}% now, about ${hf.use_kwh} kWh of home use before then, from recent days). ` +
-      `The slot can add about ${hf.slot_pct}%, so around ${hf.soc_after}% after it.`;
+      `The slot can add about ${hf.slot_pct}%, so around ${hf.soc_after}% after it.` + forecastBasis(hf);
   }
   const sg = c.happy_suggestion;
   $("happy-suggest").hidden = !sg;
@@ -531,4 +531,16 @@ for (const [id, accept] of [["happy-suggest-yes", true], ["happy-suggest-no", fa
     if (!happySuggestion) return;
     renderControl(await postSettings("/api/control/happy-room", { start: happySuggestion.start, accept }));
   });
+}
+
+// Which past days the home use forecast leans on, so a thin basis is visible.
+function forecastBasis(hf) {
+  const b = hf.basis;
+  if (!b) return "";
+  const day = new Date(hf.start).toLocaleDateString([], {weekday: "long"});
+  if (b.same_weekday) return ` Based on ${b.days} recent days, ${b.same_weekday} of them ${day}s.`;
+  const kind = [0, 6].includes(new Date(hf.start).getDay()) ? "weekend" : "weekday";
+  return b.same_kind
+    ? ` No previous ${day}s recorded yet, so this uses ${b.same_kind} other ${kind} days; treat it as a rough guess.`
+    : ` No previous ${day}s or other ${kind} days recorded yet, so this is a rough guess from ${b.days} other days.`;
 }
