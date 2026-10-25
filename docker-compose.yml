@@ -45,6 +45,7 @@ services:
       # to turn changes off. Do one of these before publishing the dashboard.
       ADMIN_PASSWORD: "${ADMIN_PASSWORD:-}"
       READ_ONLY: "${READ_ONLY:-false}"
+      WIDGET_TOKEN: "${WIDGET_TOKEN:-}"  # 16+ characters turns on /api/widget for a phone widget (docs/widget.md)
       # Behind Cloudflare Tunnel / a reverse proxy: count wrong passwords per visitor, and
       # list the public address if the proxy rewrites the Host header.
       TRUST_PROXY: "${TRUST_PROXY:-false}"
