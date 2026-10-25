@@ -103,6 +103,22 @@ async def quick_override(body: OverrideIn) -> dict:
     return controller.status()
 
 
+class RoomAnswerIn(BaseModel):
+    start: str
+    accept: bool
+
+
+@router.post("/api/control/happy-room")
+async def answer_happy_room(body: RoomAnswerIn) -> dict:
+    """Say yes or no to lowering the charge target to leave room for a Happy Hour."""
+    controller: Controller = state.controller
+    try:
+        controller.answer_room(body.start, body.accept)
+    except ValueError as err:
+        raise HTTPException(status_code=409, detail=str(err)) from err
+    return controller.status()
+
+
 @router.post("/api/control/mode")
 async def set_battery_mode(body: ModeIn) -> dict:
     """Switch the battery to one of the Anker app's modes now."""

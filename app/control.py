@@ -25,6 +25,7 @@ from dataclasses import asdict, dataclass, fields, replace
 from datetime import date, datetime, timedelta, timezone
 from typing import Callable
 
+from . import usage_forecast
 from .registers import OPERATING_MODES, THIRD_PARTY_MODE
 
 log = logging.getLogger("solarbank.control")
@@ -42,7 +43,9 @@ MAX_HAPPY = 20
 FULL_SOC = 99  # counts as full
 HEADROOM_HOURS = 36  # a Happy Hour starting this soon makes the charge before it leave room
 MIN_BEFORE_HAPPY = 30  # but never cut a charge below this level (or the battery reserve)
+PROFILE_TTL_SECONDS = 1800  # rebuild the home usage profile this often
 CHARGE_EFFICIENCY = 0.95  # grid energy in to energy stored
+DISCHARGE_EFFICIENCY = 0.95  # energy stored to energy delivered to the house
 OVERRIDE_MAX_MINUTES = 12 * 60
 MAX_SETPOINT_W = 5000  # no setpoint beyond this either way, whatever the battery reports as its maximum
 PACE_MIN_W = 300  # paced charging doesn't go below this; very low power is inefficient
@@ -349,14 +352,22 @@ def active_target(settings: ControlSettings, windows: list[Window], now: datetim
     return 100 if balance else settings.charge_target_soc
 
 
-def happy_headroom(settings: ControlSettings, windows: list[Window], snapshot: dict, now: datetime) -> dict | None:
+def happy_headroom(settings: ControlSettings, windows: list[Window], snapshot: dict, now: datetime,
+                   use_kwh: Callable[[datetime, datetime], float | None] | None = None,
+                   accepted: str | None = None) -> dict | None:
     """Room to leave for the next booked Happy Hour, if one starts within a day and a half.
 
     The free session can take the battery's max charge power for as long as it
     runs, so a charge before it stops short by that much energy: 2 hours at
     2.5 kW leaves about 5 kWh. The target is never cut below the battery
-    reserve or MIN_BEFORE_HAPPY. Morning use of the battery isn't estimated;
-    it only makes the room bigger."""
+    reserve or MIN_BEFORE_HAPPY. `use_kwh(a, b)` predicts the household draw
+    between two moments from past days; what the house uses between the end of
+    the charge in progress (or now) and the slot starting comes off the room,
+    since the battery will have emptied that much by then anyway.
+
+    The target is only lowered once you've said yes to this slot (`accepted` is
+    the start time you approved); until then the result is a suggestion, with
+    "ok" False, for the card to ask about."""
     rated = snapshot.get("rated_kwh")
     if not settings.charge_happy or not rated:
         return None
@@ -365,8 +376,13 @@ def happy_headroom(settings: ControlSettings, windows: list[Window], snapshot: d
         return None
     power = int(snapshot.get("max_charge_w") or settings.charge_power_w)
     kwh = power / 1000 * (nxt.end - nxt.start).total_seconds() / 3600 * CHARGE_EFFICIENCY
-    return {"window": nxt, "kwh": round(kwh, 1), "pct": kwh / rated * 100,
-            "floor": max(int(snapshot.get("reserve_soc") or 0), MIN_BEFORE_HAPPY)}
+    floor = max(int(snapshot.get("reserve_soc") or 0), MIN_BEFORE_HAPPY)
+    since = max([w.end for w in windows if not w.happy and w.start <= now < w.end] or [now])
+    used = use_kwh(min(since, nxt.start), nxt.start) if use_kwh else None
+    used = (used or 0.0) / DISCHARGE_EFFICIENCY
+    room = max(0.0, kwh - used)
+    return {"window": nxt, "kwh": round(room, 1), "slot_kwh": round(kwh, 1), "use_kwh": round(used, 1),
+            "pct": room / rated * 100, "floor": floor, "ok": nxt.start.isoformat() == accepted}
 
 
 def lowered(target: int, room: dict | None) -> int:
@@ -477,8 +493,11 @@ def decide(settings: ControlSettings, windows: list[Window], snapshot: dict, now
         return APP, 0, "Control is off", None
     soc = snapshot.get("soc")
     happy = next((w for w in windows if w.happy and w.start <= now < w.end), None) if settings.charge_happy else None
-    room = None if happy else happy_headroom(settings, windows, snapshot, now)
-    if balance and room:
+    room = None if happy else happy_headroom(settings, windows, snapshot, now, (pace or {}).get("use_kwh"), (pace or {}).get("room_ok"))
+    waiting = room is not None
+    if room and not room["ok"]:
+        room = None  # only a suggestion until you say yes
+    if balance and waiting:
         balance = False  # the free session is the place for the full charge; don't pay for one tonight
     if balance:
         settings = replace(settings, charge_target_soc=100, grid_charge=True)
@@ -560,6 +579,11 @@ class Controller:
         self.room: dict | None = None  # room being left for a booked Happy Hour, for the card
         self._room_raw: dict | None = None
         self._room_logged: tuple | None = None
+        self.room_ok: str | None = state.get("room_ok")  # start of the Happy Hour you said yes to leaving room for
+        self.room_declined: str | None = state.get("room_declined")
+        self.suggestion: dict | None = None  # lower-the-target offer waiting for a yes or no
+        self.forecast: dict | None = None  # predicted level when the next Happy Hour starts, for the card
+        self._profile: tuple[float, dict] | None = None  # (when built, usage_forecast.slot_profile)
         self.action = APP
         self.reason = "Starting"
         self.window: Window | None = None
@@ -606,7 +630,24 @@ class Controller:
 
     def _persist(self) -> None:
         self._save_state({"saved_mode": self.saved_mode, "in_control": self.in_control,
-                          "saved_limits": self.saved_limits, "override": self.override, "full_at": self.full_at})
+                          "saved_limits": self.saved_limits, "override": self.override, "full_at": self.full_at,
+                          "room_ok": self.room_ok, "room_declined": self.room_declined})
+
+    def answer_room(self, start: str, accept: bool) -> None:
+        """Yes or no to lowering the charge target for the Happy Hour starting at `start`."""
+        sug = self.suggestion
+        if not sug or sug["start"] != start:
+            raise ValueError("That suggestion is no longer current")
+        if accept:
+            self.room_ok, self.room_declined = start, None
+            self._event(f"You chose to charge to {sug['to']}% instead of {sug['from']}% for the {sug['slot']}",
+                        "happy_headroom", sug["from"], sug["to"], "dashboard", always=True)
+        else:
+            self.room_declined = start
+            self._event(f"You kept the {sug['from']}% charge target for the {sug['slot']}", "happy_headroom",
+                        sug["from"], sug["from"], "dashboard", always=True)
+        self.suggestion = None
+        self._persist()
 
     def _last_full(self) -> float | None:
         seen = [t for t in (self.full_at, self._history_full()) if t]
@@ -638,6 +679,50 @@ class Controller:
             return
         await self.collector.write(key, value)
 
+    def _use_kwh(self, tz, now: datetime) -> Callable[[datetime, datetime], float | None] | None:
+        """Predict home draw between two moments from the last two weeks of stored half hours (None without history)."""
+        storage = getattr(self.collector, "storage", None)
+        if storage is None or not hasattr(storage, "usage_slots"):
+            return None
+        if not self._profile or time.monotonic() - self._profile[0] > PROFILE_TTL_SECONDS:
+            try:
+                prof = usage_forecast.slot_profile(storage.usage_slots(usage_forecast.HISTORY_DAYS + 1),
+                                                   now.astimezone(tz).date())
+            except Exception:
+                log.exception("Couldn't build the home usage profile")
+                prof = {}
+            self._profile = (time.monotonic(), prof)
+        prof = self._profile[1]
+
+        def use(a: datetime, b: datetime) -> float | None:
+            got = usage_forecast.predict_kwh(prof, a.astimezone(tz), b.astimezone(tz))
+            return got[0] if got else None
+        return use
+
+    def _update_forecast(self, snap: dict, windows: list[Window], now: datetime, use_kwh, room: dict | None,
+                         target: int | None) -> None:
+        """What the battery level is likely to be when the next Happy Hour starts, for the card."""
+        self.forecast = None
+        soc, rated = snap.get("soc"), snap.get("rated_kwh")
+        nxt = next((w for w in windows if w.happy and w.start > now and w.start - now <= timedelta(hours=HEADROOM_HOURS)), None)
+        if not (self.settings.charge_happy and nxt and rated and isinstance(soc, (int, float)) and use_kwh):
+            return
+        since = max([w.end for w in windows if not w.happy and w.start <= now < w.end] or [now])
+        since = min(since, nxt.start)
+        used = use_kwh(since, nxt.start)
+        if used is None:
+            return
+        # While a charge runs the level at its end is the target (or the level now if it is already past it).
+        start_soc = max(soc, target) if since > now and target is not None else soc
+        drop = used / DISCHARGE_EFFICIENCY / rated * 100
+        floor = int(snap.get("reserve_soc") or 0)
+        at_start = max(floor, start_soc - drop)
+        power = int(snap.get("max_charge_w") or self.settings.charge_power_w)
+        slot_pct = power / 1000 * (nxt.end - nxt.start).total_seconds() / 3600 * CHARGE_EFFICIENCY / rated * 100
+        self.forecast = {"slot": nxt.why, "start": nxt.start.isoformat(), "soc_now": round(soc), "use_kwh": round(used, 1),
+                         "soc_at_start": round(at_start), "slot_pct": round(slot_pct),
+                         "soc_after": round(min(100, at_start + slot_pct)), "from": since.isoformat()}
+
     async def tick(self, now: datetime | None = None) -> None:
         async with self._lock:
             await self._tick(now or datetime.now(timezone.utc))
@@ -665,7 +750,8 @@ class Controller:
                 self._event("Auto balance finished: the battery reached 100%", "auto_balance", "charging", "done", "dashboard", always=True)
         balance = self.balance_due(now) and not quick
         tz = getattr(getattr(self.collector, "storage", None), "tz", None) or timezone.utc
-        pace_io = {"tz": tz}
+        use_kwh = self._use_kwh(tz, now)
+        pace_io = {"tz": tz, "use_kwh": use_kwh, "room_ok": self.room_ok}
         if self.action == CHARGE and self.last_setpoint and self.last_setpoint < 0:
             pace_io["current_w"] = -self.last_setpoint
             pace_io["settled"] = time.monotonic() - self._setpoint_since < PACE_SETTLE_SECONDS
@@ -680,21 +766,32 @@ class Controller:
                         "charging", window.source if window else "dashboard", always=True)
         self.balancing = balancing
         happy_now = any(w.happy and w.start <= now < w.end for w in windows)
-        room = None if happy_now or balancing else happy_headroom(settings, windows, snap, now)
+        room = None if happy_now or balancing else happy_headroom(settings, windows, snap, now, use_kwh, self.room_ok)
+        self.suggestion = None
+        if room and not room["ok"]:
+            base = window.schedule.target_soc if window and window.schedule else settings.charge_target_soc
+            lower = lowered(base, room)
+            if (settings.enabled and action == CHARGE and window is not None and window.source != "override"
+                    and lower < base and room["window"].start.isoformat() != self.room_declined):
+                self.suggestion = {"start": room["window"].start.isoformat(), "slot": room["window"].why,
+                                   "from": base, "to": lower, "use_kwh": room["use_kwh"], "kwh": room["kwh"]}
+            room = None
         if settings.enabled and room and action == CHARGE and window is not None and window.source != "override":
             base = window.schedule.target_soc if window.schedule else settings.charge_target_soc
             target = lowered(base, room)
             self._room_raw = room
             self.room = {"kwh": room["kwh"], "target": target, "slot": room["window"].why,
-                         "start": room["window"].start.isoformat()}
+                         "start": room["window"].start.isoformat(), "slot_kwh": room["slot_kwh"], "use_kwh": room["use_kwh"]}
             key = (self.room["start"], target)
             if key != self._room_logged:
                 self._room_logged = key
+                used = f", after about {room['use_kwh']:g} kWh of expected home use before it" if room["use_kwh"] else ""
                 self._event(f"Leaving room for the {room['window'].why}: charging to {target}% instead of "
-                            f"{base}% so it can take about {room['kwh']:g} kWh free",
+                            f"{base}% so it can take about {room['kwh']:g} kWh free{used}",
                             "happy_headroom", None, target, window.source, always=True)
         else:
             self.room = self._room_raw = None
+        self._update_forecast(snap, windows, now, use_kwh, room, self.room["target"] if self.room else None)
         if balancing:
             reason = f"Auto balance: {reason}"
         mode = self.collector.raw.get("operating_mode")
@@ -977,6 +1074,8 @@ class Controller:
             "saved_mode": OPERATING_MODES.get(self.saved_mode) if self.saved_mode is not None else None,
             "override": self.override,
             "happy_room": self.room,
+            "happy_forecast": self.forecast,
+            "happy_suggestion": self.suggestion,
             "pace": self.pace,
             "balance": {"due": self.balance_due(datetime.now(timezone.utc)), "active": self.balancing,
                         "last_full": self._last_full()},

@@ -68,7 +68,8 @@ def test_live_hold_then_hand_back(monkeypatch):
     ctl = make(c, {"enabled": True}, store)
     asyncio.run(ctl.tick(IN))
     assert c.writes == [("operating_mode", 3), ("battery_power_setpoint", 0)]
-    assert store["state"] == {"saved_mode": 6, "in_control": True, "saved_limits": {}, "override": None, "full_at": None}
+    assert store["state"] == {"saved_mode": 6, "in_control": True, "saved_limits": {}, "override": None, "full_at": None,
+                              "room_ok": None, "room_declined": None}
     asyncio.run(ctl.tick(IN + timedelta(seconds=15)))
     assert len(c.writes) == 2  # nothing new to say
     asyncio.run(ctl.tick(OUT))
@@ -605,14 +606,17 @@ def test_happy_headroom_lowers_the_overnight_target():
     ws = [NIGHT, *_hh("11:00", "13:00")]  # two hours tomorrow
     snap = {"soc": 20, "rated_kwh": 5.0, "max_charge_w": 2500, "reserve_soc": 10}
     on = ControlSettings(enabled=True, grid_charge=True, charge_target_soc=90)
-    room = happy_headroom(on, ws, snap, IN)
+    ok = ws[1].start.isoformat()
+    room = happy_headroom(on, ws, snap, IN, accepted=ok)
+    assert not happy_headroom(on, ws, snap, IN)["ok"] and room["ok"]
     assert room["kwh"] == 4.8 and round(room["pct"]) == 95  # 2 h x 2.5 kW x 0.95 of 5 kWh
     assert lowered(90, room) == 30  # floored, not negative
     big = {**snap, "rated_kwh": 20.0}
-    room = happy_headroom(on, ws, big, IN)
-    action, setpoint, reason, _ = decide(on, ws, {**big, "soc": 50}, IN)
+    pace = {"room_ok": ok}
+    action, setpoint, reason, _ = decide(on, ws, {**big, "soc": 50}, IN, pace=pace)
     assert (action, setpoint) == (CHARGE, -1500) and "to 66%" in reason and "leaving room" in reason
-    assert decide(on, ws, {**big, "soc": 70}, IN)[:2] == (HOLD, 0)  # already at the lowered target
+    assert decide(on, ws, {**big, "soc": 70}, IN, pace=pace)[:2] == (HOLD, 0)  # already at the lowered target
+    assert "to 90%" in decide(on, ws, {**big, "soc": 50}, IN)[2]  # not lowered until you say yes
     assert happy_headroom(ControlSettings(charge_happy=False), ws, snap, IN) is None
     assert happy_headroom(on, [NIGHT, *_hh("11:00", "13:00", "2026-10-20")], snap, IN) is None  # too far off
 
@@ -665,6 +669,10 @@ def test_controller_reports_and_logs_the_happy_hour_room(monkeypatch):
                      windows=lambda now: [NIGHT, *_hh("11:00", "13:00")])
     events = []
     ctl._event = lambda *a, **k: events.append(a[0])
+    asyncio.run(ctl.tick(IN))
+    assert ctl.room is None and ctl.suggestion["to"] == 66 and ctl.status()["happy_suggestion"]["from"] == 90
+    ctl.answer_room(ctl.suggestion["start"], True)
+    assert ctl.suggestion is None and ctl.room_ok
     asyncio.run(ctl.tick(IN))
     assert ctl.room["target"] == 66 and ctl.room["kwh"] == 4.8
     assert ctl.status()["happy_room"]["target"] == 66
@@ -770,3 +778,46 @@ def test_pace_holds_a_recent_setpoint_unless_well_off_pace():
     moved = pace_charge(IN, PACE_WINDOW, 20, 80, 5.0, 2500, 90, current_w=need - 400, settled=True)
     assert moved["power"] == need  # too far short: correct it
     assert pace_charge(IN, PACE_WINDOW, 20, 80, 5.0, 2500, 90, current_w=need - 200)["power"] == need  # not settled
+
+
+def _profile(kwh_per_slot, days=5):
+    from app.usage_forecast import slot_profile
+    rows = [{"day": f"2026-10-{d:02d}", "slot": s, "home_wh": kwh_per_slot * 1000, "solar_wh": 0, "minutes": 30}
+            for d in range(1, days + 1) for s in range(48)]
+    return slot_profile(rows, datetime(2026, 10, 10).date())
+
+
+def test_usage_forecast_sums_the_half_hours_to_the_slot():
+    from app.usage_forecast import predict_kwh
+    prof = _profile(0.2)
+    start = datetime(2026, 10, 10, 8, 30, tzinfo=UTC)
+    assert round(predict_kwh(prof, start, start + timedelta(hours=2, minutes=30))[0], 2) == 1.0  # 5 half hours
+    assert round(predict_kwh(prof, start, start + timedelta(minutes=15))[0], 2) == 0.1  # half a slot
+    assert predict_kwh(_profile(0.2, days=2), start, start + timedelta(hours=1)) is None  # too little history
+
+
+def test_expected_home_use_shrinks_the_happy_hour_room():
+    from app.control import happy_headroom, lowered
+    ws = [NIGHT, *_hh("11:00", "13:00")]
+    snap = {"soc": 20, "rated_kwh": 10.0, "max_charge_w": 2500, "reserve_soc": 10}
+    on = ControlSettings(enabled=True, grid_charge=True, charge_target_soc=90)
+    plain = happy_headroom(on, ws, snap, IN)
+    used = happy_headroom(on, ws, snap, IN, lambda a, b: 2.0 if (a, b) == (NIGHT.end, ws[1].start) else None)
+    assert used["slot_kwh"] == 4.8 and used["use_kwh"] == 2.1  # 2 kWh drawn from 05:30 to 11:00, as stored energy
+    assert lowered(90, used) > lowered(90, plain)  # charges higher overnight
+    heavy = happy_headroom(on, ws, snap, IN, lambda a, b: 9.0)
+    assert heavy["kwh"] == 0 and lowered(90, heavy) == 90  # house would use more than the slot can take: no room kept
+
+
+def test_declining_the_suggestion_keeps_the_target_and_stops_asking():
+    c = FakeCollector(mode=6, soc=40)
+    c.snapshot = {"soc": 40, "rated_kwh": 20.0, "max_charge_w": 2500}
+    store = {"settings": {"enabled": True, "grid_charge": True, "charge_target_soc": 90}}
+    ctl = Controller(c, load=lambda: dict(store), save_state=lambda s: None,
+                     windows=lambda now: [NIGHT, *_hh("11:00", "13:00")])
+    asyncio.run(ctl.tick(IN))
+    ctl.answer_room(ctl.suggestion["start"], False)
+    asyncio.run(ctl.tick(IN + timedelta(seconds=15)))
+    assert ctl.suggestion is None and ctl.room is None
+    with pytest.raises(ValueError):
+        ctl.answer_room("2026-01-01T00:00:00+00:00", True)

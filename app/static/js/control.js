@@ -1,3 +1,4 @@
+let happySuggestion = null;
 "use strict";
 
 // ---------- Battery control ----------
@@ -65,6 +66,22 @@ function renderControl(c) {
   $("happy-status").hidden = !room;
   $("happy-status").textContent = room
     ? `Charging to ${room.target}% now, leaving room for about ${room.kwh} kWh in the ${room.slot}.` : "";
+  const hf = c.happy_forecast;
+  $("happy-forecast").hidden = !hf;
+  if (hf) {
+    const at = new Date(hf.start).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+    $("happy-forecast").textContent =
+      `Expected ${hf.soc_at_start}% at ${at} (${hf.soc_now}% now, about ${hf.use_kwh} kWh of home use before then, from recent days). ` +
+      `The slot can add about ${hf.slot_pct}%, so around ${hf.soc_after}% after it.`;
+  }
+  const sg = c.happy_suggestion;
+  $("happy-suggest").hidden = !sg;
+  if (sg) {
+    happySuggestion = sg;
+    $("happy-suggest-text").textContent =
+      `Lower tonight's charge from ${sg.from}% to ${sg.to}%? The ${sg.slot} should top it up free, after about ${sg.use_kwh} kWh of home use before then. ` +
+      `That saves paying for the difference, but leaves less in the battery for the morning.`;
+  }
   const pc = c.pace;
   $("pace-status").hidden = !pc;
   if (pc) {
@@ -495,3 +512,10 @@ $("care-dismiss").addEventListener("click", () => {
   try { localStorage.setItem(CARE_KEY, careKey); } catch (_) {}
   $("care-card").hidden = true;
 });
+
+for (const [id, accept] of [["happy-suggest-yes", true], ["happy-suggest-no", false]]) {
+  $(id).addEventListener("click", async () => {
+    if (!happySuggestion) return;
+    renderControl(await postSettings("/api/control/happy-room", { start: happySuggestion.start, accept }));
+  });
+}
