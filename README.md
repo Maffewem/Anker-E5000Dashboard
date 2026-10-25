@@ -52,6 +52,7 @@ You don't need to edit the compose file. Set any of these as **Environment varia
 | `CONTROL_LIMITS` | `1` | While control is charging or discharging, it also narrows the battery's own charge or discharge limit to the target, so the battery still stops there if the dashboard or Pi goes down mid-window. The limit you had is put back afterwards. `0` turns this off |
 | `ADMIN_PASSWORD` | – | Instead of setting a password with the padlock on the dashboard. Locks every change (settings, battery control, mode, schedules, Octopus, costs) and the full backup behind this password. Viewing stays open. See **Security** below |
 | `READ_ONLY` | `false` | `true` turns every change off, even for you. Recording and battery control carry on with the settings they already have |
+| `WIDGET_TOKEN` | *(off)* | 16+ characters turns on `/api/widget`, a small read-only summary for an iPhone widget. See [docs/widget.md](docs/widget.md) |
 | `PORT` | `8080` | Port inside the container. Only needed with `docker-compose.host.yml` |
 | `RELAY_METER` | `false` | `true` shares the Smart Meter with Home Assistant (see below) |
 | `RELAY_HOST_PORT` | `502` | Port the Smart Meter relay is published on |

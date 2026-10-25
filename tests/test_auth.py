@@ -149,3 +149,16 @@ def test_env_password_wins_and_cant_be_changed(tmp_path, monkeypatch):
 def test_read_only_blocks_setting_a_password(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch, READ_ONLY="true") as c:
         assert c.post("/api/auth/password", json={"new": "a good password"}).status_code == 403
+
+
+def test_widget_is_off_without_a_token_and_needs_it_with_one(tmp_path, monkeypatch):
+    monkeypatch.delenv("WIDGET_TOKEN", raising=False)
+    with _client(tmp_path, monkeypatch) as c:
+        assert c.get("/api/widget").status_code == 404
+    token = "a-long-enough-secret"
+    with _client(tmp_path, monkeypatch, WIDGET_TOKEN=token) as c:
+        assert c.get("/api/widget").status_code == 401
+        assert c.get("/api/widget", headers={"Authorization": "Bearer nope"}).status_code == 401
+        body = c.get("/api/widget", headers={"Authorization": f"Bearer {token}"}).json()
+        assert {"soc", "solar_w", "home_w", "grid_w", "saved_today", "online"} <= set(body)
+        assert c.get("/api/widget", headers={"X-Widget-Token": token}).status_code == 200
