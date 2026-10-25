@@ -31,6 +31,7 @@ from .registers import OPERATING_MODES, THIRD_PARTY_MODE
 log = logging.getLogger("solarbank.control")
 
 TICK_SECONDS = 15
+STALE_SECONDS = 180  # no good battery reading for this long while in control: hand back to the Anker app
 REASSERT_SECONDS = 60  # rewrite the setpoint now and then in case the battery forgot it
 APP = "app"
 HOLD = "hold"
@@ -570,6 +571,7 @@ class Controller:
         # The battery's own SOC limits as they were before we narrowed them; kept on disk so a restart puts them back.
         self.saved_limits: dict[str, int] = dict(state.get("saved_limits") or {})
         self._last_cap: dict[str, int] = {}
+        self._lost_since: float | None = None  # when the battery readings went missing or stale (unix time)
         self.override: dict | None = state.get("override") or None
         self.full_at: float | None = state.get("full_at")  # last time we saw it full, kept across restarts
         self.balancing = False
@@ -674,6 +676,8 @@ class Controller:
                 raise ValueError(f"Refusing {key} = {value}")
         else:
             raise ValueError(f"Refusing to write {key}")
+        if key == "battery_power_setpoint":
+            value = self._clamp_setpoint(value)  # then within the battery's own power limits
         if not self.live:
             self._note(f"Dry run: would write {key} = {value}")
             return
@@ -722,6 +726,44 @@ class Controller:
         self.forecast = {"slot": nxt.why, "start": nxt.start.isoformat(), "soc_now": round(soc), "use_kwh": round(used, 1),
                          "soc_at_start": round(at_start), "slot_pct": round(slot_pct),
                          "soc_after": round(min(100, at_start + slot_pct)), "from": since.isoformat()}
+    def _clamp_setpoint(self, value: int) -> int:
+        """Last line of defence: never ask for more than the battery's own power limits (or a fixed cap)."""
+        snap = getattr(self.collector, "snapshot", None) or {}
+        charge = min(int(snap.get("max_charge_w") or MAX_SETPOINT_W), MAX_SETPOINT_W)
+        discharge = min(int(snap.get("max_discharge_w") or MAX_SETPOINT_W), MAX_SETPOINT_W)
+        clamped = max(-charge, min(discharge, int(value)))
+        if clamped != value:
+            self._note(f"Setpoint {value} W is beyond the battery's limits; using {clamped} W")
+        return clamped
+
+    def _lost_contact(self, now: datetime) -> bool:
+        """True once the battery has gone quiet for STALE_SECONDS."""
+        updated = getattr(self.collector, "last_update", None)
+        stale = isinstance(updated, (int, float)) and now.timestamp() - updated > STALE_SECONDS
+        if self.collector.connected and (self.collector.snapshot or {}) and not stale:
+            self._lost_since = None
+            return False
+        if self._lost_since is None:
+            self._lost_since = now.timestamp()
+        return now.timestamp() - self._lost_since >= STALE_SECONDS
+
+    async def _failsafe(self) -> None:
+        """Contact with the battery was lost while the dashboard was driving it: give control back if we can."""
+        mode = self.saved_mode if self.saved_mode is not None else 0
+        self.reason = "Lost contact with the battery: handing control back to the Anker app"
+        try:
+            await self._write("operating_mode", mode)
+        except Exception as err:  # still unreachable; try again next tick
+            self.last_error = f"Failsafe couldn't reach the battery yet: {err}"
+            self._note(self.last_error)
+            return
+        self._note(f"Lost contact with the battery; handed control back ({OPERATING_MODES.get(mode, mode)})")
+        self._event("Failsafe: lost contact with the battery, handed control back to the Anker app", "operating_mode",
+                    OPERATING_MODES[THIRD_PARTY_MODE], OPERATING_MODES.get(mode, mode), "failsafe", always=True)
+        self.in_control, self.saved_mode, self.last_setpoint, self.action = False, None, None, APP
+        self._persist()
+        self.last_error = None
+
 
     async def tick(self, now: datetime | None = None) -> None:
         async with self._lock:
@@ -729,6 +771,10 @@ class Controller:
 
     async def _tick(self, now: datetime) -> None:
         snap = self.collector.snapshot or {}
+        lost = self._lost_contact(now)
+        if lost and self.in_control:
+            await self._failsafe()
+            return
         if not self.collector.connected or not snap:
             self.reason = "Waiting for the battery"
             return
@@ -1045,6 +1091,23 @@ class Controller:
                 self._persist()
             await self._restore_limits()
             self.last_error = None
+
+    async def stop(self) -> None:
+        """Emergency stop: cancel any override, switch control off and hand the battery back now."""
+        async with self._lock:
+            self.override = None
+            self.settings = replace(self.settings, enabled=False)
+            if self.in_control:
+                mode = self.saved_mode if self.saved_mode is not None else 0
+                await self._write("operating_mode", mode)
+                self._note(f"Stopped from the dashboard; gave control back ({OPERATING_MODES.get(mode, mode)})")
+                self._event("Control stopped from the dashboard: gave control back to the Anker app", "operating_mode",
+                            OPERATING_MODES[THIRD_PARTY_MODE], OPERATING_MODES.get(mode, mode), "dashboard", always=True)
+                self.in_control, self.saved_mode, self.last_setpoint, self.action = False, None, None, APP
+            self._persist()
+            await self._restore_limits()
+            self.reason, self.last_error = "Stopped from the dashboard", None
+        self._wake.set()
 
     async def restore(self) -> None:
         """Give control back now, e.g. when the dashboard shuts down."""

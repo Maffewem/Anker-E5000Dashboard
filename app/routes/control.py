@@ -149,3 +149,15 @@ async def set_battery_limits(body: LimitsIn) -> dict:
     except Exception as err:
         raise HTTPException(status_code=502, detail=f"The battery didn't accept the change: {err}") from err
     return controller.status()
+
+
+@router.post("/api/control/stop")
+async def stop_control() -> dict:
+    """Emergency stop: switch control off, cancel any override and hand the battery back to the Anker app."""
+    controller: Controller = state.controller
+    try:
+        await controller.stop()
+    except Exception as err:
+        raise HTTPException(status_code=502, detail=f"The battery didn't accept the change: {err}") from err
+    state.connection_store.save_section("control", asdict(controller.settings))
+    return controller.status()

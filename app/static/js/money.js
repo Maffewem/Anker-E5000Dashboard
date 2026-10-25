@@ -200,6 +200,8 @@ $("open-costs").addEventListener("click", () => {
   $("cost-from").value = t.offpeak_start || "00:30";
   $("cost-to").value = t.offpeak_end || "05:30";
   $("cost-export").value = t.export_rate ?? "";
+  $("cost-standing").value = (payback && payback.manual ? payback.manual.standing_p : t.standing_p) ?? "";
+  $("cost-include-standing").checked = payback && payback.manual ? payback.manual.include_standing !== false : true;
   const connected = Boolean(payback && payback.octopus_connected);
   $("costs-manual-row").hidden = !connected;
   $("cost-manual").checked = Boolean(payback && payback.use_manual);
@@ -217,7 +219,7 @@ $("open-costs").addEventListener("click", () => {
 });
 $("costs-cancel").addEventListener("click", () => $("costs").close());
 const KEYS = { "cost-battery": "battery_cost", "cost-peak": "peak_rate", "cost-offpeak": "offpeak_rate",
-  "cost-from": "offpeak_start", "cost-to": "offpeak_end", "cost-export": "export_rate" };
+  "cost-from": "offpeak_start", "cost-to": "offpeak_end", "cost-export": "export_rate", "cost-standing": "standing_p" };
 function syncCostInputs() {
   const connected = Boolean(payback && payback.octopus_connected) && $("cost-supplier").value === "octopus";
   const manual = $("cost-manual").checked;
@@ -227,6 +229,13 @@ function syncCostInputs() {
   for (const id of ["cost-peak", "cost-offpeak", "cost-from", "cost-to"]) $(id).disabled = fromOctopus;
   // Octopus has no export price on some accounts; then the typed one is used and stays editable.
   $("cost-export").disabled = fromOctopus && Boolean(payback.export_from_octopus);
+  // Octopus publishes the standing charge for the tariff; show it and keep the typed one for later.
+  const sc = fromOctopus && payback.tariff && payback.tariff.standing_p ? payback.tariff.standing_p : null;
+  $("cost-standing").disabled = sc != null;
+  if (sc != null) $("cost-standing").value = sc;
+  else if (!$("cost-standing").value && payback && payback.manual) $("cost-standing").value = payback.manual.standing_p ?? "";
+  $("cost-standing-hint").textContent = sc != null ? "Taken from your Octopus tariff."
+    : "Optional. Counted in the cost trends and projections; it doesn't change the battery's savings.";
 }
 $("cost-manual").addEventListener("change", syncCostInputs);
 $("costs-form").addEventListener("submit", async (e) => {
@@ -238,7 +247,7 @@ $("costs-form").addEventListener("submit", async (e) => {
   try {
     const p = await postSettings("/api/tariff", {
       battery_cost: num("cost-battery"), installed: $("cost-installed").value, peak_rate: num("cost-peak"), offpeak_rate: num("cost-offpeak"),
-      offpeak_start: time("cost-from", "00:00"), offpeak_end: time("cost-to", "00:00"), export_rate: num("cost-export"),
+      offpeak_start: time("cost-from", "00:00"), offpeak_end: time("cost-to", "00:00"), export_rate: num("cost-export"), standing_p: num("cost-standing"), include_standing: $("cost-include-standing").checked,
       use_manual: $("cost-manual").checked, supplier: $("cost-supplier").value, prices_from: $("cost-prices-from").value,
     });
     renderPayback(p);

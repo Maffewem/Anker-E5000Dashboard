@@ -160,6 +160,19 @@ $("mode-set").addEventListener("click", async () => {
   }
 });
 
+$("control-stop").addEventListener("click", async () => {
+  if (!confirm("Stop dashboard control and give the battery back to the Anker app now?")) return;
+  $("control-stop").disabled = true;
+  try {
+    renderControl(await postSettings("/api/control/stop", {}));
+  } catch (err) {
+    $("control-error").hidden = false;
+    $("control-error").textContent = err.message;
+  } finally {
+    $("control-stop").disabled = false;
+  }
+});
+
 // ----- the battery's own charge and discharge limits -----
 let limitsDirty = false;
 const DEFAULT_TARGET = 80; // if the server hasn't said otherwise
