@@ -33,6 +33,8 @@ class TariffIn(BaseModel):
     offpeak_start: str = "00:30"
     offpeak_end: str = "05:30"
     export_rate: float = 15.0
+    standing_p: float = 0.0
+    include_standing: bool = True
     use_manual: bool = False
     installed: str = ""
     supplier: str = ""

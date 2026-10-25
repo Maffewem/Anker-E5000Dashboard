@@ -606,6 +606,7 @@ class Octopus:
             "offpeak_start": slot_time(s) if n and n < 48 else "00:00",
             "offpeak_end": slot_time(s + n) if n and n < 48 else "00:00",
             "export_rate": round(sum(exports) / len(exports), 2) if exports else None,
+            "standing_p": (self.info.get("import") or {}).get("standing_charge_p"),
             "day": max(full),
         }
 

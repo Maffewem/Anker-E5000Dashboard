@@ -770,3 +770,56 @@ def test_pace_holds_a_recent_setpoint_unless_well_off_pace():
     moved = pace_charge(IN, PACE_WINDOW, 20, 80, 5.0, 2500, 90, current_w=need - 400, settled=True)
     assert moved["power"] == need  # too far short: correct it
     assert pace_charge(IN, PACE_WINDOW, 20, 80, 5.0, 2500, 90, current_w=need - 200)["power"] == need  # not settled
+
+
+def test_failsafe_hands_back_after_lost_contact(monkeypatch):
+    monkeypatch.setenv("CONTROL_LIVE", "1")
+    c, store = FakeCollector(mode=6), {}
+    ctl = make(c, {"enabled": True}, store)
+    asyncio.run(ctl.tick(IN))
+    assert ctl.in_control
+    c.connected = False
+    asyncio.run(ctl.tick(IN + timedelta(seconds=60)))
+    assert ctl.in_control  # a short blip is ignored
+    asyncio.run(ctl.tick(IN + timedelta(seconds=300)))
+    assert c.writes[-1] == ("operating_mode", 6)
+    assert not ctl.in_control and store["state"]["in_control"] is False
+
+
+def test_failsafe_retries_until_the_write_lands(monkeypatch):
+    monkeypatch.setenv("CONTROL_LIVE", "1")
+    c, store = FakeCollector(mode=6), {}
+    ctl = make(c, {"enabled": True}, store)
+    asyncio.run(ctl.tick(IN))
+    c.connected = False
+    real = c.write
+
+    async def broken(key, value):
+        raise ConnectionError("down")
+    c.write = broken
+    asyncio.run(ctl.tick(IN + timedelta(seconds=60)))
+    asyncio.run(ctl.tick(IN + timedelta(seconds=300)))
+    assert ctl.in_control and "Failsafe" in ctl.last_error
+    c.write = real
+    asyncio.run(ctl.tick(IN + timedelta(seconds=330)))
+    assert not ctl.in_control
+
+
+def test_setpoint_is_clamped_to_the_battery_limits(monkeypatch):
+    monkeypatch.setenv("CONTROL_LIVE", "1")
+    c, store = FakeCollector(), {}
+    c.snapshot = {"soc": 50, "max_charge_w": 2000, "max_discharge_w": 1000}
+    ctl = make(c, {"enabled": True}, store)
+    asyncio.run(ctl._write("battery_power_setpoint", -4000))
+    asyncio.run(ctl._write("battery_power_setpoint", 4000))
+    assert [w[1] for w in c.writes] == [-2000, 1000]
+
+
+def test_emergency_stop(monkeypatch):
+    monkeypatch.setenv("CONTROL_LIVE", "1")
+    c, store = FakeCollector(mode=6), {}
+    ctl = make(c, {"enabled": True}, store)
+    asyncio.run(ctl.tick(IN))
+    asyncio.run(ctl.stop())
+    assert c.writes[-1] == ("operating_mode", 6)
+    assert not ctl.in_control and not ctl.settings.enabled
