@@ -69,3 +69,37 @@ def test_relay_goes_quiet_when_the_meter_drops():
     assert relay.answer(request) == bytes([4, 2, 0, 1])
     collector.last_update -= 120  # no fresh poll for two minutes
     assert relay.answer(request) == bytes([0x84, 0x0B])
+
+
+def test_relay_keeps_answering_identity_when_meter_is_offline(tmp_path):
+    async def run():
+        regs = Registers(METER_REGISTERS, METER_IMPLEMENTED)
+        regs.write(METER_STATIC)
+        regs.write(meter_values({"grid_power": 100}, 1.0, 2.0))
+        server = await asyncio.start_server(lambda r, w: handle(regs, r, w), "127.0.0.1", 0)
+        conn = Connection("127.0.0.1", server.sockets[0].getsockname()[1], 1)
+        settings = Settings(5, 365, ":memory:", str(tmp_path / "settings.json"), "UTC")
+        collector = Collector(settings, None, conn, METER)
+        relay = Relay(collector, 0, "127.0.0.1")
+        await relay.start()
+        client = AsyncModbusTcpClient("127.0.0.1", port=relay.port, timeout=2, retries=0)
+        try:
+            await collector.poll_once()
+            await client.connect()
+            await client.read_input_registers(32768, count=5, device_id=1)
+            collector._mark_offline("busy")
+            pn = await client.read_input_registers(32768, count=5, device_id=1)
+            data = await client.read_input_registers(10644, count=2, device_id=1)
+        finally:
+            client.close()
+            await relay.close()
+            collector.close()
+            server.close()
+        # A restarted relay with no poll yet still knows the identity.
+        again = Relay(Collector(settings, None, conn, METER), 0, "127.0.0.1")
+        return pn, data, again.identity
+
+    pn, data, saved = asyncio.run(run())
+    assert decode("STRING", pn.registers) == METER_STATIC["meter_pn"]
+    assert data.isError() and data.exception_code == 0x0B  # live readings still refuse
+    assert saved
