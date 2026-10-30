@@ -141,7 +141,8 @@ class Collector:
                     reason = (str(err) or err.__class__.__name__).removeprefix("lost connection: ")
                     self._event("connection", f"Lost connection ({reason})")
                 self._mark_offline(str(err) or err.__class__.__name__)
-                backoff = min(backoff * 2, 60)
+                # A meter another client has grabbed frees its slot at any moment, so retry it sooner.
+                backoff = min(backoff * 2, 15 if self.profile.name == "meter" else 60)
                 log.warning("%s poll failed (%s); retrying in %ss", DEVICE_NAMES[self.profile.name], self.last_error, backoff)
                 await self._wait(backoff)
                 continue
