@@ -172,6 +172,9 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # Let go of the meter first: it accepts one Modbus client, and the new
+        # container (or Home Assistant) is waiting to take the slot.
+        collectors["meter"].close()
         control_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await control_task
