@@ -46,6 +46,7 @@ class Collector:
         # address), for the Modbus relay to serve.
         self.words: dict[tuple[int, int], int] = {}
         self.connected = False
+        self._closing = False
         self.last_update: float | None = None
         self.last_error: str | None = None
         self._bucket: MinuteBucket | MeterBucket | None = None
@@ -121,7 +122,7 @@ class Collector:
 
     async def run(self) -> None:
         backoff = self.settings.poll_seconds
-        while True:
+        while not self._closing:
             if not self.connection.host:
                 log.info("No %s address yet; waiting for setup", self.profile.name)
                 await self._wait(None)
@@ -250,6 +251,8 @@ class Collector:
 
     async def _ensure_client(self) -> AsyncModbusTcpClient:
         conn = self.connection
+        if self._closing:
+            raise ConnectionError("shutting down")
         if self.client is None:
             self.client = AsyncModbusTcpClient(conn.host, port=conn.port, timeout=5, retries=1)
         if not self.client.connected:
@@ -271,6 +274,7 @@ class Collector:
             self.client = None
 
     def close(self) -> None:
+        self._closing = True  # stop polling, so nothing reconnects during shutdown
         self.flush()
         if self.client is not None:
             self.client.close()

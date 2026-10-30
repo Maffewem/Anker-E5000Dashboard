@@ -41,6 +41,7 @@ class Relay:
         self.port = port
         self.host = host
         self.server: asyncio.base_events.Server | None = None
+        self._writers: set[asyncio.StreamWriter] = set()
         self.identity_path = Path(collector.settings.settings_path).with_name("meter-identity.json")
         self.identity: dict[tuple[int, int], int] = self._load_identity()
 
@@ -81,6 +82,10 @@ class Relay:
     async def close(self) -> None:
         if self.server is not None:
             self.server.close()
+            # Since Python 3.12 wait_closed() waits for every client, so a Home
+            # Assistant connection left open would hold up shutdown.
+            for writer in list(self._writers):
+                writer.close()
             await self.server.wait_closed()
             self.server = None
 
@@ -121,6 +126,7 @@ class Relay:
         who = f"{peer[0]}:{peer[1]}" if peer else "unknown"
         log.info("Relay client connected from %s", who)
         writes = 0
+        self._writers.add(writer)
         try:
             while True:
                 header = await reader.readexactly(7)
@@ -138,5 +144,6 @@ class Relay:
         except (asyncio.IncompleteReadError, ConnectionError):
             pass
         finally:
+            self._writers.discard(writer)
             log.info("Relay client %s disconnected", who)
             writer.close()

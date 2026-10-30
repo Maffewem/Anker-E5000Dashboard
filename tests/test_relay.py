@@ -103,3 +103,30 @@ def test_relay_keeps_answering_identity_when_meter_is_offline(tmp_path):
     assert decode("STRING", pn.registers) == METER_STATIC["meter_pn"]
     assert data.isError() and data.exception_code == 0x0B  # live readings still refuse
     assert saved
+
+
+def test_shutdown_releases_meter_and_does_not_wait_for_relay_clients(tmp_path):
+    async def run():
+        regs = Registers(METER_REGISTERS, METER_IMPLEMENTED)
+        regs.write(METER_STATIC)
+        regs.write(meter_values({"grid_power": 100}, 1.0, 2.0))
+        server = await asyncio.start_server(lambda r, w: handle(regs, r, w), "127.0.0.1", 0)
+        conn = Connection("127.0.0.1", server.sockets[0].getsockname()[1], 1)
+        settings = Settings(5, 365, ":memory:", str(tmp_path / "settings.json"), "UTC")
+        collector = Collector(settings, None, conn, METER)
+        relay = Relay(collector, 0, "127.0.0.1")
+        await relay.start()
+        task = asyncio.create_task(collector.run())
+        client = AsyncModbusTcpClient("127.0.0.1", port=relay.port, timeout=2, retries=0)
+        try:
+            await client.connect()
+            await asyncio.sleep(0.5)
+            collector.close()
+            await asyncio.wait_for(task, 5)  # the poll loop ends instead of reconnecting
+            await asyncio.wait_for(relay.close(), 5)  # an idle HA connection doesn't block it
+        finally:
+            client.close()
+            server.close()
+        return collector.client
+
+    assert asyncio.run(run()) is None
