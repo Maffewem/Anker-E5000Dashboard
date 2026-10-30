@@ -59,22 +59,27 @@ document.querySelectorAll(".card[data-collapsible]").forEach(makeCollapsible);
 // ---------- Theme ----------
 
 const darkQuery = matchMedia("(prefers-color-scheme: dark)");
-const isDark = () => document.documentElement.dataset.theme === "dark"
-  || (document.documentElement.dataset.theme !== "light" && darkQuery.matches);
+const THEME_MODES = ["auto", "light", "dark"];
+
+function themeMode() {
+  const t = document.documentElement.dataset.theme;
+  return t === "light" || t === "dark" ? t : "auto";
+}
 
 function showTheme() {
-  const dark = isDark();
-  const label = dark ? "Switch to light mode" : "Switch to dark mode";
+  const mode = themeMode();
+  const label = `Theme: ${mode} (click for ${THEME_MODES[(THEME_MODES.indexOf(mode) + 1) % 3]})`;
   const btn = $("theme-toggle");
-  btn.classList.toggle("is-dark", dark);
+  btn.dataset.mode = mode;
   btn.setAttribute("aria-label", label);
   btn.title = label;
 }
 
 $("theme-toggle").addEventListener("click", () => {
-  const theme = isDark() ? "light" : "dark";
-  document.documentElement.dataset.theme = theme;
-  try { localStorage.setItem("theme", theme); } catch (_) {}
+  const mode = THEME_MODES[(THEME_MODES.indexOf(themeMode()) + 1) % 3];
+  if (mode === "auto") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = mode;
+  try { localStorage.setItem("theme", mode); } catch (_) {}
   showTheme();
   refreshHistory();
   refreshEnergy();
