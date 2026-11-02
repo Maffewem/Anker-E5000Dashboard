@@ -1,6 +1,6 @@
 // Anker Solarbank overview for the Waveshare ESP32-S3 1.75" AMOLED round touch board (466x466).
 // Polls the dashboard's read-only /api/widget and draws swipeable pages. Display only: it never writes to the battery.
-// Library: "GFX Library for Arduino" (moononournation). UNTESTED on hardware, see README.md.
+// Libraries: "GFX Library for Arduino" (moononournation) and "U8g2" (for the smooth fonts). UNTESTED on hardware, see README.md.
 #include <Arduino_GFX_Library.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
@@ -26,7 +26,7 @@ Arduino_CO5300 *panel = new Arduino_CO5300(bus, LCD_RST, 0, 466, 466);
 Arduino_Canvas *gfx = new Arduino_Canvas(466, 466, panel);  // draw off-screen, then flush: no flicker
 
 const int W = 466, C = 233;
-const uint16_t BG = 0x0000, DIM = 0x4208, WHITE = 0xFFFF, YEL = 0xFE60, GRN = 0x2FEA, RED = 0xF9A6, PUR = 0xBA1F;
+const uint16_t BG = 0x0000, DIM = 0x18E3, WHITE = 0xFFFF, YEL = 0xFE60, GRN = 0x2FEA, RED = 0xF9A6, PUR = 0xBA1F;
 enum { P_OVERVIEW, P_BATTERY, P_SOLAR, P_GRID, P_HOME, P_SAVING, P_COUNT };
 int page = 0;
 
@@ -56,14 +56,20 @@ void fetch() {
 
 String kw(float w) { if (isnan(w)) return "--"; return fabsf(w) >= 1000 ? String(w / 1000, 2) + "kW" : String((int)w) + "W"; }
 void ctext(const String &s, int y, int size, uint16_t col) {
-  gfx->setTextSize(size); gfx->setTextColor(col);
+  // Smooth U8g2 fonts (needs the "U8g2" library). size 6 = big number, 3 = medium, 2 = small.
+  gfx->setFont(size >= 6 ? u8g2_font_logisoso58_tr : size >= 3 ? u8g2_font_helvB24_tf : u8g2_font_helvB14_tf);
+  gfx->setTextColor(col);
   int16_t x1, y1; uint16_t w, h; gfx->getTextBounds(s, 0, 0, &x1, &y1, &w, &h);
-  gfx->setCursor(C - w / 2, y); gfx->print(s);
+  gfx->setCursor(C - w / 2 - x1, y - y1); gfx->print(s);
 }
 void arc(float frac, uint16_t col, int r0, int r1) {  // ring from 7 o'clock, sweeping 270 degrees
   frac = isnan(frac) ? 0 : constrain(frac, 0.f, 1.f);
-  gfx->fillArc(C, C, r1, r0, 135, 135 + 270, DIM);
-  if (frac > 0) gfx->fillArc(C, C, r1, r0, 135, 135 + 270 * frac, col);
+  // Round dots along the ring: smooth, rounded ends, no angle wrap-around (fillArc left a stray sliver past 360 degrees).
+  int rm = (r0 + r1) / 2, rd = (r1 - r0) / 2;
+  for (int a = 0; a <= 270; a++) {
+    float t = (135 + a) * DEG_TO_RAD;
+    gfx->fillCircle(C + rm * cosf(t), C + rm * sinf(t), rd, a <= 270 * frac && frac > 0 ? col : DIM);
+  }
 }
 void spark(int p, uint16_t col) {
   if (hn < 2) return;
@@ -87,10 +93,9 @@ void draw() {
   gfx->fillScreen(BG);
   switch (page) {
     case P_OVERVIEW: {
-      arc(d.soc / 100, GRN, 205, 225);
+      arc(d.soc / 100, GRN, 202, 222);
       ctext(String(isnan(d.soc) ? 0 : (int)d.soc) + "%", 190, 6, WHITE);
-      gfx->setTextSize(3);
-      ctext("sun " + kw(d.solar), 110, 3, YEL);
+      ctext("sun " + kw(d.solar), 100, 3, YEL);
       ctext("home " + kw(d.home), 270, 3, RED);
       ctext("grid " + kw(d.grid), 320, 3, PUR);
       break; }
