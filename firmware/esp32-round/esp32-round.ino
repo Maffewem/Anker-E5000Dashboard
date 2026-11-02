@@ -87,16 +87,17 @@ unsigned long lastPage = 0;
 Preferences prefs;
 
 // Settings you can change from the web page (http://DEVICE_NAME.local/). config.h values are only the defaults.
-struct Settings { int dayBr, nightBr, nStart, nEnd, green, red, updHours, autoMs; } S;
+struct Settings { int dayBr, nightBr, nStart, nEnd, green, red, updHours, autoMs; bool solar; } S;
 void loadSettings() {
   S.dayBr = prefs.getInt("dayBr", DAY_BRIGHTNESS); S.nightBr = prefs.getInt("nightBr", NIGHT_BRIGHTNESS);
   S.nStart = prefs.getInt("nStart", NIGHT_START_HOUR); S.nEnd = prefs.getInt("nEnd", NIGHT_END_HOUR);
   S.green = prefs.getInt("green", LOAD_GREEN_BELOW_W); S.red = prefs.getInt("red", LOAD_RED_ABOVE_W);
   S.updHours = prefs.getInt("updHours", UPDATE_CHECK_HOURS); S.autoMs = prefs.getInt("autoMs", AUTO_PAGE_MS > 0 ? AUTO_PAGE_MS : 8000);
+  S.solar = prefs.getBool("solar", true);
 }
 void saveSettings() {
   prefs.putInt("dayBr", S.dayBr); prefs.putInt("nightBr", S.nightBr); prefs.putInt("nStart", S.nStart); prefs.putInt("nEnd", S.nEnd);
-  prefs.putInt("green", S.green); prefs.putInt("red", S.red); prefs.putInt("updHours", S.updHours); prefs.putInt("autoMs", S.autoMs);
+  prefs.putInt("green", S.green); prefs.putInt("red", S.red); prefs.putInt("updHours", S.updHours); prefs.putInt("autoMs", S.autoMs); prefs.putBool("solar", S.solar);
 }
 
 // Wi-Fi, URL and tokens live in the board's own memory (NVS), so a firmware built in CI (which has placeholder
@@ -176,8 +177,12 @@ void spark(int p, uint16_t col) {
     gfx->drawLine(x0, 330 - (hist[p][i - 1] - lo) / (hi - lo) * 40, x1, 330 - (hist[p][i] - lo) / (hi - lo) * 40, col);
   }
 }
+bool pageOn(int p) { return p != P_SOLAR || S.solar; }  // the Solar page can be switched off on the settings page
+int stepPage(int from, int dir) { int p = from; do p = (p + dir + P_COUNT) % P_COUNT; while (!pageOn(p)); return p; }
 void dots() {
-  for (int i = 0; i < P_COUNT; i++) gfx->fillCircle(C + (i - (P_COUNT - 1) / 2.0f) * 22, 440, 4, i == page ? WHITE : DIM);
+  int n = 0, at = 0;
+  for (int i = 0; i < P_COUNT; i++) if (pageOn(i)) { if (i == page) at = n; n++; }
+  for (int i = 0; i < n; i++) gfx->fillCircle(C + (i - (n - 1) / 2.0f) * 22, 440, 4, i == at ? WHITE : DIM);
 }
 void big(const char *title, const String &v, const String &sub, uint16_t col, int p) {
   ctext(title, 70, 2, WHITE); ctext(v, 150, 6, col); ctext(sub, 235, 2, DIM); spark(p, col);
@@ -214,7 +219,7 @@ void draw() {
       arc(d.soc / 100, ringColour(), 188, 208);                          // outer: battery %, coloured by battery power
       arc(isnan(d.home) ? 0 : d.home / USAGE_FULL_W, loadColour(), 166, 180);  // inner: live home use
       ctext(String(isnan(d.soc) ? 0 : (int)d.soc) + "%", 190, 6, WHITE);
-      ctext("sun " + kw(d.solar), 112, 3, YEL);
+      if (S.solar) ctext("sun " + kw(d.solar), 112, 3, YEL);
       ctext("home " + kw(d.home), 296, 3, RED);
       ctext("grid " + kw(d.grid), 342, 3, PUR);
       break; }
@@ -257,9 +262,8 @@ void handleTouch() {
   if (downX >= 0 && millis() - lastTouch > 80) {
     if (!longDone) {
       int dx = lastX - downX;
-      if (dx < -60) page = (page + 1) % P_COUNT;
-      else if (dx > 60) page = (page + P_COUNT - 1) % P_COUNT;
-      else page = (page + 1) % P_COUNT;
+      if (dx > 60) page = stepPage(page, -1);
+      else page = stepPage(page, 1);
       lastPage = millis();  // a touch restarts the auto timer
       draw();
     }
@@ -376,8 +380,9 @@ void webRoot() {
        ", grid " + kw(d.grid) + "<br><small>Wi-Fi " + String(WiFi.RSSI()) + " dBm, up " + String(millis() / 60000) + " min, firmware " + ESP.getSketchMD5().substring(0, 8) + "</small></p>";
   h += "<p>Show page: ";
   const char *names[] = {"Overview", "Battery", "Solar", "Grid", "Home", "Saved"};
-  for (int i = 0; i < P_COUNT; i++) h += String("<a class=b href='/page?n=") + i + "'>" + names[i] + "</a>";
+  for (int i = 0; i < P_COUNT; i++) if (pageOn(i)) h += String("<a class=b href='/page?n=") + i + "'>" + names[i] + "</a>";
   h += "</p><form method=post action=/save>";
+  h += String("<label><input type=checkbox name=solar value=1") + (S.solar ? " checked" : "") + "> Show solar (the sun line and Solar page)</label>";
   h += String("<label><input type=checkbox name=auto value=1") + (autoPage ? " checked" : "") + "> Auto page</label>";
   h += field("Seconds per page", "autoS", S.autoMs / 1000, "");
   h += field("Day brightness", "dayBr", S.dayBr, "0 to 255");
@@ -397,6 +402,7 @@ void webSave() {
   S.nStart = argInt("nStart", 0, 23, S.nStart); S.nEnd = argInt("nEnd", 0, 23, S.nEnd);
   S.green = argInt("green", 0, 20000, S.green); S.red = argInt("red", 0, 20000, S.red);
   S.updHours = argInt("updHours", 1, 168, S.updHours); S.autoMs = argInt("autoS", 2, 600, S.autoMs / 1000) * 1000;
+  S.solar = web.hasArg("solar"); if (!pageOn(page)) page = P_OVERVIEW;
   saveSettings(); setAuto(web.hasArg("auto")); curBrightReset = 1; draw();
   web.sendHeader("Location", "/"); web.send(303);
 }
@@ -452,7 +458,7 @@ void loop() {
   static unsigned long lastPoll = 0;
   unsigned long now = millis();
   if (now - lastPoll >= POLL_MS || lastPoll == 0) { lastPoll = now; fetch(); draw(); }
-  if (autoPage && now - lastPage >= S.autoMs) { lastPage = now; page = (page + 1) % P_COUNT; draw(); }
+  if (autoPage && now - lastPage >= S.autoMs) { lastPage = now; page = stepPage(page, 1); draw(); }
   static unsigned long lastCheck = 0;
   if (millis() > 60000 && (!lastCheck || now - lastCheck >= S.updHours * 3600000UL)) { lastCheck = now; checkUpdate(); }
   if (!otaOn && WiFi.status() == WL_CONNECTED) { otaStart(); webStart(); }
