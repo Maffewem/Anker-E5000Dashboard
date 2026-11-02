@@ -87,16 +87,17 @@ unsigned long lastPage = 0;
 Preferences prefs;
 
 // Settings you can change from the web page (http://DEVICE_NAME.local/). config.h values are only the defaults.
-struct Settings { int dayBr, nightBr, nStart, nEnd, green, red, updHours, autoMs; } S;
+struct Settings { int dayBr, nightBr, nStart, nEnd, green, red, updHours, autoMs; bool solar; } S;
 void loadSettings() {
   S.dayBr = prefs.getInt("dayBr", DAY_BRIGHTNESS); S.nightBr = prefs.getInt("nightBr", NIGHT_BRIGHTNESS);
   S.nStart = prefs.getInt("nStart", NIGHT_START_HOUR); S.nEnd = prefs.getInt("nEnd", NIGHT_END_HOUR);
   S.green = prefs.getInt("green", LOAD_GREEN_BELOW_W); S.red = prefs.getInt("red", LOAD_RED_ABOVE_W);
   S.updHours = prefs.getInt("updHours", UPDATE_CHECK_HOURS); S.autoMs = prefs.getInt("autoMs", AUTO_PAGE_MS > 0 ? AUTO_PAGE_MS : 8000);
+  S.solar = prefs.getBool("solar", true);
 }
 void saveSettings() {
   prefs.putInt("dayBr", S.dayBr); prefs.putInt("nightBr", S.nightBr); prefs.putInt("nStart", S.nStart); prefs.putInt("nEnd", S.nEnd);
-  prefs.putInt("green", S.green); prefs.putInt("red", S.red); prefs.putInt("updHours", S.updHours); prefs.putInt("autoMs", S.autoMs);
+  prefs.putInt("green", S.green); prefs.putInt("red", S.red); prefs.putInt("updHours", S.updHours); prefs.putInt("autoMs", S.autoMs); prefs.putBool("solar", S.solar);
 }
 
 // Wi-Fi, URL and tokens live in the board's own memory (NVS), so a firmware built in CI (which has placeholder
@@ -176,8 +177,12 @@ void spark(int p, uint16_t col) {
     gfx->drawLine(x0, 330 - (hist[p][i - 1] - lo) / (hi - lo) * 40, x1, 330 - (hist[p][i] - lo) / (hi - lo) * 40, col);
   }
 }
+bool pageOn(int p) { return p != P_SOLAR || S.solar; }  // the Solar page can be switched off on the settings page
+int stepPage(int from, int dir) { int p = from; do p = (p + dir + P_COUNT) % P_COUNT; while (!pageOn(p)); return p; }
 void dots() {
-  for (int i = 0; i < P_COUNT; i++) gfx->fillCircle(C + (i - (P_COUNT - 1) / 2.0f) * 22, 440, 4, i == page ? WHITE : DIM);
+  int n = 0, at = 0;
+  for (int i = 0; i < P_COUNT; i++) if (pageOn(i)) { if (i == page) at = n; n++; }
+  for (int i = 0; i < n; i++) gfx->fillCircle(C + (i - (n - 1) / 2.0f) * 22, 440, 4, i == at ? WHITE : DIM);
 }
 void big(const char *title, const String &v, const String &sub, uint16_t col, int p) {
   ctext(title, 70, 2, WHITE); ctext(v, 150, 6, col); ctext(sub, 235, 2, DIM); spark(p, col);
@@ -214,7 +219,7 @@ void draw() {
       arc(d.soc / 100, ringColour(), 188, 208);                          // outer: battery %, coloured by battery power
       arc(isnan(d.home) ? 0 : d.home / USAGE_FULL_W, loadColour(), 166, 180);  // inner: live home use
       ctext(String(isnan(d.soc) ? 0 : (int)d.soc) + "%", 190, 6, WHITE);
-      ctext("sun " + kw(d.solar), 112, 3, YEL);
+      if (S.solar) ctext("sun " + kw(d.solar), 112, 3, YEL);
       ctext("home " + kw(d.home), 296, 3, RED);
       ctext("grid " + kw(d.grid), 342, 3, PUR);
       break; }
@@ -257,9 +262,8 @@ void handleTouch() {
   if (downX >= 0 && millis() - lastTouch > 80) {
     if (!longDone) {
       int dx = lastX - downX;
-      if (dx < -60) page = (page + 1) % P_COUNT;
-      else if (dx > 60) page = (page + P_COUNT - 1) % P_COUNT;
-      else page = (page + 1) % P_COUNT;
+      if (dx > 60) page = stepPage(page, -1);
+      else page = stepPage(page, 1);
       lastPage = millis();  // a touch restarts the auto timer
       draw();
     }
@@ -365,19 +369,54 @@ int argInt(const char *name, int lo, int hi, int def) {
 String field(const char *label, const char *name, int val, const char *hint) {
   return String("<label>") + label + "<input type=number name=" + name + " value=" + val + "><small>" + hint + "</small></label>";
 }
+// Live round preview on the settings page: draws the same layout as the screen from /state, in the browser.
+const char PREVIEW_JS[] = R"JS(
+<div id=pv style="width:min(340px,100%);aspect-ratio:1;margin:1rem auto;border-radius:50%;background:#000;border:4px solid #222;overflow:hidden;cursor:pointer"></div>
+<p style="text-align:center"><small>Live preview of the screen. Tap it to change page.</small></p>
+<script>
+var st=null,C={sun:'#f6cc2c',bat:'#2fd47a',home:'#f2564b',grid:'#b985f5',org:'#ff9a2e',dim:'#1c1c21'};
+function kw(w){return w==null?'--':Math.abs(w)>=1000?(w/1000).toFixed(2)+'kW':Math.round(w)+'W'}
+function arc(r,a0,a1){var p=function(a){a=a*Math.PI/180;return[233+r*Math.cos(a),233+r*Math.sin(a)]},s=p(a0),e=p(a1);return'M'+s+' A'+r+' '+r+' 0 '+((a1-a0)>180?1:0)+' 1 '+e}
+function T(x,y,t,sz,c){return'<text x="'+x+'" y="'+y+'" font-size="'+sz+'" font-family="system-ui" text-anchor="middle" fill="'+c+'">'+t+'</text>'}
+function big(t,v,sub,c){return T(233,95,t,26,'#e8e8ea')+T(233,205,v,96,c)+T(233,255,sub,26,'#6b6b73')}
+function draw(){var d=st,b='';if(!d)return;
+var p=d.page,sc=d.soc==null?0:d.soc;
+if(!d.online){b=T(233,200,'Dashboard',44,C.home)+T(233,260,'unreachable',44,C.home)}
+else if(p==0){var bc=sc>=67?C.bat:sc>=34?C.org:C.home,lc=d.home==null?'#555':d.home<d.green?C.bat:d.home>d.red?C.home:C.org;
+b='<path d="'+arc(198,135,405)+'" stroke="'+C.dim+'" stroke-width="20" fill="none"/><path d="'+arc(198,135,135+270*sc/100)+'" stroke="'+bc+'" stroke-width="20" fill="none" stroke-linecap="round"/><path d="'+arc(173,135,405)+'" stroke="'+C.dim+'" stroke-width="14" fill="none"/>'+(d.home>0?'<path d="'+arc(173,135,135+270*Math.min(d.home/4000,1))+'" stroke="'+lc+'" stroke-width="14" fill="none" stroke-linecap="round"/>':'')+T(233,235,Math.round(sc)+'%',96,'#e8e8ea')+(d.solarOn?T(233,130,'sun '+kw(d.solar),34,C.sun):'')+T(233,320,'home '+kw(d.home),34,C.home)+T(233,362,'grid '+kw(d.grid),34,C.grid)}
+else if(p==1)b=big('Battery',Math.round(sc)+'%',kw(d.batt)+' '+(d.batt<-20?'charging':d.batt>20?'discharging':'idle'),C.bat);
+else if(p==2)b=big('Solar',kw(d.solar),'generating now',C.sun);
+else if(p==3)b=big('Grid',kw(d.grid),d.grid>0?'importing':'exporting',C.grid);
+else if(p==4)b=big('Home',kw(d.home),'using now',C.home);
+else b=big('Saved today',d.saved==null?'--':'£'+d.saved.toFixed(2),'from the dashboard tariff',C.bat);
+document.getElementById('pv').innerHTML='<svg viewBox="0 0 466 466" width="100%" height="100%">'+b+'</svg>'}
+function poll(){fetch('/state').then(function(r){return r.json()}).then(function(j){st=j;draw()}).catch(function(){})}
+document.getElementById('pv').onclick=function(){if(!st)return;var n=st.page;do{n=(n+1)%6}while(n==2&&!st.solarOn);fetch('/page?n='+n).then(poll)};
+poll();setInterval(poll,3000);
+</script>
+)JS";
+void webState() {
+  if (!web.authenticate("admin", cfg.otaPw.c_str())) return web.requestAuthentication();
+  JsonDocument j;
+  j["page"] = page; j["online"] = !(err.length() && !haveData); j["solarOn"] = S.solar; j["green"] = S.green; j["red"] = S.red;
+  if (!isnan(d.soc)) j["soc"] = d.soc; if (!isnan(d.solar)) j["solar"] = d.solar; if (!isnan(d.home)) j["home"] = d.home;
+  if (!isnan(d.batt)) j["batt"] = d.batt; if (!isnan(d.grid)) j["grid"] = d.grid; if (!isnan(d.saved)) j["saved"] = d.saved;
+  String out; serializeJson(j, out); web.send(200, "application/json", out);
+}
 void webRoot() {
   if (!web.authenticate("admin", cfg.otaPw.c_str())) return web.requestAuthentication();
   String h = F("<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'><title>Anker display</title>"
-               "<style>body{font:16px system-ui;background:#111;color:#eee;max-width:30rem;margin:1rem auto;padding:0 1rem}"
-               "label{display:block;margin:.7rem 0}input{display:block;width:100%;padding:.5rem;font:inherit;margin-top:.2rem}"
+               "<style>body{font:16px system-ui;background:#0b0b0d;color:#e8e8ea;max-width:30rem;margin:1rem auto;padding:0 1rem}"
+               "label{display:block;margin:.7rem 0}input{display:block;width:100%;padding:.5rem;font:inherit;margin-top:.2rem;background:#1c1c21;color:#e8e8ea;border:1px solid #333;border-radius:.3rem;box-sizing:border-box}"
                "input[type=checkbox]{width:auto;display:inline}small{color:#999}button,a.b{display:inline-block;padding:.6rem 1rem;margin:.3rem .3rem .3rem 0;"
-               "background:#2a6;border:0;color:#fff;font:inherit;border-radius:.3rem;text-decoration:none}</style>");
-  h += "<h2>Anker display</h2><p>Battery " + String(isnan(d.soc) ? 0 : (int)d.soc) + "%, home " + kw(d.home) + ", solar " + kw(d.solar) +
+               "background:#2fd47a;color:#04210f;border:0;font:inherit;font-weight:700;border-radius:.3rem;text-decoration:none}</style>");
+  h += "<h2>Anker display</h2>"; h += PREVIEW_JS; h += "<p>Battery " + String(isnan(d.soc) ? 0 : (int)d.soc) + "%, home " + kw(d.home) + ", solar " + kw(d.solar) +
        ", grid " + kw(d.grid) + "<br><small>Wi-Fi " + String(WiFi.RSSI()) + " dBm, up " + String(millis() / 60000) + " min, firmware " + ESP.getSketchMD5().substring(0, 8) + "</small></p>";
   h += "<p>Show page: ";
   const char *names[] = {"Overview", "Battery", "Solar", "Grid", "Home", "Saved"};
-  for (int i = 0; i < P_COUNT; i++) h += String("<a class=b href='/page?n=") + i + "'>" + names[i] + "</a>";
+  for (int i = 0; i < P_COUNT; i++) if (pageOn(i)) h += String("<a class=b href='/page?n=") + i + "'>" + names[i] + "</a>";
   h += "</p><form method=post action=/save>";
+  h += String("<label><input type=checkbox name=solar value=1") + (S.solar ? " checked" : "") + "> Show solar (the sun line and Solar page)</label>";
   h += String("<label><input type=checkbox name=auto value=1") + (autoPage ? " checked" : "") + "> Auto page</label>";
   h += field("Seconds per page", "autoS", S.autoMs / 1000, "");
   h += field("Day brightness", "dayBr", S.dayBr, "0 to 255");
@@ -397,6 +436,7 @@ void webSave() {
   S.nStart = argInt("nStart", 0, 23, S.nStart); S.nEnd = argInt("nEnd", 0, 23, S.nEnd);
   S.green = argInt("green", 0, 20000, S.green); S.red = argInt("red", 0, 20000, S.red);
   S.updHours = argInt("updHours", 1, 168, S.updHours); S.autoMs = argInt("autoS", 2, 600, S.autoMs / 1000) * 1000;
+  S.solar = web.hasArg("solar"); if (!pageOn(page)) page = P_OVERVIEW;
   saveSettings(); setAuto(web.hasArg("auto")); curBrightReset = 1; draw();
   web.sendHeader("Location", "/"); web.send(303);
 }
@@ -412,7 +452,7 @@ void webUpdate() {
 }
 void webStart() {
   if (!cfg.otaPw.length()) return;  // no password set: no page
-  web.on("/", webRoot); web.on("/save", HTTP_POST, webSave); web.on("/page", webPage); web.on("/update", HTTP_POST, webUpdate);
+  web.on("/", webRoot); web.on("/save", HTTP_POST, webSave); web.on("/page", webPage); web.on("/state", webState); web.on("/update", HTTP_POST, webUpdate);
   web.begin();
 }
 
@@ -452,7 +492,7 @@ void loop() {
   static unsigned long lastPoll = 0;
   unsigned long now = millis();
   if (now - lastPoll >= POLL_MS || lastPoll == 0) { lastPoll = now; fetch(); draw(); }
-  if (autoPage && now - lastPage >= S.autoMs) { lastPage = now; page = (page + 1) % P_COUNT; draw(); }
+  if (autoPage && now - lastPage >= S.autoMs) { lastPage = now; page = stepPage(page, 1); draw(); }
   static unsigned long lastCheck = 0;
   if (millis() > 60000 && (!lastCheck || now - lastCheck >= S.updHours * 3600000UL)) { lastCheck = now; checkUpdate(); }
   if (!otaOn && WiFi.status() == WL_CONNECTED) { otaStart(); webStart(); }
