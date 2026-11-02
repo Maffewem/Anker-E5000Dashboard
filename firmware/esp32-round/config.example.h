@@ -8,3 +8,5 @@
 #define WIDGET_TOKEN   "paste-the-WIDGET_TOKEN-here"
 #define POLL_MS        5000     // how often to fetch
 #define AUTO_PAGE_MS   0        // >0 cycles pages by itself (ms), 0 = swipe/tap only
+// Password for Wi-Fi uploads (OTA). Arduino IDE asks for it when you upload over the network.
+#define OTA_PASSWORD   "choose-a-password"

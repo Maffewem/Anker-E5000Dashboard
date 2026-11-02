@@ -6,6 +6,7 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Wire.h>
+#include <ArduinoOTA.h>
 #include "config.h"
 
 // ---- Board pins (Waveshare ESP32-S3-Touch-AMOLED-1.75; check against your board's wiki) ----
@@ -137,6 +138,19 @@ void handleTouch() {
   }
 }
 
+// Over-the-air updates: after one USB flash, upload from Arduino IDE (Tools > Port > anker-display) over Wi-Fi.
+bool otaOn = false;
+void otaStart() {
+  ArduinoOTA.setHostname("anker-display");
+  ArduinoOTA.setPassword(OTA_PASSWORD);
+  ArduinoOTA.onStart([]() { gfx->fillScreen(BG); ctext("Updating...", 200, 3, WHITE); gfx->flush(); });
+  ArduinoOTA.onProgress([](unsigned int done, unsigned int total) {
+    arc((float)done / total, GRN, 202, 222); gfx->flush();
+  });
+  ArduinoOTA.begin();
+  otaOn = true;
+}
+
 void setup() {
   Serial.begin(115200);
   Wire.begin(TP_SDA, TP_SCL); pinMode(TP_INT, INPUT_PULLUP);
@@ -151,6 +165,8 @@ void loop() {
   unsigned long now = millis();
   if (now - lastPoll >= POLL_MS || lastPoll == 0) { lastPoll = now; fetch(); draw(); }
   if (AUTO_PAGE_MS > 0 && now - lastPage >= AUTO_PAGE_MS) { lastPage = now; page = (page + 1) % P_COUNT; draw(); }
+  if (!otaOn && WiFi.status() == WL_CONNECTED) otaStart();
+  if (otaOn) ArduinoOTA.handle();
   handleTouch();
   delay(10);
 }
