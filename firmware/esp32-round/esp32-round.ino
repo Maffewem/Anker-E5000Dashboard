@@ -207,7 +207,7 @@ void draw() {
   gfx->fillScreen(BG);
   switch (page) {
     case P_OVERVIEW: {
-      arc(d.soc / 100, loadColour(), 202, 222);
+      arc(d.soc / 100, loadColour(), 188, 208);
       ctext(String(isnan(d.soc) ? 0 : (int)d.soc) + "%", 190, 6, WHITE);
       ctext("sun " + kw(d.solar), 112, 3, YEL);
       ctext("home " + kw(d.home), 296, 3, RED);
@@ -276,7 +276,7 @@ void otaStart() {
   ArduinoOTA.setPassword(cfg.otaPw.c_str());
   ArduinoOTA.onStart([]() { gfx->fillScreen(BG); ctext("Updating...", 200, 3, WHITE); gfx->flush(); });
   ArduinoOTA.onProgress([](unsigned int done, unsigned int total) {
-    arc((float)done / total, GRN, 202, 222); gfx->flush();
+    arc((float)done / total, GRN, 188, 208); gfx->flush();
   });
   ArduinoOTA.begin();
   otaOn = true;
@@ -286,7 +286,7 @@ void otaStart() {
 // "dashboard": asks your dashboard (/api/firmware/esp32-round, same token). "github": reads firmware/dist/ from the repo
 // with a read-only token. Either way the CI build's MD5 is compared with the running firmware's.
 // Security note: GitHub mode talks https without checking the server certificate (setInsecure); the token is read-only.
-void updateProgress(int done, int total) { arc((float)done / total, GRN, 202, 222); gfx->flush(); }
+void updateProgress(int done, int total) { arc((float)done / total, GRN, 188, 208); gfx->flush(); }
 
 bool httpGet(const String &url, const char *auth, bool raw, String &out) {
   bool tls = url.startsWith("https");
