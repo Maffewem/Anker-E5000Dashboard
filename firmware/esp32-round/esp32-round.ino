@@ -301,32 +301,35 @@ bool httpGet(const String &url, const char *auth, bool raw, String &out) {
   return code == 200;
 }
 
+String updMsg = "";  // result of the last update check, shown on the settings page
 void checkUpdate() {
-  if (cfg.updSrc == "off" || WiFi.status() != WL_CONNECTED) return;
+  updMsg = "";
+  if (cfg.updSrc == "off") { updMsg = "Updates are off (update source is off)."; return; }
+  if (WiFi.status() != WL_CONNECTED) { updMsg = "Not connected to Wi-Fi."; return; }
   bool gh = cfg.updSrc == "github";
   String base, md5, body;
   if (gh) {
-    if (!cfg.ghToken.length()) return;
+    if (!cfg.ghToken.length()) { updMsg = "No GitHub token set."; return; }
     base = "https://api.github.com/repos/" + cfg.ghRepo + "/contents/firmware/dist/esp32-round";
-    if (!httpGet(base + ".md5?ref=" + cfg.ghBranch, cfg.ghToken.c_str(), true, body)) return;
+    if (!httpGet(base + ".md5?ref=" + cfg.ghBranch, cfg.ghToken.c_str(), true, body)) { updMsg = "Could not reach GitHub, or no build is published yet (check the token and branch)."; return; }
     md5 = body;
   } else {
     base = cfg.url; base.replace("/api/widget", "/api/firmware/esp32-round");
-    if (!httpGet(base, cfg.token.c_str(), false, body)) return;
-    JsonDocument j; if (deserializeJson(j, body)) return;
+    if (!httpGet(base, cfg.token.c_str(), false, body)) { updMsg = "The dashboard has no firmware to offer yet (it needs redeploying once a build is published), or the token is wrong."; return; }
+    JsonDocument j; if (deserializeJson(j, body)) { updMsg = "Unreadable reply from the dashboard."; return; }
     md5 = String((const char *)(j["md5"] | ""));
   }
   md5.trim(); md5.toLowerCase();
-  if (md5.length() != 32) return;
+  if (md5.length() != 32) { updMsg = "Bad checksum from the update source."; return; }
   // Skip if we already run it, or already installed it once (stops an install loop if the two checksums ever differ).
-  if (md5 == ESP.getSketchMD5() || md5 == prefs.getString("lastmd5")) return;
+  if (md5 == ESP.getSketchMD5() || md5 == prefs.getString("lastmd5")) { updMsg = "Already up to date."; return; }
 
   gfx->fillScreen(BG); ctext("Updating...", 200, 3, WHITE); gfx->flush();
   // Download and flash by hand with HTTPClient + Update, so it needs no HTTPUpdate extras and works on any arduino-esp32 core.
   String binUrl = base + ".bin" + (gh ? "?ref=" + cfg.ghBranch : "");
   WiFiClientSecure sec; WiFiClient plain; if (gh) sec.setInsecure();
   HTTPClient h; h.setTimeout(15000); h.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  if (!(gh ? h.begin(sec, binUrl) : h.begin(plain, binUrl))) { err = "update failed"; draw(); return; }
+  if (!(gh ? h.begin(sec, binUrl) : h.begin(plain, binUrl))) { err = "update failed"; updMsg = "Update failed to start."; draw(); return; }
   if (gh) { h.addHeader("Authorization", "Bearer " + cfg.ghToken); h.addHeader("Accept", "application/vnd.github.raw+json"); h.addHeader("User-Agent", DEVICE_NAME); }
   else h.addHeader("Authorization", "Bearer " + cfg.token);
   bool ok = false;
@@ -342,7 +345,7 @@ void checkUpdate() {
   }
   h.end();
   if (ok) { prefs.putString("lastmd5", md5); ESP.restart(); }
-  err = "update failed"; draw();
+  err = "update failed"; updMsg = "Update download failed."; draw();
 }
 
 // ---- Web settings page: http://DEVICE_NAME.local/ (or the board's IP). Sign in as "admin" with OTA_PASSWORD. ----
@@ -380,6 +383,7 @@ void webRoot() {
   h += field("Ring red above (W)", "red", S.red, "orange in between");
   h += field("Check for update every (hours)", "updHours", S.updHours, "1 to 168");
   h += "<button>Save</button></form><form method=post action=/update><button>Check for update now</button></form>";
+  if (updMsg.length()) h += "<p><b>Last check:</b> " + updMsg + "</p>";
   web.send(200, "text/html", h);
 }
 void webSave() {
