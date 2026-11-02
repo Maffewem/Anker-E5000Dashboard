@@ -19,3 +19,6 @@ The token travels in plain http on your LAN. Keep the board on the LAN or Tailsc
 ## Updating over Wi-Fi (OTA)
 Flash once over USB first. After that the board appears in Arduino IDE under Tools > Port > Network ports as `anker-display`. Pick it and Upload; enter `OTA_PASSWORD` when asked. The screen shows "Updating..." with a progress ring. Add `OTA_PASSWORD` to your existing `config.h` (see `config.example.h`) before the next USB flash, or it won't compile. Keep the partition scheme on one with two app slots (the default 16MB schemes have them), otherwise OTA fails.
 The board and your computer must be on the same network, and anyone on that network with the password can replace the firmware, so use a real one.
+
+## Night dimming
+Set `DAY_BRIGHTNESS`, `NIGHT_BRIGHTNESS`, `NIGHT_START_HOUR`, `NIGHT_END_HOUR` and `TIMEZONE` in `config.h` (all optional; defaults dim to 15 from 22:00 to 07:00 UK time). The time comes from the internet (NTP) over Wi-Fi, and until it is known the screen stays at day brightness. Set `NIGHT_BRIGHTNESS` to 0 to turn the screen off at night.

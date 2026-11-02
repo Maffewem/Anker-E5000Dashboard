@@ -9,6 +9,23 @@
 #include <ArduinoOTA.h>
 #include "config.h"
 
+// Optional settings: an older config.h without these still compiles with the defaults.
+#ifndef DAY_BRIGHTNESS
+#define DAY_BRIGHTNESS 180        // 0-255
+#endif
+#ifndef NIGHT_BRIGHTNESS
+#define NIGHT_BRIGHTNESS 15       // 0-255, 0 = off
+#endif
+#ifndef NIGHT_START_HOUR
+#define NIGHT_START_HOUR 22       // dim from this hour (0-23)...
+#endif
+#ifndef NIGHT_END_HOUR
+#define NIGHT_END_HOUR 7          // ...until this hour. Set both equal to disable dimming.
+#endif
+#ifndef TIMEZONE
+#define TIMEZONE "GMT0BST,M3.5.0/1,M10.5.0"  // UK time with daylight saving
+#endif
+
 // ---- Board pins (Waveshare ESP32-S3-Touch-AMOLED-1.75; check against your board's wiki) ----
 #define LCD_CS 12
 #define LCD_SCK 38
@@ -151,10 +168,28 @@ void otaStart() {
   otaOn = true;
 }
 
+// Dim between NIGHT_START_HOUR and NIGHT_END_HOUR using NTP time. Until the clock is set it stays at day brightness.
+int curBright = -1;
+void updateBrightness() {
+  static unsigned long last = 0;
+  if (millis() - last < 30000 && last) return;
+  last = millis();
+  struct tm t;
+  int target = DAY_BRIGHTNESS;
+  if (getLocalTime(&t, 0) && NIGHT_START_HOUR != NIGHT_END_HOUR) {
+    int h = t.tm_hour;
+    bool night = NIGHT_START_HOUR < NIGHT_END_HOUR ? (h >= NIGHT_START_HOUR && h < NIGHT_END_HOUR)
+                                                   : (h >= NIGHT_START_HOUR || h < NIGHT_END_HOUR);
+    if (night) target = NIGHT_BRIGHTNESS;
+  }
+  if (target != curBright) { curBright = target; panel->setBrightness(target); }
+}
+
 void setup() {
   Serial.begin(115200);
   Wire.begin(TP_SDA, TP_SCL); pinMode(TP_INT, INPUT_PULLUP);
-  gfx->begin(); panel->setBrightness(180);
+  gfx->begin(); panel->setBrightness(DAY_BRIGHTNESS);
+  configTzTime(TIMEZONE, "pool.ntp.org", "time.google.com");
   WiFi.mode(WIFI_STA); WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   for (int i = 0; i < 6; i++) for (int p = 0; p < 60; p++) hist[i][p] = NAN;
   draw();
@@ -167,6 +202,7 @@ void loop() {
   if (AUTO_PAGE_MS > 0 && now - lastPage >= AUTO_PAGE_MS) { lastPage = now; page = (page + 1) % P_COUNT; draw(); }
   if (!otaOn && WiFi.status() == WL_CONNECTED) otaStart();
   if (otaOn) ArduinoOTA.handle();
+  updateBrightness();
   handleTouch();
   delay(10);
 }

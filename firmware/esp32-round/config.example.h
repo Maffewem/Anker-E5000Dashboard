@@ -10,3 +10,9 @@
 #define AUTO_PAGE_MS   0        // >0 cycles pages by itself (ms), 0 = swipe/tap only
 // Password for Wi-Fi uploads (OTA). Arduino IDE asks for it when you upload over the network.
 #define OTA_PASSWORD   "choose-a-password"
+// Night dimming (optional). Brightness is 0-255; the screen dims from NIGHT_START_HOUR until NIGHT_END_HOUR.
+#define DAY_BRIGHTNESS    180
+#define NIGHT_BRIGHTNESS  15
+#define NIGHT_START_HOUR  22
+#define NIGHT_END_HOUR    7
+#define TIMEZONE          "GMT0BST,M3.5.0/1,M10.5.0"  // POSIX TZ string; this is UK time with daylight saving
