@@ -45,7 +45,7 @@ Arduino_CO5300 *panel = new Arduino_CO5300(bus, LCD_RST, 0, 466, 466);
 Arduino_Canvas *gfx = new Arduino_Canvas(466, 466, panel);  // draw off-screen, then flush: no flicker
 
 const int W = 466, C = 233;
-const uint16_t BG = 0x0000, DIM = 0x18E3, WHITE = 0xFFFF, YEL = 0xFE60, GRN = 0x2FEA, RED = 0xF9A6, PUR = 0xBA1F;
+const uint16_t BG = 0x0000, DIM = 0x18E3, WHITE = 0xFFFF, YEL = 0xFE60, GRN = 0x2FEA, RED = 0xF9A6, ORG = 0xFD20, PUR = 0xBA1F;
 enum { P_OVERVIEW, P_BATTERY, P_SOLAR, P_GRID, P_HOME, P_SAVING, P_COUNT };
 int page = 0;
 #define BTN_PIN 0  // BOOT button on the board
@@ -57,7 +57,11 @@ void setAuto(bool on) { autoPage = on; lastPage = millis(); prefs.putBool("auto"
 
 struct Data { float soc = NAN, solar = NAN, home = NAN, batt = NAN, grid = NAN, saved = NAN; bool online = false; long age = -1; } d;
 String err = "starting";
-float hist[P_COUNT][60]; int hn = 0;  // last ~5 min of each series for the sparkline
+#define HN 180        // history points per series
+#define HIST_MS 60000 // one point a minute = the last 3 hours
+float hist[P_COUNT][HN]; int hn = 0; unsigned long lastHist = 0;
+bool haveData = false;
+uint16_t battColour() { return isnan(d.batt) || d.batt < -20 ? GRN : d.batt > 20 ? ORG : DIM; }  // charging green, discharging orange
 
 void fetch() {
   if (WiFi.status() != WL_CONNECTED) { err = "wifi"; return; }
@@ -70,13 +74,16 @@ void fetch() {
   JsonDocument j;
   if (deserializeJson(j, http.getString())) { err = "bad json"; http.end(); return; }
   http.end();
-  err = "";
+  err = ""; haveData = true;
   d.soc = j["soc"] | NAN; d.solar = j["solar_w"] | NAN; d.home = j["home_w"] | NAN;
   d.batt = j["battery_w"] | NAN; d.grid = j["grid_w"] | NAN; d.saved = j["saved_today"] | NAN;
   d.online = j["online"] | false; d.age = j["age_s"] | -1L;
   float v[P_COUNT] = {d.solar, d.soc, d.solar, d.grid, d.home, d.saved};
-  if (hn == 60) for (int p = 0; p < P_COUNT; p++) memmove(hist[p], hist[p] + 1, 59 * sizeof(float)); else hn++;
-  for (int p = 0; p < P_COUNT; p++) hist[p][hn - 1] = v[p];
+  if (!lastHist || millis() - lastHist >= HIST_MS) {
+    lastHist = millis() ? millis() : 1;
+    if (hn == HN) for (int p = 0; p < P_COUNT; p++) memmove(hist[p], hist[p] + 1, (HN - 1) * sizeof(float)); else hn++;
+    for (int p = 0; p < P_COUNT; p++) hist[p][hn - 1] = v[p];
+  } else for (int p = 0; p < P_COUNT; p++) hist[p][hn - 1] = v[p];  // keep the newest point current
 }
 
 String kw(float w) { if (isnan(w)) return "--"; return fabsf(w) >= 1000 ? String(w / 1000, 2) + "kW" : String((int)w) + "W"; }
@@ -103,7 +110,7 @@ void spark(int p, uint16_t col) {
   if (hi <= lo) hi = lo + 1;
   for (int i = 1; i < hn; i++) {
     if (isnan(hist[p][i]) || isnan(hist[p][i - 1])) continue;
-    int x0 = 90 + (i - 1) * 286 / 59, x1 = 90 + i * 286 / 59;
+    int x0 = 90 + (i - 1) * 286 / (hn - 1), x1 = 90 + i * 286 / (hn - 1);
     gfx->drawLine(x0, 330 - (hist[p][i - 1] - lo) / (hi - lo) * 40, x1, 330 - (hist[p][i] - lo) / (hi - lo) * 40, col);
   }
 }
@@ -114,11 +121,28 @@ void big(const char *title, const String &v, const String &sub, uint16_t col, in
   ctext(title, 70, 2, WHITE); ctext(v, 150, 6, col); ctext(sub, 235, 2, DIM); spark(p, col);
 }
 
+void wifiBars() {  // four small bars from the Wi-Fi signal, bottom right of centre
+  int rssi = WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : -100;
+  int n = rssi > -55 ? 4 : rssi > -65 ? 3 : rssi > -75 ? 2 : rssi > -85 ? 1 : 0;
+  for (int i = 0; i < 4; i++) gfx->fillRect(C + 85 + i * 7, 446 - (i + 1) * 5, 5, (i + 1) * 5, i < n ? WHITE : DIM);
+}
+
+void drawUnreachable() {
+  gfx->fillScreen(BG);
+  ctext(WiFi.status() == WL_CONNECTED ? "Dashboard" : "No Wi-Fi", 150, 3, RED);
+  ctext(WiFi.status() == WL_CONNECTED ? "unreachable" : "connecting...", 190, 3, RED);
+  ctext(err, 250, 2, WHITE);
+  ctext("retrying every few seconds", 300, 2, DIM);
+  wifiBars();
+  gfx->flush();
+}
+
 void draw() {
+  if (err.length() && !haveData) { drawUnreachable(); return; }
   gfx->fillScreen(BG);
   switch (page) {
     case P_OVERVIEW: {
-      arc(d.soc / 100, GRN, 202, 222);
+      arc(d.soc / 100, battColour(), 202, 222);
       ctext(String(isnan(d.soc) ? 0 : (int)d.soc) + "%", 190, 6, WHITE);
       ctext("sun " + kw(d.solar), 100, 3, YEL);
       ctext("home " + kw(d.home), 270, 3, RED);
@@ -126,7 +150,7 @@ void draw() {
       break; }
     case P_BATTERY: {
       String state = isnan(d.batt) ? "" : d.batt > 20 ? "discharging" : d.batt < -20 ? "charging" : "idle";
-      big("Battery", String(isnan(d.soc) ? 0 : (int)d.soc) + "%", kw(d.batt) + " " + state, GRN, P_BATTERY); break; }
+      big("Battery", String(isnan(d.soc) ? 0 : (int)d.soc) + "%", kw(d.batt) + " " + state, battColour(), P_BATTERY); break; }
     case P_SOLAR: big("Solar", kw(d.solar), "generating now", YEL, P_SOLAR); break;
     case P_GRID: big("Grid", kw(d.grid), isnan(d.grid) ? "" : d.grid > 0 ? "importing" : "exporting", PUR, P_GRID); break;
     case P_HOME: big("Home", kw(d.home), "using now", RED, P_HOME); break;
@@ -135,7 +159,7 @@ void draw() {
   if (autoPage) ctext("auto", 30, 2, DIM);
   if (err.length()) ctext(err, 380, 2, RED);
   else if (!d.online || d.age > 120) ctext("battery offline", 380, 2, RED);
-  dots();
+  dots(); wifiBars();
   gfx->flush();
 }
 
@@ -218,7 +242,7 @@ void setup() {
   gfx->begin(); panel->setBrightness(DAY_BRIGHTNESS);
   configTzTime(TIMEZONE, "pool.ntp.org", "time.google.com");
   WiFi.mode(WIFI_STA); WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  for (int i = 0; i < 6; i++) for (int p = 0; p < 60; p++) hist[i][p] = NAN;
+  for (int i = 0; i < 6; i++) for (int p = 0; p < HN; p++) hist[i][p] = NAN;
   draw();
 }
 

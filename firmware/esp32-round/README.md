@@ -25,3 +25,9 @@ Set `DAY_BRIGHTNESS`, `NIGHT_BRIGHTNESS`, `NIGHT_START_HOUR`, `NIGHT_END_HOUR` a
 
 ## Auto page on and off
 Press the **BOOT** button, or hold a finger still on the screen for one second, to turn auto page on or off. A small "auto" label shows at the top while it is on. The choice is remembered after a restart. `AUTO_PAGE_MS` sets the time per page (default 8000); if it is above 0 in `config.h`, auto starts on the first boot. A touch restarts the timer.
+
+## Status and history
+- The Battery page and the overview ring are green while charging and orange while discharging.
+- The sparklines now cover the last 3 hours (one point a minute, kept in memory, so a restart clears them).
+- Four small bars at the bottom show Wi-Fi signal.
+- If the dashboard has never answered since boot, a full screen says "Dashboard unreachable" (or "No Wi-Fi") with the reason, such as "bad token" or "widget off". After the first good reply, a later outage shows the last values with a red message instead.
