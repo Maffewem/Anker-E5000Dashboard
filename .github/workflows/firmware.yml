@@ -27,7 +27,9 @@ jobs:
         working-directory: firmware/esp32-round
         run: |
           cp config.example.h config.h
-          arduino-cli compile --fqbn "esp32:esp32:esp32s3:CDCOnBoot=cdc,PSRAM=opi,FlashSize=16M,PartitionScheme=default_16MB" \
+          # The partition table only matters for the size check here: 3MB app slots, as in the IDE's "16M Flash (3MB APP/9.9MB FATFS)".
+          arduino-cli compile --fqbn "esp32:esp32:esp32s3:CDCOnBoot=cdc,PSRAM=opi,FlashSize=16M" \
+            --build-property "build.partitions=app3M_fat9M_16MB" --build-property "upload.maximum_size=3342336" \
             --build-property "compiler.cpp.extra_flags=-DCI_BUILD" --output-dir /tmp/fw .
       - name: Commit the build
         run: |
