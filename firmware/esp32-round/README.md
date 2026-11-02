@@ -63,3 +63,8 @@ The Arduino core is part of the firmware, so updating it means building and inst
 - **Night clock**: tick it on the settings page to show a dim clock during the night hours instead of the pages. A touch shows the pages for 15 seconds. It needs the clock from the internet.
 
 The tariff pill and self-sufficiency need the dashboard from this version (`/api/widget` gained `rate_p`, `rate_kind`, `rate_until` and `self_sufficiency`).
+
+## Update safety net (automatic go-back)
+After the board installs an update it is "on trial". It is confirmed once Wi-Fi is up and data has come from the dashboard. If that doesn't happen within the confirm time (default 180 seconds, changeable on the settings page), it goes back to the previous firmware by itself. The same happens if it restarts three times while still on trial, which catches a crash loop. If Wi-Fi is up but the dashboard is simply unreachable when the time runs out, it keeps the new firmware, since that isn't the firmware's fault. The settings page says when a new firmware is on trial or when it has gone back, and a build it went back from isn't installed again; the next different build is.
+
+This needs the older firmware to still be in the other app slot. It can't help the first USB flash, and it can't save a build so broken that it never reaches the point of counting its restarts (for example one that fails before the screen starts). That still needs a USB flash.

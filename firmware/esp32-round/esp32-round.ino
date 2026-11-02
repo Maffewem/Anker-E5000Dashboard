@@ -12,6 +12,7 @@
 #include <WebServer.h>
 #include <Update.h>
 #include <WiFiClientSecure.h>
+#include <esp_ota_ops.h>
 #include "config.h"
 
 // Optional settings: an older config.h without these still compiles with the defaults.
@@ -87,18 +88,19 @@ unsigned long lastPage = 0;
 Preferences prefs;
 
 // Settings you can change from the web page (http://DEVICE_NAME.local/). config.h values are only the defaults.
-struct Settings { int dayBr, nightBr, nStart, nEnd, green, red, updHours, autoMs, capWh, floorPct; bool solar, nightClock; } S;
+struct Settings { int dayBr, nightBr, nStart, nEnd, green, red, updHours, autoMs, capWh, floorPct, confirmSec; bool solar, nightClock; } S;
 void loadSettings() {
   S.dayBr = prefs.getInt("dayBr", DAY_BRIGHTNESS); S.nightBr = prefs.getInt("nightBr", NIGHT_BRIGHTNESS);
   S.nStart = prefs.getInt("nStart", NIGHT_START_HOUR); S.nEnd = prefs.getInt("nEnd", NIGHT_END_HOUR);
   S.green = prefs.getInt("green", LOAD_GREEN_BELOW_W); S.red = prefs.getInt("red", LOAD_RED_ABOVE_W);
   S.updHours = prefs.getInt("updHours", UPDATE_CHECK_HOURS); S.autoMs = prefs.getInt("autoMs", AUTO_PAGE_MS > 0 ? AUTO_PAGE_MS : 8000);
   S.solar = prefs.getBool("solar", true);
+  S.confirmSec = prefs.getInt("confirmSec", 180);
   S.capWh = prefs.getInt("capWh", 5000); S.floorPct = prefs.getInt("floorPct", 10); S.nightClock = prefs.getBool("nclock", false);
 }
 void saveSettings() {
   prefs.putInt("dayBr", S.dayBr); prefs.putInt("nightBr", S.nightBr); prefs.putInt("nStart", S.nStart); prefs.putInt("nEnd", S.nEnd);
-  prefs.putInt("green", S.green); prefs.putInt("red", S.red); prefs.putInt("updHours", S.updHours); prefs.putInt("autoMs", S.autoMs); prefs.putBool("solar", S.solar); prefs.putInt("capWh", S.capWh); prefs.putInt("floorPct", S.floorPct); prefs.putBool("nclock", S.nightClock);
+  prefs.putInt("green", S.green); prefs.putInt("red", S.red); prefs.putInt("updHours", S.updHours); prefs.putInt("autoMs", S.autoMs); prefs.putBool("solar", S.solar); prefs.putInt("confirmSec", S.confirmSec); prefs.putInt("capWh", S.capWh); prefs.putInt("floorPct", S.floorPct); prefs.putBool("nclock", S.nightClock);
 }
 
 // Wi-Fi, URL and tokens live in the board's own memory (NVS), so a firmware built in CI (which has placeholder
@@ -363,6 +365,42 @@ bool httpGet(const String &url, const char *auth, bool raw, String &out) {
   return code == 200;
 }
 
+// ---- Update safety net ----
+// After the board installs an update it is "on trial". It is confirmed good once Wi-Fi is up and data has come from the dashboard.
+// If that doesn't happen within the confirm time, or the board restarts 3 times while still on trial (a crash loop), it goes back to
+// the previous firmware by itself. A build it has gone back from is remembered (lastmd5) so it isn't installed again.
+// Returning true tells the bootloader's own rollback (when this core has it switched on) not to confirm the app on its own.
+extern "C" bool verifyRollbackLater() { return true; }
+bool onTrial = false;
+String rollbackMsg = "";
+void goBack(const char *why) {
+  prefs.putBool("pending", false); prefs.putInt("tries", 0); prefs.putString("rolled", why);
+  if (Update.canRollBack()) Update.rollBack();  // restarts into the previous firmware when it works
+  // No older firmware to go back to (a first USB flash): carry on with this one.
+  onTrial = false; esp_ota_mark_app_valid_cancel_rollback();
+}
+void confirmGood() {
+  if (!onTrial) return;
+  onTrial = false; prefs.putBool("pending", false); prefs.putInt("tries", 0);
+  esp_ota_mark_app_valid_cancel_rollback();
+}
+void trialAtBoot() {  // call early in setup(), after the settings are loaded
+  rollbackMsg = prefs.getString("rolled");
+  if (!prefs.getBool("pending", false)) return;
+  int tries = prefs.getInt("tries", 0) + 1;
+  prefs.putInt("tries", tries);
+  if (tries > 3) { goBack("kept restarting"); return; }
+  onTrial = true;
+}
+void trialCheck() {  // call from loop()
+  if (!onTrial) return;
+  if (haveData && !err.length()) { confirmGood(); return; }
+  if (millis() > (unsigned long)S.confirmSec * 1000UL) {
+    // Wi-Fi up but the dashboard unreachable is not the firmware's fault: keep it. No Wi-Fi at all is the case to go back from.
+    if (WiFi.status() == WL_CONNECTED) confirmGood(); else goBack("no Wi-Fi after the update");
+  }
+}
+
 String updMsg = "";  // result of the last update check, shown on the settings page
 void checkUpdate() {
   updMsg = "";
@@ -406,7 +444,7 @@ void checkUpdate() {
     }
   }
   h.end();
-  if (ok) { prefs.putString("lastmd5", md5); ESP.restart(); }
+  if (ok) { prefs.putString("lastmd5", md5); prefs.putBool("pending", true); prefs.putInt("tries", 0); prefs.putString("rolled", ""); ESP.restart(); }
   err = "update failed"; updMsg = "Update download failed."; draw();
 }
 
@@ -484,8 +522,11 @@ void webRoot() {
   h += field("Night ends (hour)", "nEnd", S.nEnd, "0 to 23; same as start = no dimming");
   h += field("Ring green below (W)", "green", S.green, "home use");
   h += field("Ring red above (W)", "red", S.red, "orange in between");
+  h += field("Confirm a new update within (seconds)", "confirmSec", S.confirmSec, "else it goes back to the previous firmware; 60 to 3600");
   h += field("Check for update every (hours)", "updHours", S.updHours, "1 to 168");
   h += "<button>Save</button></form><form method=post action=/update><button>Check for update now</button></form>";
+  if (onTrial) h += "<p><b>New firmware on trial</b>, it is confirmed once the dashboard answers (or after " + String(S.confirmSec) + " s with Wi-Fi up).</p>";
+  if (rollbackMsg.length()) h += "<p><b>Went back to the previous firmware:</b> " + rollbackMsg + ".</p>";
   if (updMsg.length()) h += "<p><b>Last check:</b> " + updMsg + "</p>";
   web.send(200, "text/html", h);
 }
@@ -496,7 +537,7 @@ void webSave() {
   S.green = argInt("green", 0, 20000, S.green); S.red = argInt("red", 0, 20000, S.red);
   S.updHours = argInt("updHours", 1, 168, S.updHours); S.autoMs = argInt("autoS", 2, 600, S.autoMs / 1000) * 1000;
   S.solar = web.hasArg("solar"); S.nightClock = web.hasArg("nclock");
-  S.capWh = argInt("capWh", 500, 100000, S.capWh); S.floorPct = argInt("floorPct", 0, 50, S.floorPct); if (!pageOn(page)) page = P_OVERVIEW;
+  S.confirmSec = argInt("confirmSec", 60, 3600, S.confirmSec); S.capWh = argInt("capWh", 500, 100000, S.capWh); S.floorPct = argInt("floorPct", 0, 50, S.floorPct); if (!pageOn(page)) page = P_OVERVIEW;
   saveSettings(); setAuto(web.hasArg("auto")); curBrightReset = 1; draw();
   web.sendHeader("Location", "/"); web.send(303);
 }
@@ -539,13 +580,14 @@ void setup() {
   Serial.begin(115200);
   pinMode(BTN_PIN, INPUT_PULLUP);
   prefs.begin("display", false); loadConfig(); loadSettings(); autoPage = prefs.getBool("auto", AUTO_PAGE_MS > 0);
+  trialAtBoot();
   Wire.begin(TP_SDA, TP_SCL); pinMode(TP_INT, INPUT_PULLUP);
   gfx->begin(); gfx->setUTF8Print(true);  // lets the fonts print characters like the pound sign
   panel->setBrightness(S.dayBr);
   configTzTime(TIMEZONE, "pool.ntp.org", "time.google.com");
   WiFi.setHostname(DEVICE_NAME);
   WiFi.mode(WIFI_STA); WiFi.begin(cfg.ssid.c_str(), cfg.pass.c_str());
-  for (int i = 0; i < 6; i++) for (int p = 0; p < HN; p++) hist[i][p] = NAN;
+  for (int i = 0; i < P_COUNT; i++) for (int p = 0; p < HN; p++) hist[i][p] = NAN;
   draw();
 }
 
@@ -560,6 +602,7 @@ void loop() {
   if (otaOn) web.handleClient();
   if (updateNow) { updateNow = false; checkUpdate(); }
   if (otaOn) ArduinoOTA.handle();
+  trialCheck();
   updateBrightness();
   static bool wasClock = false; static int lastMin = -1;
   struct tm tt; int mn = getLocalTime(&tt, 0) ? tt.tm_min : -1;
