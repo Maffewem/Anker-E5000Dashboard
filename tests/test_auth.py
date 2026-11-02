@@ -179,3 +179,19 @@ def test_firmware_download_uses_the_widget_token(tmp_path, monkeypatch):
         assert info == {"md5": "74b5b5e9570efc5c0553bb327cd41940", "size": 8}
         assert c.get("/api/firmware/esp32-round.bin", headers=auth).content == b"firmware"
         assert c.get("/api/firmware/esp32-round.bin").status_code == 401
+
+
+def test_widget_rate_and_self_sufficiency_helpers():
+    from datetime import datetime
+
+    from app.routes.widget import rate_now, self_sufficiency
+
+    rates = [28.0] * 48
+    for i in range(1, 11):  # 00:30 to 05:30 is cheap
+        rates[i] = 7.5
+    assert rate_now(rates, datetime(2026, 1, 1, 2, 10)) == {"rate_p": 7.5, "rate_kind": "cheap", "rate_until": "05:30"}
+    assert rate_now(rates, datetime(2026, 1, 1, 12, 0)) == {"rate_p": 28.0, "rate_kind": "peak", "rate_until": "00:30"}
+    assert rate_now([20.0] * 48, datetime(2026, 1, 1, 12, 0)) == {"rate_p": 20.0}
+    slots = [{"day": "2026-01-01", "home_wh": 1000, "import_wh": 250}, {"day": "2025-12-31", "home_wh": 9000, "import_wh": 9000}]
+    assert self_sufficiency(slots, "2026-01-01") == 75.0
+    assert self_sufficiency(slots, "2026-01-02") is None
