@@ -47,7 +47,7 @@ Limits: there is no automatic rollback, so a broken build needs a USB re-flash. 
 The board announces itself as `DEVICE_NAME` (default `anker-display`) on your router and in Arduino IDE, instead of `esp32s3-XXXXXX`. Set it in `config.h`; use letters, digits and hyphens only. Your router may keep showing the old name until the board reconnects or you release its lease.
 
 ## Overview rings
-The outer ring shows the battery percentage by its length. Its colour follows the level: green from 50%, orange from 25%, red below 25%. The thin inner ring is live home use, full at 4 kW, coloured green below `LOAD_GREEN_BELOW_W` (300), red above `LOAD_RED_ABOVE_W` (2000), orange in between.
+The outer ring shows the battery percentage by its length. Its colour follows the level: green from 67%, orange from 34%, red below 34%. The thin inner ring is live home use, full at 4 kW, coloured green below `LOAD_GREEN_BELOW_W` (300), red above `LOAD_RED_ABOVE_W` (2000), orange in between.
 
 ## Settings web page
 Open `http://anker-display.local/` (or the board's IP, shown in your router) in a browser on the same network. Sign in with user `admin` and your `OTA_PASSWORD`. You can see the current numbers, jump to a page, switch auto page on or off, set seconds per page, day and night brightness and hours, the ring colour levels, and how often it checks for updates, or check for an update right now. Changes apply straight away and are remembered after a restart; `config.h` values are only the starting defaults. It uses plain http on your home network, so use a real password and don't expose the board to the internet.

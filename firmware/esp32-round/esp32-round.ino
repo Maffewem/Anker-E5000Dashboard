@@ -186,9 +186,9 @@ void big(const char *title, const String &v, const String &sub, uint16_t col, in
 // Overview ring colour follows how much the home is using: green when low, orange in between, red when high.
 uint16_t loadColour() { return isnan(d.home) ? DIM : d.home < S.green ? GRN : d.home > S.red ? RED : ORG; }
 
-// Outer ring colour follows the battery level: green from 50%, orange from 25%, red below.
+// Outer ring colour follows the battery level: green from 67%, orange from 34%, red below.
 #define USAGE_FULL_W 4000.f  // inner ring is full at this home load
-uint16_t ringColour() { return isnan(d.soc) ? DIM : d.soc >= 50 ? GRN : d.soc >= 25 ? ORG : RED; }
+uint16_t ringColour() { return isnan(d.soc) ? DIM : d.soc >= 67 ? GRN : d.soc >= 34 ? ORG : RED; }
 
 void wifiBars() {  // four small bars from the Wi-Fi signal, bottom right of centre
   int rssi = WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : -100;
