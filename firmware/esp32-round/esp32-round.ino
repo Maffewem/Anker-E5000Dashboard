@@ -79,7 +79,7 @@ const int W = 466, C = 233;
 // Same colours as the preview page (sun #f6cc2c, battery #2fd47a, home #f2564b, grid #b985f5, orange #ff9a2e).
 const uint16_t BG = 0x0000, DIM = 0x18E3, GREY = C565(125, 125, 133), WHITE = C565(232, 232, 234), YEL = C565(246, 204, 44), GRN = C565(47, 212, 122),
                RED = C565(242, 86, 75), ORG = C565(255, 154, 46), PUR = C565(185, 133, 245);
-enum { P_OVERVIEW, P_BATTERY, P_SOLAR, P_GRID, P_HOME, P_SAVING, P_COUNT };
+enum { P_OVERVIEW, P_BATTERY, P_SOLAR, P_GRID, P_HOME, P_SAVING, P_SELF, P_COUNT };
 int page = 0;
 #define BTN_PIN 0  // BOOT button on the board
 bool autoPage = false;  // toggled by the BOOT button or a long press; remembered across restarts
@@ -87,17 +87,18 @@ unsigned long lastPage = 0;
 Preferences prefs;
 
 // Settings you can change from the web page (http://DEVICE_NAME.local/). config.h values are only the defaults.
-struct Settings { int dayBr, nightBr, nStart, nEnd, green, red, updHours, autoMs; bool solar; } S;
+struct Settings { int dayBr, nightBr, nStart, nEnd, green, red, updHours, autoMs, capWh, floorPct; bool solar, nightClock; } S;
 void loadSettings() {
   S.dayBr = prefs.getInt("dayBr", DAY_BRIGHTNESS); S.nightBr = prefs.getInt("nightBr", NIGHT_BRIGHTNESS);
   S.nStart = prefs.getInt("nStart", NIGHT_START_HOUR); S.nEnd = prefs.getInt("nEnd", NIGHT_END_HOUR);
   S.green = prefs.getInt("green", LOAD_GREEN_BELOW_W); S.red = prefs.getInt("red", LOAD_RED_ABOVE_W);
   S.updHours = prefs.getInt("updHours", UPDATE_CHECK_HOURS); S.autoMs = prefs.getInt("autoMs", AUTO_PAGE_MS > 0 ? AUTO_PAGE_MS : 8000);
   S.solar = prefs.getBool("solar", true);
+  S.capWh = prefs.getInt("capWh", 5000); S.floorPct = prefs.getInt("floorPct", 10); S.nightClock = prefs.getBool("nclock", false);
 }
 void saveSettings() {
   prefs.putInt("dayBr", S.dayBr); prefs.putInt("nightBr", S.nightBr); prefs.putInt("nStart", S.nStart); prefs.putInt("nEnd", S.nEnd);
-  prefs.putInt("green", S.green); prefs.putInt("red", S.red); prefs.putInt("updHours", S.updHours); prefs.putInt("autoMs", S.autoMs); prefs.putBool("solar", S.solar);
+  prefs.putInt("green", S.green); prefs.putInt("red", S.red); prefs.putInt("updHours", S.updHours); prefs.putInt("autoMs", S.autoMs); prefs.putBool("solar", S.solar); prefs.putInt("capWh", S.capWh); prefs.putInt("floorPct", S.floorPct); prefs.putBool("nclock", S.nightClock);
 }
 
 // Wi-Fi, URL and tokens live in the board's own memory (NVS), so a firmware built in CI (which has placeholder
@@ -118,7 +119,7 @@ void loadConfig() {
 void setAuto(bool on) { autoPage = on; lastPage = millis(); prefs.putBool("auto", on); }
 
 
-struct Data { float soc = NAN, solar = NAN, home = NAN, batt = NAN, grid = NAN, saved = NAN; bool online = false; long age = -1; } d;
+struct Data { float soc = NAN, solar = NAN, home = NAN, batt = NAN, grid = NAN, saved = NAN, self = NAN, rateP = NAN; String rateKind, rateUntil; bool online = false; long age = -1; } d;
 String err = "starting";
 #define HN 180        // history points per series
 #define HIST_MS 60000 // one point a minute = the last 3 hours
@@ -140,8 +141,10 @@ void fetch() {
   err = ""; haveData = true;
   d.soc = j["soc"] | NAN; d.solar = j["solar_w"] | NAN; d.home = j["home_w"] | NAN;
   d.batt = j["battery_w"] | NAN; d.grid = j["grid_w"] | NAN; d.saved = j["saved_today"] | NAN;
+  d.self = j["self_sufficiency"] | NAN; d.rateP = j["rate_p"] | NAN;
+  d.rateKind = String((const char *)(j["rate_kind"] | "")); d.rateUntil = String((const char *)(j["rate_until"] | ""));
   d.online = j["online"] | false; d.age = j["age_s"] | -1L;
-  float v[P_COUNT] = {d.solar, d.soc, d.solar, d.grid, d.home, d.saved};
+  float v[P_COUNT] = {d.solar, d.soc, d.solar, d.grid, d.home, d.saved, d.self};
   if (!lastHist || millis() - lastHist >= HIST_MS) {
     lastHist = millis() ? millis() : 1;
     if (hn == HN) for (int p = 0; p < P_COUNT; p++) memmove(hist[p], hist[p] + 1, (HN - 1) * sizeof(float)); else hn++;
@@ -184,8 +187,49 @@ void dots() {
   for (int i = 0; i < P_COUNT; i++) if (pageOn(i)) { if (i == page) at = n; n++; }
   for (int i = 0; i < n; i++) gfx->fillCircle(C + (i - (n - 1) / 2.0f) * 22, 440, 4, i == at ? WHITE : DIM);
 }
-void big(const char *title, const String &v, const String &sub, uint16_t col, int p) {
-  ctext(title, 70, 2, WHITE); ctext(v, 150, 6, col); ctext(sub, 235, 2, GREY); spark(p, col);
+// Time left from the battery level and power: "Remaining: 2h 47m" while discharging, "Full in 1h 10m" while charging.
+String fmtHours(float h) {
+  int m = (int)(h * 60 + 0.5f);
+  return m >= 60 ? String(m / 60) + "h " + String(m % 60) + "m" : String(m) + "m";
+}
+String timeLeft() {
+  if (isnan(d.soc) || isnan(d.batt) || S.capWh <= 0) return "";
+  if (d.batt > 20) return "Remaining: " + fmtHours(d.soc / 100.f * S.capWh / d.batt);
+  if (d.batt < -20) return "Full in " + fmtHours((100.f - d.soc) / 100.f * S.capWh / -d.batt);
+  return "";
+}
+void big(const char *title, const String &v, const String &sub, uint16_t col, int p, const String &extra = "") {
+  ctext(title, 70, 2, WHITE); ctext(v, 150, 6, col); ctext(sub, 235, 2, GREY);
+  if (extra.length()) ctext(extra, 262, 2, WHITE);
+  spark(p, col);
+}
+// A red pill at the top when the battery is offline or at its limit.
+String alertText() {
+  if (!d.online || d.age > 120) return "Battery offline";
+  if (!isnan(d.soc) && d.soc <= S.floorPct) return "Battery limited";
+  return "";
+}
+void banner(const String &t) {
+  gfx->fillRoundRect(C - 110, 20, 220, 34, 17, C565(90, 20, 16));
+  ctext(t, 29, 2, C565(255, 180, 172));
+}
+void tariffPill() {  // "cheap until 05:30" on the Overview, when the tariff has more than one price
+  if (!d.rateKind.length()) return;
+  bool cheap = d.rateKind == "cheap", peak = d.rateKind == "peak";
+  uint16_t fg = cheap ? GRN : peak ? RED : ORG, bg = cheap ? C565(18, 48, 31) : peak ? C565(70, 22, 20) : C565(66, 40, 12);
+  gfx->fillRoundRect(C - 80, 392, 160, 28, 14, bg);
+  ctext(String(cheap ? "cheap" : peak ? "peak" : "mid") + " until " + d.rateUntil, 399, 2, fg);
+}
+// Dim clock instead of a dark screen during the night hours (needs the clock from the internet).
+bool nightNow = false; unsigned long wakeUntil = 0;
+bool clockActive() { return nightNow && S.nightClock && millis() > wakeUntil; }
+void drawNightClock() {
+  struct tm t; char buf[8] = "--:--";
+  if (getLocalTime(&t, 0)) strftime(buf, sizeof buf, "%H:%M", &t);
+  gfx->fillScreen(BG);
+  ctext(buf, 185, 6, C565(70, 70, 76));
+  if (!isnan(d.soc)) ctext("battery " + String((int)d.soc) + "%", 270, 2, C565(52, 52, 58));
+  gfx->flush();
 }
 
 // Overview ring colour follows how much the home is using: green when low, orange in between, red when high.
@@ -212,6 +256,7 @@ void drawUnreachable() {
 }
 
 void draw() {
+  if (clockActive()) { drawNightClock(); return; }
   if (err.length() && !haveData) { drawUnreachable(); return; }
   gfx->fillScreen(BG);
   switch (page) {
@@ -220,20 +265,27 @@ void draw() {
       arc(isnan(d.home) ? 0 : d.home / USAGE_FULL_W, loadColour(), 166, 180);  // inner: live home use
       ctext(String(isnan(d.soc) ? 0 : (int)d.soc) + "%", 190, 6, WHITE);
       if (S.solar) ctext("sun " + kw(d.solar), 112, 3, YEL);
+      else if (timeLeft().length()) ctext(timeLeft(), 112, 3, WHITE);
       ctext("home " + kw(d.home), 296, 3, RED);
       ctext("grid " + kw(d.grid), 342, 3, PUR);
+      tariffPill();
       break; }
     case P_BATTERY: {
       String state = isnan(d.batt) ? "" : d.batt > 20 ? "discharging" : d.batt < -20 ? "charging" : "idle";
-      big("Battery", String(isnan(d.soc) ? 0 : (int)d.soc) + "%", kw(d.batt) + " " + state, battColour(), P_BATTERY); break; }
+      big("Battery", String(isnan(d.soc) ? 0 : (int)d.soc) + "%", kw(d.batt) + " " + state, battColour(), P_BATTERY, timeLeft()); break; }
     case P_SOLAR: big("Solar", kw(d.solar), "generating now", YEL, P_SOLAR); break;
     case P_GRID: big("Grid", kw(d.grid), isnan(d.grid) ? "" : d.grid > 0 ? "importing" : "exporting", PUR, P_GRID); break;
     case P_HOME: big("Home", kw(d.home), "using now", RED, P_HOME); break;
     case P_SAVING: big("Saved today", isnan(d.saved) ? "--" : String("\xC2\xA3") + String(d.saved, 2), "from the dashboard tariff", GRN, P_SAVING); break;
+    case P_SELF: {
+      arc(isnan(d.self) ? 0 : d.self / 100, GRN, 188, 208);
+      ctext("Self-sufficient", 110, 2, WHITE);
+      ctext(isnan(d.self) ? "--" : String((int)d.self) + "%", 170, 6, GRN);
+      ctext("of today's use not from grid", 260, 2, GREY); break; }
   }
-  if (autoPage) ctext("auto", 30, 2, GREY);
+  String al = alertText();
+  if (al.length()) banner(al); else if (autoPage) ctext("auto", 30, 2, GREY);
   if (err.length()) ctext(err, 380, 2, RED);
-  else if (!d.online || d.age > 120) ctext("battery offline", 380, 2, RED);
   dots(); wifiBars();
   gfx->flush();
 }
@@ -265,6 +317,7 @@ void handleTouch() {
       if (dx > 60) page = stepPage(page, -1);
       else page = stepPage(page, 1);
       lastPage = millis();  // a touch restarts the auto timer
+      wakeUntil = millis() + 15000;  // a touch at night shows the pages for a while
       draw();
     }
     downX = -1;
@@ -389,10 +442,11 @@ else if(p==1)b=big('Battery',Math.round(sc)+'%',kw(d.batt)+' '+(d.batt<-20?'char
 else if(p==2)b=big('Solar',kw(d.solar),'generating now',C.sun);
 else if(p==3)b=big('Grid',kw(d.grid),d.grid>0?'importing':'exporting',C.grid);
 else if(p==4)b=big('Home',kw(d.home),'using now',C.home);
+else if(p==6)b=big('Self-sufficient',d.self==null?'--':Math.round(d.self)+'%','of today\'s use not from grid',C.bat);
 else b=big('Saved today',d.saved==null?'--':String.fromCharCode(163)+d.saved.toFixed(2),'from the dashboard tariff',C.bat);
 var br=fv('dayBr',255);document.getElementById('pv').innerHTML='<svg viewBox="0 0 466 466" width="100%" height="100%" style="opacity:'+Math.max(.15,br/255)+'">'+b+'</svg>'}
 function poll(){fetch('/state').then(function(r){return r.json()}).then(function(j){st=j;draw()}).catch(function(){})}
-document.getElementById('pv').onclick=function(){if(!st)return;var n=st.page;do{n=(n+1)%6}while(n==2&&!st.solarOn);fetch('/page?n='+n).then(poll)};
+document.getElementById('pv').onclick=function(){if(!st)return;var n=st.page;do{n=(n+1)%7}while(n==2&&!st.solarOn);fetch('/page?n='+n).then(poll)};
 document.addEventListener('input',draw);
 poll();setInterval(poll,3000);
 </script>
@@ -402,7 +456,7 @@ void webState() {
   JsonDocument j;
   j["page"] = page; j["online"] = !(err.length() && !haveData); j["solarOn"] = S.solar; j["green"] = S.green; j["red"] = S.red;
   if (!isnan(d.soc)) j["soc"] = d.soc; if (!isnan(d.solar)) j["solar"] = d.solar; if (!isnan(d.home)) j["home"] = d.home;
-  if (!isnan(d.batt)) j["batt"] = d.batt; if (!isnan(d.grid)) j["grid"] = d.grid; if (!isnan(d.saved)) j["saved"] = d.saved;
+  if (!isnan(d.batt)) j["batt"] = d.batt; if (!isnan(d.grid)) j["grid"] = d.grid; if (!isnan(d.saved)) j["saved"] = d.saved; if (!isnan(d.self)) j["self"] = d.self;
   String out; serializeJson(j, out); web.send(200, "application/json", out);
 }
 void webRoot() {
@@ -415,12 +469,15 @@ void webRoot() {
   h += "<h2>Anker display</h2>"; h += PREVIEW_JS; h += "<p>Battery " + String(isnan(d.soc) ? 0 : (int)d.soc) + "%, home " + kw(d.home) + ", solar " + kw(d.solar) +
        ", grid " + kw(d.grid) + "<br><small>Wi-Fi " + String(WiFi.RSSI()) + " dBm, up " + String(millis() / 60000) + " min, firmware " + ESP.getSketchMD5().substring(0, 8) + "</small></p>";
   h += "<p>Show page: ";
-  const char *names[] = {"Overview", "Battery", "Solar", "Grid", "Home", "Saved"};
+  const char *names[] = {"Overview", "Battery", "Solar", "Grid", "Home", "Saved", "Self-sufficient"};
   for (int i = 0; i < P_COUNT; i++) if (pageOn(i)) h += String("<a class=b href='/page?n=") + i + "'>" + names[i] + "</a>";
   h += "</p><form method=post action=/save>";
   h += String("<label><input type=checkbox name=solar value=1") + (S.solar ? " checked" : "") + "> Show solar (the sun line and Solar page)</label>";
   h += String("<label><input type=checkbox name=auto value=1") + (autoPage ? " checked" : "") + "> Auto page</label>";
   h += field("Seconds per page", "autoS", S.autoMs / 1000, "");
+  h += String("<label><input type=checkbox name=nclock value=1") + (S.nightClock ? " checked" : "") + "> Show a dim clock at night instead of the pages</label>";
+  h += field("Battery size (Wh) for time left", "capWh", S.capWh, "usable energy, used for Remaining and Full in");
+  h += field("Alert at or below (%)", "floorPct", S.floorPct, "shows Battery limited");
   h += field("Day brightness", "dayBr", S.dayBr, "0 to 255");
   h += field("Night brightness", "nightBr", S.nightBr, "0 to 255, 0 = off");
   h += field("Night starts (hour)", "nStart", S.nStart, "0 to 23");
@@ -438,7 +495,8 @@ void webSave() {
   S.nStart = argInt("nStart", 0, 23, S.nStart); S.nEnd = argInt("nEnd", 0, 23, S.nEnd);
   S.green = argInt("green", 0, 20000, S.green); S.red = argInt("red", 0, 20000, S.red);
   S.updHours = argInt("updHours", 1, 168, S.updHours); S.autoMs = argInt("autoS", 2, 600, S.autoMs / 1000) * 1000;
-  S.solar = web.hasArg("solar"); if (!pageOn(page)) page = P_OVERVIEW;
+  S.solar = web.hasArg("solar"); S.nightClock = web.hasArg("nclock");
+  S.capWh = argInt("capWh", 500, 100000, S.capWh); S.floorPct = argInt("floorPct", 0, 50, S.floorPct); if (!pageOn(page)) page = P_OVERVIEW;
   saveSettings(); setAuto(web.hasArg("auto")); curBrightReset = 1; draw();
   web.sendHeader("Location", "/"); web.send(303);
 }
@@ -472,7 +530,8 @@ void updateBrightness() {
     bool night = S.nStart < S.nEnd ? (h >= S.nStart && h < S.nEnd)
                                                    : (h >= S.nStart || h < S.nEnd);
     if (night) target = S.nightBr;
-  }
+    nightNow = night;
+  } else nightNow = false;
   if (target != curBright) { curBright = target; panel->setBrightness(target); }
 }
 
@@ -502,6 +561,9 @@ void loop() {
   if (updateNow) { updateNow = false; checkUpdate(); }
   if (otaOn) ArduinoOTA.handle();
   updateBrightness();
+  static bool wasClock = false; static int lastMin = -1;
+  struct tm tt; int mn = getLocalTime(&tt, 0) ? tt.tm_min : -1;
+  if (clockActive() != wasClock || (clockActive() && mn != lastMin)) { wasClock = clockActive(); lastMin = mn; draw(); }
   handleButton();
   handleTouch();
   delay(10);
