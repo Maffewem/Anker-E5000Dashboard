@@ -33,6 +33,9 @@
 #ifndef LOAD_RED_ABOVE_W
 #define LOAD_RED_ABOVE_W 2000     // home use above this: ring is red; orange in between
 #endif
+#ifndef RING_FULL_W
+#define RING_FULL_W 4000          // home use at which the Overview ring is full
+#endif
 #ifndef DEVICE_NAME
 #define DEVICE_NAME "anker-display"  // name on your router and in Arduino IDE's network ports (no spaces)
 #endif
@@ -84,16 +87,16 @@ unsigned long lastPage = 0;
 Preferences prefs;
 
 // Settings you can change from the web page (http://DEVICE_NAME.local/). config.h values are only the defaults.
-struct Settings { int dayBr, nightBr, nStart, nEnd, green, red, updHours, autoMs; } S;
+struct Settings { int dayBr, nightBr, nStart, nEnd, green, red, updHours, autoMs, ringFull; } S;
 void loadSettings() {
   S.dayBr = prefs.getInt("dayBr", DAY_BRIGHTNESS); S.nightBr = prefs.getInt("nightBr", NIGHT_BRIGHTNESS);
   S.nStart = prefs.getInt("nStart", NIGHT_START_HOUR); S.nEnd = prefs.getInt("nEnd", NIGHT_END_HOUR);
-  S.green = prefs.getInt("green", LOAD_GREEN_BELOW_W); S.red = prefs.getInt("red", LOAD_RED_ABOVE_W);
+  S.ringFull = prefs.getInt("ringFull", RING_FULL_W); S.green = prefs.getInt("green", LOAD_GREEN_BELOW_W); S.red = prefs.getInt("red", LOAD_RED_ABOVE_W);
   S.updHours = prefs.getInt("updHours", UPDATE_CHECK_HOURS); S.autoMs = prefs.getInt("autoMs", AUTO_PAGE_MS > 0 ? AUTO_PAGE_MS : 8000);
 }
 void saveSettings() {
   prefs.putInt("dayBr", S.dayBr); prefs.putInt("nightBr", S.nightBr); prefs.putInt("nStart", S.nStart); prefs.putInt("nEnd", S.nEnd);
-  prefs.putInt("green", S.green); prefs.putInt("red", S.red); prefs.putInt("updHours", S.updHours); prefs.putInt("autoMs", S.autoMs);
+  prefs.putInt("ringFull", S.ringFull); prefs.putInt("green", S.green); prefs.putInt("red", S.red); prefs.putInt("updHours", S.updHours); prefs.putInt("autoMs", S.autoMs);
 }
 
 // Wi-Fi, URL and tokens live in the board's own memory (NVS), so a firmware built in CI (which has placeholder
@@ -204,7 +207,7 @@ void draw() {
   gfx->fillScreen(BG);
   switch (page) {
     case P_OVERVIEW: {
-      arc(d.soc / 100, loadColour(), 202, 222);
+      arc(isnan(d.home) ? 0 : d.home / S.ringFull, loadColour(), 202, 222);  // ring = home use, centre number = battery
       ctext(String(isnan(d.soc) ? 0 : (int)d.soc) + "%", 190, 6, WHITE);
       ctext("sun " + kw(d.solar), 100, 3, YEL);
       ctext("home " + kw(d.home), 270, 3, RED);
@@ -373,6 +376,7 @@ void webRoot() {
   h += field("Night brightness", "nightBr", S.nightBr, "0 to 255, 0 = off");
   h += field("Night starts (hour)", "nStart", S.nStart, "0 to 23");
   h += field("Night ends (hour)", "nEnd", S.nEnd, "0 to 23; same as start = no dimming");
+  h += field("Ring full at (W)", "ringFull", S.ringFull, "home use that fills the ring");
   h += field("Ring green below (W)", "green", S.green, "home use");
   h += field("Ring red above (W)", "red", S.red, "orange in between");
   h += field("Check for update every (hours)", "updHours", S.updHours, "1 to 168");
@@ -383,7 +387,7 @@ void webSave() {
   if (!web.authenticate("admin", cfg.otaPw.c_str())) return web.requestAuthentication();
   S.dayBr = argInt("dayBr", 0, 255, S.dayBr); S.nightBr = argInt("nightBr", 0, 255, S.nightBr);
   S.nStart = argInt("nStart", 0, 23, S.nStart); S.nEnd = argInt("nEnd", 0, 23, S.nEnd);
-  S.green = argInt("green", 0, 20000, S.green); S.red = argInt("red", 0, 20000, S.red);
+  S.ringFull = argInt("ringFull", 500, 20000, S.ringFull); S.green = argInt("green", 0, 20000, S.green); S.red = argInt("red", 0, 20000, S.red);
   S.updHours = argInt("updHours", 1, 168, S.updHours); S.autoMs = argInt("autoS", 2, 600, S.autoMs / 1000) * 1000;
   saveSettings(); setAuto(web.hasArg("auto")); curBrightReset = 1; draw();
   web.sendHeader("Location", "/"); web.send(303);
