@@ -122,6 +122,8 @@ void setAuto(bool on) { autoPage = on; lastPage = millis(); prefs.putBool("auto"
 
 
 struct Data { float soc = NAN, solar = NAN, home = NAN, batt = NAN, grid = NAN, saved = NAN, self = NAN, rateP = NAN; String rateKind, rateUntil; bool online = false; long age = -1; } d;
+float battAvg = NAN; unsigned long battAvgT = 0;  // battery power averaged over about 10 minutes, so the time left doesn't jump about
+#define AVG_TAU_MS 600000UL
 String err = "starting";
 #define HN 180        // history points per series
 #define HIST_MS 60000 // one point a minute = the last 3 hours
@@ -143,6 +145,12 @@ void fetch() {
   err = ""; haveData = true;
   d.soc = j["soc"] | NAN; d.solar = j["solar_w"] | NAN; d.home = j["home_w"] | NAN;
   d.batt = j["battery_w"] | NAN; d.grid = j["grid_w"] | NAN; d.saved = j["saved_today"] | NAN;
+  if (!isnan(d.batt)) {
+    unsigned long t = millis(), dt = battAvgT ? t - battAvgT : 0; battAvgT = t;
+    // Start again when the battery really changes direction (not for small swings around zero).
+    if (isnan(battAvg) || (fabsf(d.batt) > 200 && fabsf(battAvg) > 200 && (d.batt > 0) != (battAvg > 0))) battAvg = d.batt;
+    else battAvg += (d.batt - battAvg) * min(1.0f, (float)dt / AVG_TAU_MS);
+  }
   d.self = j["self_sufficiency"] | NAN; d.rateP = j["rate_p"] | NAN;
   d.rateKind = String((const char *)(j["rate_kind"] | "")); d.rateUntil = String((const char *)(j["rate_until"] | ""));
   d.online = j["online"] | false; d.age = j["age_s"] | -1L;
@@ -191,13 +199,15 @@ void dots() {
 }
 // Time left from the battery level and power: "2h 47m left" while discharging, "full in 1h 10m" while charging.
 String fmtHours(float h) {
+  if (h >= 24) return ">24h";
   int m = (int)(h * 60 + 0.5f);
+  if (m >= 60) m = (m + 2) / 5 * 5;  // over an hour: to the nearest 5 minutes
   return m >= 60 ? String(m / 60) + "h " + String(m % 60) + "m" : String(m) + "m";
 }
 String timeLeft() {
-  if (isnan(d.soc) || isnan(d.batt) || S.capWh <= 0) return "";
-  if (d.batt > 20) return fmtHours(d.soc / 100.f * S.capWh / d.batt) + " left";
-  if (d.batt < -20) return "full in " + fmtHours((100.f - d.soc) / 100.f * S.capWh / -d.batt);
+  if (isnan(d.soc) || isnan(battAvg) || S.capWh <= 0) return "";
+  if (battAvg > 50) return fmtHours(d.soc / 100.f * S.capWh / battAvg) + " left";
+  if (battAvg < -50) return "full in " + fmtHours((100.f - d.soc) / 100.f * S.capWh / -battAvg);
   return "";
 }
 void big(const char *title, const String &v, const String &sub, uint16_t col, int p, const String &extra = "") {
