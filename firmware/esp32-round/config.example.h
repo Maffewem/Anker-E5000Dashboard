@@ -24,3 +24,5 @@
 #define GITHUB_BRANCH        "main"
 #define GITHUB_TOKEN         ""   // only for UPDATE_SOURCE "github": fine-grained token, repo Contents = read-only
 #define DEVICE_NAME          "anker-display"   // name on your router and in Arduino IDE ports; letters, digits, hyphens only
+#define LOAD_GREEN_BELOW_W   300    // Overview ring: green below this home use (watts)...
+#define LOAD_RED_ABOVE_W     2000   // ...red above this, orange in between

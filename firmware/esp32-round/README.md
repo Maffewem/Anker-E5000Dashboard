@@ -45,3 +45,6 @@ Limits: there is no automatic rollback, so a broken build needs a USB re-flash. 
 
 ## Device name
 The board announces itself as `DEVICE_NAME` (default `anker-display`) on your router and in Arduino IDE, instead of `esp32s3-XXXXXX`. Set it in `config.h`; use letters, digits and hyphens only. Your router may keep showing the old name until the board reconnects or you release its lease.
+
+## Overview ring colour
+The ring on the Overview page shows the battery percentage by its length and the home's current use by its colour: green below `LOAD_GREEN_BELOW_W` (300), red above `LOAD_RED_ABOVE_W` (2000), orange in between. The Battery page still shows charging as green and discharging as orange.

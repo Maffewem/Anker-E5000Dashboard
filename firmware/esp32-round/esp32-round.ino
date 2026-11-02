@@ -25,6 +25,12 @@
 #ifndef NIGHT_END_HOUR
 #define NIGHT_END_HOUR 7          // ...until this hour. Set both equal to disable dimming.
 #endif
+#ifndef LOAD_GREEN_BELOW_W
+#define LOAD_GREEN_BELOW_W 300    // home use below this: ring is green
+#endif
+#ifndef LOAD_RED_ABOVE_W
+#define LOAD_RED_ABOVE_W 2000     // home use above this: ring is red; orange in between
+#endif
 #ifndef DEVICE_NAME
 #define DEVICE_NAME "anker-display"  // name on your router and in Arduino IDE's network ports (no spaces)
 #endif
@@ -159,6 +165,9 @@ void big(const char *title, const String &v, const String &sub, uint16_t col, in
   ctext(title, 70, 2, WHITE); ctext(v, 150, 6, col); ctext(sub, 235, 2, DIM); spark(p, col);
 }
 
+// Overview ring colour follows how much the home is using: green when low, orange in between, red when high.
+uint16_t loadColour() { return isnan(d.home) ? DIM : d.home < LOAD_GREEN_BELOW_W ? GRN : d.home > LOAD_RED_ABOVE_W ? RED : ORG; }
+
 void wifiBars() {  // four small bars from the Wi-Fi signal, bottom right of centre
   int rssi = WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : -100;
   int n = rssi > -55 ? 4 : rssi > -65 ? 3 : rssi > -75 ? 2 : rssi > -85 ? 1 : 0;
@@ -180,7 +189,7 @@ void draw() {
   gfx->fillScreen(BG);
   switch (page) {
     case P_OVERVIEW: {
-      arc(d.soc / 100, battColour(), 202, 222);
+      arc(d.soc / 100, loadColour(), 202, 222);
       ctext(String(isnan(d.soc) ? 0 : (int)d.soc) + "%", 190, 6, WHITE);
       ctext("sun " + kw(d.solar), 100, 3, YEL);
       ctext("home " + kw(d.home), 270, 3, RED);
