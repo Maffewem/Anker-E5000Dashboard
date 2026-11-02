@@ -12,6 +12,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: firmware-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   ARDUINO_ESP32: "3.3.12"  # the arduino-esp32 core the firmware is built with; the Core update workflow bumps this
 
@@ -43,4 +47,4 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add firmware/dist
-          git diff --cached --quiet || (git commit -m "Firmware: new build [skip ci]" && git push)
+          git diff --cached --quiet || (git commit -m "Firmware: new build [skip ci]" && git pull --rebase origin main && git push)
