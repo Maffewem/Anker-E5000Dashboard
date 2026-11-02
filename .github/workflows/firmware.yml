@@ -18,10 +18,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: arduino/setup-arduino-cli@v2
+      # Pinned to the arduino-esp32 version the sketch is written and tested against; bump it together with the IDE.
       - name: Install board package and libraries
         run: |
           arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
-          arduino-cli core install esp32:esp32 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core install esp32:esp32@3.3.12 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
           arduino-cli lib install "GFX Library for Arduino" U8g2 ArduinoJson
       - name: Compile
         working-directory: firmware/esp32-round

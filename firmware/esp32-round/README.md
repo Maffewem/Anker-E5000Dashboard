@@ -8,7 +8,7 @@ The mock-up's per-phase, volts and amps pages are not here: the widget endpoint 
 
 ## Setup
 1. On the dashboard stack set `WIDGET_TOKEN` (16+ characters) and redeploy.
-2. Arduino IDE 2: add the ESP32 board package (3.x), select **ESP32S3 Dev Module**, USB CDC on boot enabled, PSRAM **OPI PSRAM**, flash 16MB, partition scheme **16M Flash (3MB APP/9.9MB FATFS)** (two app slots, needed for updates).
+2. Arduino IDE 2: add the ESP32 board package (3.3.12, the version the build workflow uses; newer 3.x should also work), select **ESP32S3 Dev Module**, USB CDC on boot enabled, PSRAM **OPI PSRAM**, flash 16MB, partition scheme **16M Flash (3MB APP/9.9MB FATFS)** (two app slots, needed for updates).
 3. Library Manager: install **GFX Library for Arduino**, **U8g2** (smooth fonts) and **ArduinoJson** (7.x).
 4. Copy `config.example.h` to `config.h` and fill in Wi-Fi, the dashboard URL and the token. `config.h` is git-ignored.
 5. Check it works first: `curl -H "Authorization: Bearer $WIDGET_TOKEN" http://<pi-ip>:<port>/api/widget`.
