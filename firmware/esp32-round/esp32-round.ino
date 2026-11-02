@@ -186,6 +186,10 @@ void big(const char *title, const String &v, const String &sub, uint16_t col, in
 // Overview ring colour follows how much the home is using: green when low, orange in between, red when high.
 uint16_t loadColour() { return isnan(d.home) ? DIM : d.home < S.green ? GRN : d.home > S.red ? RED : ORG; }
 
+// Outer ring colour follows battery power: green while charging or idle, orange discharging, red discharging hard.
+#define USAGE_FULL_W 4000.f  // inner ring is full at this home load
+uint16_t ringColour() { return isnan(d.batt) || d.batt <= 50 ? GRN : d.batt > 1500 ? RED : ORG; }
+
 void wifiBars() {  // four small bars from the Wi-Fi signal, bottom right of centre
   int rssi = WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : -100;
   int n = rssi > -55 ? 4 : rssi > -65 ? 3 : rssi > -75 ? 2 : rssi > -85 ? 1 : 0;
@@ -207,7 +211,8 @@ void draw() {
   gfx->fillScreen(BG);
   switch (page) {
     case P_OVERVIEW: {
-      arc(d.soc / 100, loadColour(), 188, 208);
+      arc(d.soc / 100, ringColour(), 188, 208);                          // outer: battery %, coloured by battery power
+      arc(isnan(d.home) ? 0 : d.home / USAGE_FULL_W, loadColour(), 166, 180);  // inner: live home use
       ctext(String(isnan(d.soc) ? 0 : (int)d.soc) + "%", 190, 6, WHITE);
       ctext("sun " + kw(d.solar), 112, 3, YEL);
       ctext("home " + kw(d.home), 296, 3, RED);
