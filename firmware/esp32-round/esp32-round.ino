@@ -75,7 +75,10 @@ Arduino_CO5300 *panel = new Arduino_CO5300(bus, LCD_RST, 0, 466, 466, PANEL_COL_
 Arduino_Canvas *gfx = new Arduino_Canvas(466, 466, panel);  // draw off-screen, then flush: no flicker
 
 const int W = 466, C = 233;
-const uint16_t BG = 0x0000, DIM = 0x18E3, WHITE = 0xFFFF, YEL = 0xFE60, GRN = 0x2FEA, RED = 0xF9A6, ORG = 0xFD20, PUR = 0xBA1F;
+#define C565(r, g, b) ((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3))
+// Same colours as the preview page (sun #f6cc2c, battery #2fd47a, home #f2564b, grid #b985f5, orange #ff9a2e).
+const uint16_t BG = 0x0000, DIM = 0x18E3, WHITE = C565(232, 232, 234), YEL = C565(246, 204, 44), GRN = C565(47, 212, 122),
+               RED = C565(242, 86, 75), ORG = C565(255, 154, 46), PUR = C565(185, 133, 245);
 enum { P_OVERVIEW, P_BATTERY, P_SOLAR, P_GRID, P_HOME, P_SAVING, P_COUNT };
 int page = 0;
 #define BTN_PIN 0  // BOOT button on the board
@@ -148,7 +151,7 @@ void fetch() {
 String kw(float w) { if (isnan(w)) return "--"; return fabsf(w) >= 1000 ? String(w / 1000, 2) + "kW" : String((int)w) + "W"; }
 void ctext(const String &s, int y, int size, uint16_t col) {
   // Smooth U8g2 fonts (needs the "U8g2" library). size 6 = big number, 3 = medium, 2 = small.
-  gfx->setFont(size >= 6 ? u8g2_font_logisoso58_tr : size >= 3 ? u8g2_font_helvB24_tf : u8g2_font_helvB14_tf);
+  gfx->setFont(size >= 6 ? u8g2_font_logisoso58_tf : size >= 3 ? u8g2_font_helvB24_tf : u8g2_font_helvB14_tf);
   gfx->setTextColor(col);
   int16_t x1, y1; uint16_t w, h; gfx->getTextBounds(s, 0, 0, &x1, &y1, &w, &h);
   gfx->setCursor(C - w / 2 - x1, y - y1); gfx->print(s);
@@ -216,7 +219,7 @@ void draw() {
     case P_SOLAR: big("Solar", kw(d.solar), "generating now", YEL, P_SOLAR); break;
     case P_GRID: big("Grid", kw(d.grid), isnan(d.grid) ? "" : d.grid > 0 ? "importing" : "exporting", PUR, P_GRID); break;
     case P_HOME: big("Home", kw(d.home), "using now", RED, P_HOME); break;
-    case P_SAVING: big("Saved today", isnan(d.saved) ? "--" : String(d.saved, 2), "from the dashboard tariff", GRN, P_SAVING); break;
+    case P_SAVING: big("Saved today", isnan(d.saved) ? "--" : String("\xC2\xA3") + String(d.saved, 2), "from the dashboard tariff", GRN, P_SAVING); break;
   }
   if (autoPage) ctext("auto", 30, 2, DIM);
   if (err.length()) ctext(err, 380, 2, RED);
@@ -427,7 +430,8 @@ void setup() {
   pinMode(BTN_PIN, INPUT_PULLUP);
   prefs.begin("display", false); loadConfig(); loadSettings(); autoPage = prefs.getBool("auto", AUTO_PAGE_MS > 0);
   Wire.begin(TP_SDA, TP_SCL); pinMode(TP_INT, INPUT_PULLUP);
-  gfx->begin(); panel->setBrightness(S.dayBr);
+  gfx->begin(); gfx->setUTF8Print(true);  // lets the fonts print characters like the pound sign
+  panel->setBrightness(S.dayBr);
   configTzTime(TIMEZONE, "pool.ntp.org", "time.google.com");
   WiFi.setHostname(DEVICE_NAME);
   WiFi.mode(WIFI_STA); WiFi.begin(cfg.ssid.c_str(), cfg.pass.c_str());
