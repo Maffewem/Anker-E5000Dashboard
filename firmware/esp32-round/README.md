@@ -8,7 +8,7 @@ The mock-up's per-phase, volts and amps pages are not here: the widget endpoint 
 
 ## Setup
 1. On the dashboard stack set `WIDGET_TOKEN` (16+ characters) and redeploy.
-2. Arduino IDE 2: add the ESP32 board package (3.x), select **ESP32S3 Dev Module**, USB CDC on boot enabled, PSRAM **OPI PSRAM**, flash 16MB.
+2. Arduino IDE 2: add the ESP32 board package (3.3.12, the version the build workflow uses; newer 3.x should also work), select **ESP32S3 Dev Module**, USB CDC on boot enabled, PSRAM **OPI PSRAM**, flash 16MB, partition scheme **16M Flash (3MB APP/9.9MB FATFS)** (two app slots, needed for updates).
 3. Library Manager: install **GFX Library for Arduino**, **U8g2** (smooth fonts) and **ArduinoJson** (7.x).
 4. Copy `config.example.h` to `config.h` and fill in Wi-Fi, the dashboard URL and the token. `config.h` is git-ignored.
 5. Check it works first: `curl -H "Authorization: Bearer $WIDGET_TOKEN" http://<pi-ip>:<port>/api/widget`.
@@ -51,3 +51,6 @@ The ring on the Overview page shows the battery percentage by its length and the
 
 ## Settings web page
 Open `http://anker-display.local/` (or the board's IP, shown in your router) in a browser on the same network. Sign in with user `admin` and your `OTA_PASSWORD`. You can see the current numbers, jump to a page, switch auto page on or off, set seconds per page, day and night brightness and hours, the ring colour levels, and how often it checks for updates, or check for an update right now. Changes apply straight away and are remembered after a restart; `config.h` values are only the starting defaults. It uses plain http on your home network, so use a real password and don't expose the board to the internet.
+
+## Core updates
+The Arduino core is part of the firmware, so updating it means building and installing new firmware. The **Core update** workflow checks weekly for a newer stable arduino-esp32 release and opens a PR that bumps `ARDUINO_ESP32` in `.github/workflows/firmware.yml`, then builds that branch so you can see if it compiles. Merge it and the board installs the result like any update. It needs the repo setting Actions > General > "Allow GitHub Actions to create and approve pull requests". Merging is still your decision, because a broken build has no automatic rollback.
