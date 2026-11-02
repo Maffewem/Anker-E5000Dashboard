@@ -121,7 +121,7 @@ void loadConfig() {
 void setAuto(bool on) { autoPage = on; lastPage = millis(); prefs.putBool("auto", on); }
 
 
-struct Data { float soc = NAN, solar = NAN, home = NAN, batt = NAN, grid = NAN, saved = NAN, self = NAN, rateP = NAN; String rateKind, rateUntil; bool online = false; long age = -1; } d;
+struct Data { float soc = NAN, solar = NAN, home = NAN, batt = NAN, grid = NAN, saved = NAN, self = NAN, rateP = NAN; String rateKind, rateUntil, runText; bool online = false; long age = -1; } d;
 float battAvg = NAN; unsigned long battAvgT = 0;  // battery power averaged over about 10 minutes, so the time left doesn't jump about
 #define AVG_TAU_MS 600000UL
 String err = "starting";
@@ -151,6 +151,7 @@ void fetch() {
     if (isnan(battAvg) || (fabsf(d.batt) > 200 && fabsf(battAvg) > 200 && (d.batt > 0) != (battAvg > 0))) battAvg = d.batt;
     else battAvg += (d.batt - battAvg) * min(1.0f, (float)dt / AVG_TAU_MS);
   }
+  d.runText = String((const char *)(j["run_text"] | ""));
   d.self = j["self_sufficiency"] | NAN; d.rateP = j["rate_p"] | NAN;
   d.rateKind = String((const char *)(j["rate_kind"] | "")); d.rateUntil = String((const char *)(j["rate_until"] | ""));
   d.online = j["online"] | false; d.age = j["age_s"] | -1L;
@@ -205,6 +206,7 @@ String fmtHours(float h) {
   return m >= 60 ? String(m / 60) + "h " + String(m % 60) + "m" : String(m) + "m";
 }
 String timeLeft() {
+  if (d.runText.length()) return d.runText;  // the dashboard's own estimate: follows the usual pattern and the next planned charge
   if (isnan(d.soc) || isnan(battAvg) || S.capWh <= 0) return "";
   if (battAvg > 50) return fmtHours(d.soc / 100.f * S.capWh / battAvg) + " left";
   if (battAvg < -50) return "full in " + fmtHours((100.f - d.soc) / 100.f * S.capWh / -battAvg);
@@ -277,7 +279,7 @@ void draw() {
       arc(isnan(d.home) ? 0 : d.home / USAGE_FULL_W, loadColour(), 166, 180);  // inner: live home use
       ctext(String(isnan(d.soc) ? 0 : (int)d.soc) + "%", 190, 6, WHITE);
       if (S.solar) ctext("sun " + kw(d.solar), 112, 3, YEL);
-      else if (timeLeft().length()) ctext(timeLeft(), 112, 3, WHITE);
+      else if (timeLeft().length()) ctext(timeLeft(), 118, 2, WHITE);
       ctext("home " + kw(d.home), 296, 3, RED);
       ctext("grid " + kw(d.grid), 342, 3, PUR);
       tariffPill();

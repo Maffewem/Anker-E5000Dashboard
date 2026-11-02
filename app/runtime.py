@@ -166,3 +166,36 @@ def pattern_from_minutes(rows: list[tuple[int, float | None]], tz) -> tuple[list
         by_slot[slot].append(total / n)
     pattern = [statistics.median(v) if v else None for v in by_slot]
     return pattern, hours / 60
+
+
+RUN_MARGIN = timedelta(hours=1)  # running down to the floor this close to the next charge still counts as lasting
+
+
+def run_summary(est: dict[str, Any], now: datetime) -> str | None:
+    """A short line for the round display from estimate(): "lasts to 05:30", "empty 21:40", "full 14:20",
+    "80% 07:00" while charging to a target, "at reserve". None when there is nothing useful to say."""
+    if not est.get("available"):
+        return None
+
+    def at(iso: str) -> str:
+        d = datetime.fromisoformat(iso).astimezone(now.tzinfo)
+        days = (d.date() - now.date()).days
+        hm = d.strftime("%H:%M")
+        return hm if days <= 0 else f"tmrw {hm}" if days == 1 else f"{d:%a} {hm}"
+
+    soc, floor = est["soc"], est["floor_soc"]
+    if est["charging"]:
+        if est.get("full_at"):
+            goal = est.get("charge_target")
+            return f"{round(goal)}% {at(est['full_at'])}" if goal and goal < 100 else f"full {at(est['full_at'])}"
+        return None
+    if soc <= floor + 0.5:
+        return "at reserve"
+    empty, recharge = est.get("empty_at"), est.get("recharges_at")
+    if empty and not (recharge and datetime.fromisoformat(recharge) - datetime.fromisoformat(empty) < RUN_MARGIN):
+        return f"empty {at(empty)}"
+    if recharge:
+        return f"lasts to {at(recharge)}"
+    if est.get("full_at"):
+        return f"full {at(est['full_at'])}"
+    return None

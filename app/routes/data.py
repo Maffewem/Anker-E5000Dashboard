@@ -27,8 +27,7 @@ log = logging.getLogger("solarbank.web")
 router = APIRouter()
 
 
-@router.get("/api/runtime")
-def runtime() -> dict:
+def runtime_estimate() -> dict:
     """When the battery is expected to run empty or be full, from its usage pattern."""
     storage: Storage = state.storage
     now = time.time()
@@ -42,6 +41,11 @@ def runtime() -> dict:
     return estimate(snap, cache["pattern"], cache["hours"], local, planned_charges(settings, windows, local),
                     active_charge(settings, windows, local),
                     active_target(settings, windows, local, state.controller.balance_due(local)))
+
+
+@router.get("/api/runtime")
+def runtime() -> dict:
+    return runtime_estimate()
 
 
 @router.get("/api/history")
