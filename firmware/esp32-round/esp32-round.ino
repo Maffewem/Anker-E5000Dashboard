@@ -77,7 +77,7 @@ Arduino_Canvas *gfx = new Arduino_Canvas(466, 466, panel);  // draw off-screen, 
 const int W = 466, C = 233;
 #define C565(r, g, b) ((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3))
 // Same colours as the preview page (sun #f6cc2c, battery #2fd47a, home #f2564b, grid #b985f5, orange #ff9a2e).
-const uint16_t BG = 0x0000, DIM = 0x18E3, WHITE = C565(232, 232, 234), YEL = C565(246, 204, 44), GRN = C565(47, 212, 122),
+const uint16_t BG = 0x0000, DIM = 0x18E3, GREY = C565(125, 125, 133), WHITE = C565(232, 232, 234), YEL = C565(246, 204, 44), GRN = C565(47, 212, 122),
                RED = C565(242, 86, 75), ORG = C565(255, 154, 46), PUR = C565(185, 133, 245);
 enum { P_OVERVIEW, P_BATTERY, P_SOLAR, P_GRID, P_HOME, P_SAVING, P_COUNT };
 int page = 0;
@@ -124,7 +124,7 @@ String err = "starting";
 #define HIST_MS 60000 // one point a minute = the last 3 hours
 float hist[P_COUNT][HN]; int hn = 0; unsigned long lastHist = 0;
 bool haveData = false;
-uint16_t battColour() { return isnan(d.batt) || d.batt < -20 ? GRN : d.batt > 20 ? ORG : DIM; }  // charging green, discharging orange
+uint16_t battColour() { return isnan(d.batt) || d.batt < -20 ? GRN : d.batt > 20 ? ORG : GREY; }  // charging green, discharging orange
 
 void fetch() {
   if (WiFi.status() != WL_CONNECTED) { err = "wifi"; return; }
@@ -185,7 +185,7 @@ void dots() {
   for (int i = 0; i < n; i++) gfx->fillCircle(C + (i - (n - 1) / 2.0f) * 22, 440, 4, i == at ? WHITE : DIM);
 }
 void big(const char *title, const String &v, const String &sub, uint16_t col, int p) {
-  ctext(title, 70, 2, WHITE); ctext(v, 150, 6, col); ctext(sub, 235, 2, DIM); spark(p, col);
+  ctext(title, 70, 2, WHITE); ctext(v, 150, 6, col); ctext(sub, 235, 2, GREY); spark(p, col);
 }
 
 // Overview ring colour follows how much the home is using: green when low, orange in between, red when high.
@@ -206,7 +206,7 @@ void drawUnreachable() {
   ctext(WiFi.status() == WL_CONNECTED ? "Dashboard" : "No Wi-Fi", 150, 3, RED);
   ctext(WiFi.status() == WL_CONNECTED ? "unreachable" : "connecting...", 190, 3, RED);
   ctext(err, 250, 2, WHITE);
-  ctext("retrying every few seconds", 300, 2, DIM);
+  ctext("retrying every few seconds", 300, 2, GREY);
   wifiBars();
   gfx->flush();
 }
@@ -231,7 +231,7 @@ void draw() {
     case P_HOME: big("Home", kw(d.home), "using now", RED, P_HOME); break;
     case P_SAVING: big("Saved today", isnan(d.saved) ? "--" : String("\xC2\xA3") + String(d.saved, 2), "from the dashboard tariff", GRN, P_SAVING); break;
   }
-  if (autoPage) ctext("auto", 30, 2, DIM);
+  if (autoPage) ctext("auto", 30, 2, GREY);
   if (err.length()) ctext(err, 380, 2, RED);
   else if (!d.online || d.age > 120) ctext("battery offline", 380, 2, RED);
   dots(); wifiBars();
@@ -389,7 +389,7 @@ else if(p==1)b=big('Battery',Math.round(sc)+'%',kw(d.batt)+' '+(d.batt<-20?'char
 else if(p==2)b=big('Solar',kw(d.solar),'generating now',C.sun);
 else if(p==3)b=big('Grid',kw(d.grid),d.grid>0?'importing':'exporting',C.grid);
 else if(p==4)b=big('Home',kw(d.home),'using now',C.home);
-else b=big('Saved today',d.saved==null?'--':'£'+d.saved.toFixed(2),'from the dashboard tariff',C.bat);
+else b=big('Saved today',d.saved==null?'--':String.fromCharCode(163)+d.saved.toFixed(2),'from the dashboard tariff',C.bat);
 var br=fv('dayBr',255);document.getElementById('pv').innerHTML='<svg viewBox="0 0 466 466" width="100%" height="100%" style="opacity:'+Math.max(.15,br/255)+'">'+b+'</svg>'}
 function poll(){fetch('/state').then(function(r){return r.json()}).then(function(j){st=j;draw()}).catch(function(){})}
 document.getElementById('pv').onclick=function(){if(!st)return;var n=st.page;do{n=(n+1)%6}while(n==2&&!st.solarOn);fetch('/page?n='+n).then(poll)};
@@ -407,7 +407,7 @@ void webState() {
 }
 void webRoot() {
   if (!web.authenticate("admin", cfg.otaPw.c_str())) return web.requestAuthentication();
-  String h = F("<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'><title>Anker display</title>"
+  String h = F("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Anker display</title>"
                "<style>body{font:16px system-ui;background:#0b0b0d;color:#e8e8ea;max-width:30rem;margin:1rem auto;padding:0 1rem}"
                "label{display:block;margin:.7rem 0}input{display:block;width:100%;padding:.5rem;font:inherit;margin-top:.2rem;background:#1c1c21;color:#e8e8ea;border:1px solid #333;border-radius:.3rem;box-sizing:border-box}"
                "input[type=checkbox]{width:auto;display:inline}small{color:#999}button,a.b{display:inline-block;padding:.6rem 1rem;margin:.3rem .3rem .3rem 0;"
