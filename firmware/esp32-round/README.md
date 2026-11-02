@@ -42,3 +42,6 @@ Every merge that changes `firmware/esp32-round/` is built by the **Firmware** Gi
 Because the shared build has placeholder settings, the board keeps its **Wi-Fi, URL and tokens in its own memory**: every USB or Arduino IDE upload copies your `config.h` into it, while the Action's build only reads what is already there. So flash once from your computer with a real `config.h`, and after that updates are automatic. Changing a setting means one more upload from your computer.
 
 Limits: there is no automatic rollback, so a broken build needs a USB re-flash. If the Action can't push to `main` (branch protection), allow `github-actions[bot]` to bypass it or the build won't be committed.
+
+## Device name
+The board announces itself as `DEVICE_NAME` (default `anker-display`) on your router and in Arduino IDE, instead of `esp32s3-XXXXXX`. Set it in `config.h`; use letters, digits and hyphens only. Your router may keep showing the old name until the board reconnects or you release its lease.

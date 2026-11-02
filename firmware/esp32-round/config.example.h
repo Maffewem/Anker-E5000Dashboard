@@ -23,3 +23,4 @@
 #define GITHUB_REPO          "Maffewem/Anker-E5000Dashboard"
 #define GITHUB_BRANCH        "main"
 #define GITHUB_TOKEN         ""   // only for UPDATE_SOURCE "github": fine-grained token, repo Contents = read-only
+#define DEVICE_NAME          "anker-display"   // name on your router and in Arduino IDE ports; letters, digits, hyphens only

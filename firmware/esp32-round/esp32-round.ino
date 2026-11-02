@@ -25,6 +25,9 @@
 #ifndef NIGHT_END_HOUR
 #define NIGHT_END_HOUR 7          // ...until this hour. Set both equal to disable dimming.
 #endif
+#ifndef DEVICE_NAME
+#define DEVICE_NAME "anker-display"  // name on your router and in Arduino IDE's network ports (no spaces)
+#endif
 #ifndef UPDATE_SOURCE
 #define UPDATE_SOURCE "dashboard"   // "dashboard", "github" or "off"
 #endif
@@ -242,7 +245,7 @@ void handleButton() {
 // Over-the-air updates: after one USB flash, upload from Arduino IDE (Tools > Port > anker-display) over Wi-Fi.
 bool otaOn = false;
 void otaStart() {
-  ArduinoOTA.setHostname("anker-display");
+  ArduinoOTA.setHostname(DEVICE_NAME);
   ArduinoOTA.setPassword(cfg.otaPw.c_str());
   ArduinoOTA.onStart([]() { gfx->fillScreen(BG); ctext("Updating...", 200, 3, WHITE); gfx->flush(); });
   ArduinoOTA.onProgress([](unsigned int done, unsigned int total) {
@@ -264,7 +267,7 @@ bool httpGet(const String &url, const char *auth, bool raw, String &out) {
   HTTPClient h; h.setTimeout(8000); h.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   if (!(tls ? h.begin(sec, url) : h.begin(plain, url))) return false;
   if (*auth) h.addHeader("Authorization", String("Bearer ") + auth);
-  if (raw) { h.addHeader("Accept", "application/vnd.github.raw+json"); h.addHeader("User-Agent", "anker-display"); }
+  if (raw) { h.addHeader("Accept", "application/vnd.github.raw+json"); h.addHeader("User-Agent", DEVICE_NAME); }
   int code = h.GET();
   if (code == 200) out = h.getString();
   h.end();
@@ -328,6 +331,7 @@ void setup() {
   Wire.begin(TP_SDA, TP_SCL); pinMode(TP_INT, INPUT_PULLUP);
   gfx->begin(); panel->setBrightness(DAY_BRIGHTNESS);
   configTzTime(TIMEZONE, "pool.ntp.org", "time.google.com");
+  WiFi.setHostname(DEVICE_NAME);
   WiFi.mode(WIFI_STA); WiFi.begin(cfg.ssid.c_str(), cfg.pass.c_str());
   for (int i = 0; i < 6; i++) for (int p = 0; p < HN; p++) hist[i][p] = NAN;
   draw();
