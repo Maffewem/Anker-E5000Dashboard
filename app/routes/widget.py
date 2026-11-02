@@ -17,6 +17,8 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
 
 from ..context import state
+from ..runtime import run_summary
+from .data import runtime_estimate
 from ..tariff import daily_costs
 from .tariff import _pricing
 
@@ -104,6 +106,10 @@ def widget(request: Request) -> dict:
             out.update(rate_now(tariff.slot_rates(), now))
         except Exception as err:
             log.warning("Widget couldn't work out the current rate: %s", err)
+    try:
+        out["run_text"] = run_summary(runtime_estimate(), now)
+    except Exception as err:
+        log.warning("Widget couldn't work out the runtime: %s", err)
     try:
         out["self_sufficiency"] = self_sufficiency(state.storage.energy_slots(), now.date().isoformat())
     except Exception as err:

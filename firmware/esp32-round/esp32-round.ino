@@ -121,7 +121,9 @@ void loadConfig() {
 void setAuto(bool on) { autoPage = on; lastPage = millis(); prefs.putBool("auto", on); }
 
 
-struct Data { float soc = NAN, solar = NAN, home = NAN, batt = NAN, grid = NAN, saved = NAN, self = NAN, rateP = NAN; String rateKind, rateUntil; bool online = false; long age = -1; } d;
+struct Data { float soc = NAN, solar = NAN, home = NAN, batt = NAN, grid = NAN, saved = NAN, self = NAN, rateP = NAN; String rateKind, rateUntil, runText; bool online = false; long age = -1; } d;
+float battAvg = NAN; unsigned long battAvgT = 0;  // battery power averaged over about 10 minutes, so the time left doesn't jump about
+#define AVG_TAU_MS 600000UL
 String err = "starting";
 #define HN 180        // history points per series
 #define HIST_MS 60000 // one point a minute = the last 3 hours
@@ -143,6 +145,13 @@ void fetch() {
   err = ""; haveData = true;
   d.soc = j["soc"] | NAN; d.solar = j["solar_w"] | NAN; d.home = j["home_w"] | NAN;
   d.batt = j["battery_w"] | NAN; d.grid = j["grid_w"] | NAN; d.saved = j["saved_today"] | NAN;
+  if (!isnan(d.batt)) {
+    unsigned long t = millis(), dt = battAvgT ? t - battAvgT : 0; battAvgT = t;
+    // Start again when the battery really changes direction (not for small swings around zero).
+    if (isnan(battAvg) || (fabsf(d.batt) > 200 && fabsf(battAvg) > 200 && (d.batt > 0) != (battAvg > 0))) battAvg = d.batt;
+    else battAvg += (d.batt - battAvg) * min(1.0f, (float)dt / AVG_TAU_MS);
+  }
+  d.runText = String((const char *)(j["run_text"] | ""));
   d.self = j["self_sufficiency"] | NAN; d.rateP = j["rate_p"] | NAN;
   d.rateKind = String((const char *)(j["rate_kind"] | "")); d.rateUntil = String((const char *)(j["rate_until"] | ""));
   d.online = j["online"] | false; d.age = j["age_s"] | -1L;
@@ -189,15 +198,18 @@ void dots() {
   for (int i = 0; i < P_COUNT; i++) if (pageOn(i)) { if (i == page) at = n; n++; }
   for (int i = 0; i < n; i++) gfx->fillCircle(C + (i - (n - 1) / 2.0f) * 22, 440, 4, i == at ? WHITE : DIM);
 }
-// Time left from the battery level and power: "Remaining: 2h 47m" while discharging, "Full in 1h 10m" while charging.
+// Time left from the battery level and power: "2h 47m left" while discharging, "full in 1h 10m" while charging.
 String fmtHours(float h) {
+  if (h >= 24) return ">24h";
   int m = (int)(h * 60 + 0.5f);
+  if (m >= 60) m = (m + 2) / 5 * 5;  // over an hour: to the nearest 5 minutes
   return m >= 60 ? String(m / 60) + "h " + String(m % 60) + "m" : String(m) + "m";
 }
 String timeLeft() {
-  if (isnan(d.soc) || isnan(d.batt) || S.capWh <= 0) return "";
-  if (d.batt > 20) return "Remaining: " + fmtHours(d.soc / 100.f * S.capWh / d.batt);
-  if (d.batt < -20) return "Full in " + fmtHours((100.f - d.soc) / 100.f * S.capWh / -d.batt);
+  if (d.runText.length()) return d.runText;  // the dashboard's own estimate: follows the usual pattern and the next planned charge
+  if (isnan(d.soc) || isnan(battAvg) || S.capWh <= 0) return "";
+  if (battAvg > 50) return fmtHours(d.soc / 100.f * S.capWh / battAvg) + " left";
+  if (battAvg < -50) return "full in " + fmtHours((100.f - d.soc) / 100.f * S.capWh / -battAvg);
   return "";
 }
 void big(const char *title, const String &v, const String &sub, uint16_t col, int p, const String &extra = "") {
@@ -267,7 +279,7 @@ void draw() {
       arc(isnan(d.home) ? 0 : d.home / USAGE_FULL_W, loadColour(), 166, 180);  // inner: live home use
       ctext(String(isnan(d.soc) ? 0 : (int)d.soc) + "%", 190, 6, WHITE);
       if (S.solar) ctext("sun " + kw(d.solar), 112, 3, YEL);
-      else if (timeLeft().length()) ctext(timeLeft(), 112, 3, WHITE);
+      else if (timeLeft().length()) ctext(timeLeft(), 118, 2, WHITE);
       ctext("home " + kw(d.home), 296, 3, RED);
       ctext("grid " + kw(d.grid), 342, 3, PUR);
       tariffPill();
@@ -469,20 +481,22 @@ var st=null,C={sun:'#f6cc2c',bat:'#2fd47a',home:'#f2564b',grid:'#b985f5',org:'#f
 function kw(w){return w==null?'--':Math.abs(w)>=1000?(w/1000).toFixed(2)+'kW':Math.round(w)+'W'}
 function arc(r,a0,a1){var p=function(a){a=a*Math.PI/180;return[233+r*Math.cos(a),233+r*Math.sin(a)]},s=p(a0),e=p(a1);return'M'+s+' A'+r+' '+r+' 0 '+((a1-a0)>180?1:0)+' 1 '+e}
 function T(x,y,t,sz,c){return'<text x="'+x+'" y="'+y+'" font-size="'+sz+'" font-family="system-ui" text-anchor="middle" fill="'+c+'">'+t+'</text>'}
-function big(t,v,sub,c){return T(233,95,t,26,'#e8e8ea')+T(233,205,v,96,c)+T(233,255,sub,26,'#6b6b73')}
+function big(t,v,sub,c,x){return T(233,95,t,26,'#e8e8ea')+T(233,205,v,96,c)+T(233,255,sub,26,'#7d7d85')+(x?T(233,282,x,24,'#e8e8ea'):'')}
+function pill(d){if(!d.rateKind)return'';var k=d.rateKind,cheap=k=='cheap',peak=k=='peak',fg=cheap?C.bat:peak?C.home:C.org,bg=cheap?'#12301f':peak?'#461614':'#42280c';return'<rect x="153" y="392" width="160" height="28" rx="14" fill="'+bg+'"/>'+T(233,412,(cheap?'cheap':peak?'peak':'mid')+' until '+d.rateUntil,18,fg)}
 function fv(n,def){var e=document.querySelector('[name='+n+']');return e&&e.value!==''?+e.value:def}
 function draw(){var d=st,b='';if(!d)return;var gr=fv('green',d.green),rd=fv('red',d.red),so=document.querySelector('[name=solar]');so=so?so.checked:d.solarOn;
 var p=d.page,sc=d.soc==null?0:d.soc;
 if(!d.online){b=T(233,200,'Dashboard',44,C.home)+T(233,260,'unreachable',44,C.home)}
 else if(p==0){var bc=sc>=67?C.bat:sc>=34?C.org:C.home,lc=d.home==null?'#555':d.home<gr?C.bat:d.home>rd?C.home:C.org;
-b='<path d="'+arc(198,135,405)+'" stroke="'+C.dim+'" stroke-width="20" fill="none"/><path d="'+arc(198,135,135+270*sc/100)+'" stroke="'+bc+'" stroke-width="20" fill="none" stroke-linecap="round"/><path d="'+arc(173,135,405)+'" stroke="'+C.dim+'" stroke-width="14" fill="none"/>'+(d.home>0?'<path d="'+arc(173,135,135+270*Math.min(d.home/4000,1))+'" stroke="'+lc+'" stroke-width="14" fill="none" stroke-linecap="round"/>':'')+T(233,235,Math.round(sc)+'%',96,'#e8e8ea')+(so?T(233,130,'sun '+kw(d.solar),34,C.sun):'')+T(233,320,'home '+kw(d.home),34,C.home)+T(233,362,'grid '+kw(d.grid),34,C.grid)}
-else if(p==1)b=big('Battery',Math.round(sc)+'%',kw(d.batt)+' '+(d.batt<-20?'charging':d.batt>20?'discharging':'idle'),C.bat);
+b='<path d="'+arc(198,135,405)+'" stroke="'+C.dim+'" stroke-width="20" fill="none"/><path d="'+arc(198,135,135+270*sc/100)+'" stroke="'+bc+'" stroke-width="20" fill="none" stroke-linecap="round"/><path d="'+arc(173,135,405)+'" stroke="'+C.dim+'" stroke-width="14" fill="none"/>'+(d.home>0?'<path d="'+arc(173,135,135+270*Math.min(d.home/4000,1))+'" stroke="'+lc+'" stroke-width="14" fill="none" stroke-linecap="round"/>':'')+T(233,235,Math.round(sc)+'%',96,'#e8e8ea')+(so?T(233,130,'sun '+kw(d.solar),34,C.sun):(d.left?T(233,136,d.left,24,'#e8e8ea'):''))+T(233,320,'home '+kw(d.home),34,C.home)+T(233,362,'grid '+kw(d.grid),34,C.grid)+pill(d)}
+else if(p==1)b=big('Battery',Math.round(sc)+'%',kw(d.batt)+' '+(d.batt<-20?'charging':d.batt>20?'discharging':'idle'),C.bat,d.left);
 else if(p==2)b=big('Solar',kw(d.solar),'generating now',C.sun);
 else if(p==3)b=big('Grid',kw(d.grid),d.grid>0?'importing':'exporting',C.grid);
 else if(p==4)b=big('Home',kw(d.home),'using now',C.home);
 else if(p==6)b=big('Self-sufficient',d.self==null?'--':Math.round(d.self)+'%','of today\'s use not from grid',C.bat);
 else b=big('Saved today',d.saved==null?'--':String.fromCharCode(163)+d.saved.toFixed(2),'from the dashboard tariff',C.bat);
-var br=fv('dayBr',255);document.getElementById('pv').innerHTML='<svg viewBox="0 0 466 466" width="100%" height="100%" style="opacity:'+Math.max(.15,br/255)+'">'+b+'</svg>'}
+var br=fv('dayBr',255);if(d.alert&&d.online)b+='<rect x="123" y="20" width="220" height="34" rx="17" fill="#5a1410"/>'+T(233,43,d.alert,18,'#ffb4ac');
+document.getElementById('pv').innerHTML='<svg viewBox="0 0 466 466" width="100%" height="100%" style="opacity:'+Math.max(.15,br/255)+'">'+b+'</svg>'}
 function poll(){fetch('/state').then(function(r){return r.json()}).then(function(j){st=j;draw()}).catch(function(){})}
 document.getElementById('pv').onclick=function(){if(!st)return;var n=st.page;do{n=(n+1)%7}while(n==2&&!st.solarOn);fetch('/page?n='+n).then(poll)};
 document.addEventListener('input',draw);
@@ -495,6 +509,7 @@ void webState() {
   j["page"] = page; j["online"] = !(err.length() && !haveData); j["solarOn"] = S.solar; j["green"] = S.green; j["red"] = S.red;
   if (!isnan(d.soc)) j["soc"] = d.soc; if (!isnan(d.solar)) j["solar"] = d.solar; if (!isnan(d.home)) j["home"] = d.home;
   if (!isnan(d.batt)) j["batt"] = d.batt; if (!isnan(d.grid)) j["grid"] = d.grid; if (!isnan(d.saved)) j["saved"] = d.saved; if (!isnan(d.self)) j["self"] = d.self;
+  j["left"] = timeLeft(); j["alert"] = alertText(); j["rateKind"] = d.rateKind; j["rateUntil"] = d.rateUntil;
   String out; serializeJson(j, out); web.send(200, "application/json", out);
 }
 void webRoot() {
@@ -505,7 +520,9 @@ void webRoot() {
                "input[type=checkbox]{width:auto;display:inline}small{color:#999}button,a.b{display:inline-block;padding:.6rem 1rem;margin:.3rem .3rem .3rem 0;"
                "background:#2fd47a;color:#04210f;border:0;font:inherit;font-weight:700;border-radius:.3rem;text-decoration:none}</style>");
   h += "<h2>Anker display</h2>"; h += PREVIEW_JS; h += "<p>Battery " + String(isnan(d.soc) ? 0 : (int)d.soc) + "%, home " + kw(d.home) + ", solar " + kw(d.solar) +
-       ", grid " + kw(d.grid) + "<br><small>Wi-Fi " + String(WiFi.RSSI()) + " dBm, up " + String(millis() / 60000) + " min, firmware " + ESP.getSketchMD5().substring(0, 8) + "</small></p>";
+       ", grid " + kw(d.grid) + "<br><small>Wi-Fi " + String(WiFi.RSSI()) + " dBm, up " + String(millis() / 60000) + " min, firmware " + ESP.getSketchMD5().substring(0, 8) + "</small>"; 
+  { String t = timeLeft(); if (t.length()) h += "<br>Time left: " + t; if (!isnan(d.rateP)) h += "<br>Rate: " + String(d.rateP, 1) + "p/kWh" + (d.rateKind.length() ? " (" + d.rateKind + " until " + d.rateUntil + ")" : ""); if (!isnan(d.self)) h += "<br>Self-sufficient today: " + String((int)d.self) + "%"; String al = alertText(); if (al.length()) h += "<br><b>" + al + "</b>"; }
+  h += "</p>";
   h += "<p>Show page: ";
   const char *names[] = {"Overview", "Battery", "Solar", "Grid", "Home", "Saved", "Self-sufficient"};
   for (int i = 0; i < P_COUNT; i++) if (pageOn(i)) h += String("<a class=b href='/page?n=") + i + "'>" + names[i] + "</a>";
@@ -514,7 +531,7 @@ void webRoot() {
   h += String("<label><input type=checkbox name=auto value=1") + (autoPage ? " checked" : "") + "> Auto page</label>";
   h += field("Seconds per page", "autoS", S.autoMs / 1000, "");
   h += String("<label><input type=checkbox name=nclock value=1") + (S.nightClock ? " checked" : "") + "> Show a dim clock at night instead of the pages</label>";
-  h += field("Battery size (Wh) for time left", "capWh", S.capWh, "usable energy, used for Remaining and Full in");
+  h += field("Battery size (Wh) for time left", "capWh", S.capWh, "usable energy, used for the time left");
   h += field("Alert at or below (%)", "floorPct", S.floorPct, "shows Battery limited");
   h += field("Day brightness", "dayBr", S.dayBr, "0 to 255");
   h += field("Night brightness", "nightBr", S.nightBr, "0 to 255, 0 = off");

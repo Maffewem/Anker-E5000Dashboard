@@ -195,3 +195,20 @@ def test_widget_rate_and_self_sufficiency_helpers():
     slots = [{"day": "2026-01-01", "home_wh": 1000, "import_wh": 250}, {"day": "2025-12-31", "home_wh": 9000, "import_wh": 9000}]
     assert self_sufficiency(slots, "2026-01-01") == 75.0
     assert self_sufficiency(slots, "2026-01-02") is None
+
+
+def test_run_summary_lines():
+    from datetime import datetime, timedelta, timezone
+
+    from app.runtime import run_summary
+
+    now = datetime(2026, 1, 1, 22, 0, tzinfo=timezone.utc)
+    iso = lambda h: (now + timedelta(hours=h)).isoformat()  # noqa: E731
+    base = {"available": True, "soc": 60, "floor_soc": 10, "charging": False}
+    assert run_summary({"available": False}, now) is None
+    assert run_summary({**base, "empty_at": iso(3), "recharges_at": iso(8)}, now) == "empty tmrw 01:00"
+    assert run_summary({**base, "empty_at": iso(7.5), "recharges_at": iso(8)}, now) == "lasts to tmrw 06:00"
+    assert run_summary({**base, "recharges_at": iso(1)}, now) == "lasts to 23:00"
+    assert run_summary({**base, "soc": 10}, now) == "at reserve"
+    assert run_summary({**base, "charging": True, "full_at": iso(2)}, now) == "full tmrw 00:00"
+    assert run_summary({**base, "charging": True, "full_at": iso(2), "charge_target": 80}, now) == "80% tmrw 00:00"
