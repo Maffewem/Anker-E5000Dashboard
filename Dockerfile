@@ -12,6 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 COPY simulator ./simulator
+COPY firmware/dist ./firmware
 
 # Version, commit and build date, shown in the dashboard footer and logged at startup.
 ARG APP_VERSION=dev

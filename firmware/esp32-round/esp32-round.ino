@@ -8,6 +8,9 @@
 #include <Wire.h>
 #include <ArduinoOTA.h>
 #include <Preferences.h>
+#include <WebServer.h>
+#include <HTTPUpdate.h>
+#include <WiFiClientSecure.h>
 #include "config.h"
 
 // Optional settings: an older config.h without these still compiles with the defaults.
@@ -22,6 +25,30 @@
 #endif
 #ifndef NIGHT_END_HOUR
 #define NIGHT_END_HOUR 7          // ...until this hour. Set both equal to disable dimming.
+#endif
+#ifndef LOAD_GREEN_BELOW_W
+#define LOAD_GREEN_BELOW_W 300    // home use below this: ring is green
+#endif
+#ifndef LOAD_RED_ABOVE_W
+#define LOAD_RED_ABOVE_W 2000     // home use above this: ring is red; orange in between
+#endif
+#ifndef DEVICE_NAME
+#define DEVICE_NAME "anker-display"  // name on your router and in Arduino IDE's network ports (no spaces)
+#endif
+#ifndef UPDATE_SOURCE
+#define UPDATE_SOURCE "dashboard"   // "dashboard", "github" or "off"
+#endif
+#ifndef UPDATE_CHECK_HOURS
+#define UPDATE_CHECK_HOURS 6
+#endif
+#ifndef GITHUB_REPO
+#define GITHUB_REPO "Maffewem/Anker-E5000Dashboard"
+#endif
+#ifndef GITHUB_BRANCH
+#define GITHUB_BRANCH "main"
+#endif
+#ifndef GITHUB_TOKEN
+#define GITHUB_TOKEN ""             // fine-grained token, read-only "Contents" on that repo
 #endif
 #ifndef TIMEZONE
 #define TIMEZONE "GMT0BST,M3.5.0/1,M10.5.0"  // UK time with daylight saving
@@ -40,8 +67,10 @@
 #define TP_INT 11
 #define TP_ADDR 0x5A  // CST9217
 
+#define PANEL_COL_OFFSET 6  // this 466x466 CO5300 panel starts 6 columns in; 0 leaves a stray line at the right edge
 Arduino_DataBus *bus = new Arduino_ESP32QSPI(LCD_CS, LCD_SCK, LCD_D0, LCD_D1, LCD_D2, LCD_D3);
-Arduino_CO5300 *panel = new Arduino_CO5300(bus, LCD_RST, 0, 466, 466);
+Arduino_CO5300 *panel = new Arduino_CO5300(bus, LCD_RST, 0, 466, 466, PANEL_COL_OFFSET, 0, 0, 0);
+// If a thin stray line shows at an edge, this offset is wrong: try 0 (no offset) or 6.
 Arduino_Canvas *gfx = new Arduino_Canvas(466, 466, panel);  // draw off-screen, then flush: no flicker
 
 const int W = 466, C = 233;
@@ -52,6 +81,35 @@ int page = 0;
 bool autoPage = false;  // toggled by the BOOT button or a long press; remembered across restarts
 unsigned long lastPage = 0;
 Preferences prefs;
+
+// Settings you can change from the web page (http://DEVICE_NAME.local/). config.h values are only the defaults.
+struct Settings { int dayBr, nightBr, nStart, nEnd, green, red, updHours, autoMs; } S;
+void loadSettings() {
+  S.dayBr = prefs.getInt("dayBr", DAY_BRIGHTNESS); S.nightBr = prefs.getInt("nightBr", NIGHT_BRIGHTNESS);
+  S.nStart = prefs.getInt("nStart", NIGHT_START_HOUR); S.nEnd = prefs.getInt("nEnd", NIGHT_END_HOUR);
+  S.green = prefs.getInt("green", LOAD_GREEN_BELOW_W); S.red = prefs.getInt("red", LOAD_RED_ABOVE_W);
+  S.updHours = prefs.getInt("updHours", UPDATE_CHECK_HOURS); S.autoMs = prefs.getInt("autoMs", AUTO_PAGE_MS > 0 ? AUTO_PAGE_MS : 8000);
+}
+void saveSettings() {
+  prefs.putInt("dayBr", S.dayBr); prefs.putInt("nightBr", S.nightBr); prefs.putInt("nStart", S.nStart); prefs.putInt("nEnd", S.nEnd);
+  prefs.putInt("green", S.green); prefs.putInt("red", S.red); prefs.putInt("updHours", S.updHours); prefs.putInt("autoMs", S.autoMs);
+}
+
+// Wi-Fi, URL and tokens live in the board's own memory (NVS), so a firmware built in CI (which has placeholder
+// values) never overwrites them. A normal USB or Arduino IDE build copies config.h into NVS at boot; a CI build only reads NVS.
+struct Cfg { String ssid, pass, url, token, otaPw, updSrc, ghRepo, ghBranch, ghToken; } cfg;
+void loadConfig() {
+#ifdef CI_BUILD
+  cfg.ssid = prefs.getString("ssid"); cfg.pass = prefs.getString("pass"); cfg.url = prefs.getString("url");
+  cfg.token = prefs.getString("token"); cfg.otaPw = prefs.getString("otapw"); cfg.updSrc = prefs.getString("updsrc", "dashboard");
+  cfg.ghRepo = prefs.getString("ghrepo"); cfg.ghBranch = prefs.getString("ghbranch", "main"); cfg.ghToken = prefs.getString("ghtoken");
+#else
+  cfg = {WIFI_SSID, WIFI_PASSWORD, WIDGET_URL, WIDGET_TOKEN, OTA_PASSWORD, UPDATE_SOURCE, GITHUB_REPO, GITHUB_BRANCH, GITHUB_TOKEN};
+  prefs.putString("ssid", cfg.ssid); prefs.putString("pass", cfg.pass); prefs.putString("url", cfg.url);
+  prefs.putString("token", cfg.token); prefs.putString("otapw", cfg.otaPw); prefs.putString("updsrc", cfg.updSrc);
+  prefs.putString("ghrepo", cfg.ghRepo); prefs.putString("ghbranch", cfg.ghBranch); prefs.putString("ghtoken", cfg.ghToken);
+#endif
+}
 void setAuto(bool on) { autoPage = on; lastPage = millis(); prefs.putBool("auto", on); }
 
 
@@ -67,8 +125,8 @@ void fetch() {
   if (WiFi.status() != WL_CONNECTED) { err = "wifi"; return; }
   HTTPClient http;
   http.setTimeout(4000);
-  http.begin(WIDGET_URL);
-  http.addHeader("Authorization", "Bearer " WIDGET_TOKEN);
+  http.begin(cfg.url);
+  http.addHeader("Authorization", "Bearer " + cfg.token);
   int code = http.GET();
   if (code != 200) { err = code == 401 ? "bad token" : code == 404 ? "widget off" : "http " + String(code); http.end(); return; }
   JsonDocument j;
@@ -121,6 +179,9 @@ void big(const char *title, const String &v, const String &sub, uint16_t col, in
   ctext(title, 70, 2, WHITE); ctext(v, 150, 6, col); ctext(sub, 235, 2, DIM); spark(p, col);
 }
 
+// Overview ring colour follows how much the home is using: green when low, orange in between, red when high.
+uint16_t loadColour() { return isnan(d.home) ? DIM : d.home < S.green ? GRN : d.home > S.red ? RED : ORG; }
+
 void wifiBars() {  // four small bars from the Wi-Fi signal, bottom right of centre
   int rssi = WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : -100;
   int n = rssi > -55 ? 4 : rssi > -65 ? 3 : rssi > -75 ? 2 : rssi > -85 ? 1 : 0;
@@ -142,7 +203,7 @@ void draw() {
   gfx->fillScreen(BG);
   switch (page) {
     case P_OVERVIEW: {
-      arc(d.soc / 100, battColour(), 202, 222);
+      arc(d.soc / 100, loadColour(), 202, 222);
       ctext(String(isnan(d.soc) ? 0 : (int)d.soc) + "%", 190, 6, WHITE);
       ctext("sun " + kw(d.solar), 100, 3, YEL);
       ctext("home " + kw(d.home), 270, 3, RED);
@@ -207,8 +268,8 @@ void handleButton() {
 // Over-the-air updates: after one USB flash, upload from Arduino IDE (Tools > Port > anker-display) over Wi-Fi.
 bool otaOn = false;
 void otaStart() {
-  ArduinoOTA.setHostname("anker-display");
-  ArduinoOTA.setPassword(OTA_PASSWORD);
+  ArduinoOTA.setHostname(DEVICE_NAME);
+  ArduinoOTA.setPassword(cfg.otaPw.c_str());
   ArduinoOTA.onStart([]() { gfx->fillScreen(BG); ctext("Updating...", 200, 3, WHITE); gfx->flush(); });
   ArduinoOTA.onProgress([](unsigned int done, unsigned int total) {
     arc((float)done / total, GRN, 202, 222); gfx->flush();
@@ -217,19 +278,134 @@ void otaStart() {
   otaOn = true;
 }
 
-// Dim between NIGHT_START_HOUR and NIGHT_END_HOUR using NTP time. Until the clock is set it stays at day brightness.
+// ---- Automatic updates: the board checks every UPDATE_CHECK_HOURS and installs a newer build by itself. ----
+// "dashboard": asks your dashboard (/api/firmware/esp32-round, same token). "github": reads firmware/dist/ from the repo
+// with a read-only token. Either way the CI build's MD5 is compared with the running firmware's.
+// Security note: GitHub mode talks https without checking the server certificate (setInsecure); the token is read-only.
+void updateProgress(int done, int total) { arc((float)done / total, GRN, 202, 222); gfx->flush(); }
+
+bool httpGet(const String &url, const char *auth, bool raw, String &out) {
+  bool tls = url.startsWith("https");
+  WiFiClientSecure sec; WiFiClient plain; if (tls) sec.setInsecure();
+  HTTPClient h; h.setTimeout(8000); h.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  if (!(tls ? h.begin(sec, url) : h.begin(plain, url))) return false;
+  if (*auth) h.addHeader("Authorization", String("Bearer ") + auth);
+  if (raw) { h.addHeader("Accept", "application/vnd.github.raw+json"); h.addHeader("User-Agent", DEVICE_NAME); }
+  int code = h.GET();
+  if (code == 200) out = h.getString();
+  h.end();
+  return code == 200;
+}
+
+void checkUpdate() {
+  if (cfg.updSrc == "off" || WiFi.status() != WL_CONNECTED) return;
+  bool gh = cfg.updSrc == "github";
+  String base, md5, body;
+  if (gh) {
+    if (!cfg.ghToken.length()) return;
+    base = "https://api.github.com/repos/" + cfg.ghRepo + "/contents/firmware/dist/esp32-round";
+    if (!httpGet(base + ".md5?ref=" + cfg.ghBranch, cfg.ghToken.c_str(), true, body)) return;
+    md5 = body;
+  } else {
+    base = cfg.url; base.replace("/api/widget", "/api/firmware/esp32-round");
+    if (!httpGet(base, cfg.token.c_str(), false, body)) return;
+    JsonDocument j; if (deserializeJson(j, body)) return;
+    md5 = String((const char *)(j["md5"] | ""));
+  }
+  md5.trim(); md5.toLowerCase();
+  if (md5.length() != 32) return;
+  // Skip if we already run it, or already installed it once (stops an install loop if the two checksums ever differ).
+  if (md5 == ESP.getSketchMD5() || md5 == prefs.getString("lastmd5")) return;
+
+  gfx->fillScreen(BG); ctext("Updating...", 200, 3, WHITE); gfx->flush();
+  httpUpdate.rebootOnUpdate(false);
+  httpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  httpUpdate.onProgress(updateProgress);
+  String binUrl = base + ".bin" + (gh ? "?ref=" + cfg.ghBranch : "");
+  if (gh) { httpUpdate.addHeader("Authorization", "Bearer " + cfg.ghToken); httpUpdate.addHeader("Accept", "application/vnd.github.raw+json"); httpUpdate.addHeader("User-Agent", "anker-display"); }
+  else httpUpdate.addHeader("Authorization", "Bearer " + cfg.token);
+  WiFiClientSecure sec; WiFiClient plain; if (gh) sec.setInsecure();
+  t_httpUpdate_return r = gh ? httpUpdate.update(sec, binUrl) : httpUpdate.update(plain, binUrl);
+  if (r == HTTP_UPDATE_OK) { prefs.putString("lastmd5", md5); ESP.restart(); }
+  err = "update failed"; draw();
+}
+
+// ---- Web settings page: http://DEVICE_NAME.local/ (or the board's IP). Sign in as "admin" with OTA_PASSWORD. ----
+WebServer web(80);
+bool updateNow = false;
+int curBrightReset = 0;
+
+int argInt(const char *name, int lo, int hi, int def) {
+  if (!web.hasArg(name)) return def;
+  return constrain(web.arg(name).toInt(), lo, hi);
+}
+String field(const char *label, const char *name, int val, const char *hint) {
+  return String("<label>") + label + "<input type=number name=" + name + " value=" + val + "><small>" + hint + "</small></label>";
+}
+void webRoot() {
+  if (!web.authenticate("admin", cfg.otaPw.c_str())) return web.requestAuthentication();
+  String h = F("<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'><title>Anker display</title>"
+               "<style>body{font:16px system-ui;background:#111;color:#eee;max-width:30rem;margin:1rem auto;padding:0 1rem}"
+               "label{display:block;margin:.7rem 0}input{display:block;width:100%;padding:.5rem;font:inherit;margin-top:.2rem}"
+               "input[type=checkbox]{width:auto;display:inline}small{color:#999}button,a.b{display:inline-block;padding:.6rem 1rem;margin:.3rem .3rem .3rem 0;"
+               "background:#2a6;border:0;color:#fff;font:inherit;border-radius:.3rem;text-decoration:none}</style>");
+  h += "<h2>Anker display</h2><p>Battery " + String(isnan(d.soc) ? 0 : (int)d.soc) + "%, home " + kw(d.home) + ", solar " + kw(d.solar) +
+       ", grid " + kw(d.grid) + "<br><small>Wi-Fi " + String(WiFi.RSSI()) + " dBm, up " + String(millis() / 60000) + " min, firmware " + ESP.getSketchMD5().substring(0, 8) + "</small></p>";
+  h += "<p>Show page: ";
+  const char *names[] = {"Overview", "Battery", "Solar", "Grid", "Home", "Saved"};
+  for (int i = 0; i < P_COUNT; i++) h += String("<a class=b href='/page?n=") + i + "'>" + names[i] + "</a>";
+  h += "</p><form method=post action=/save>";
+  h += String("<label><input type=checkbox name=auto value=1") + (autoPage ? " checked" : "") + "> Auto page</label>";
+  h += field("Seconds per page", "autoS", S.autoMs / 1000, "");
+  h += field("Day brightness", "dayBr", S.dayBr, "0 to 255");
+  h += field("Night brightness", "nightBr", S.nightBr, "0 to 255, 0 = off");
+  h += field("Night starts (hour)", "nStart", S.nStart, "0 to 23");
+  h += field("Night ends (hour)", "nEnd", S.nEnd, "0 to 23; same as start = no dimming");
+  h += field("Ring green below (W)", "green", S.green, "home use");
+  h += field("Ring red above (W)", "red", S.red, "orange in between");
+  h += field("Check for update every (hours)", "updHours", S.updHours, "1 to 168");
+  h += "<button>Save</button></form><form method=post action=/update><button>Check for update now</button></form>";
+  web.send(200, "text/html", h);
+}
+void webSave() {
+  if (!web.authenticate("admin", cfg.otaPw.c_str())) return web.requestAuthentication();
+  S.dayBr = argInt("dayBr", 0, 255, S.dayBr); S.nightBr = argInt("nightBr", 0, 255, S.nightBr);
+  S.nStart = argInt("nStart", 0, 23, S.nStart); S.nEnd = argInt("nEnd", 0, 23, S.nEnd);
+  S.green = argInt("green", 0, 20000, S.green); S.red = argInt("red", 0, 20000, S.red);
+  S.updHours = argInt("updHours", 1, 168, S.updHours); S.autoMs = argInt("autoS", 2, 600, S.autoMs / 1000) * 1000;
+  saveSettings(); setAuto(web.hasArg("auto")); curBrightReset = 1; draw();
+  web.sendHeader("Location", "/"); web.send(303);
+}
+void webPage() {
+  if (!web.authenticate("admin", cfg.otaPw.c_str())) return web.requestAuthentication();
+  page = argInt("n", 0, P_COUNT - 1, page); lastPage = millis(); draw();
+  web.sendHeader("Location", "/"); web.send(303);
+}
+void webUpdate() {
+  if (!web.authenticate("admin", cfg.otaPw.c_str())) return web.requestAuthentication();
+  updateNow = true;
+  web.sendHeader("Location", "/"); web.send(303);
+}
+void webStart() {
+  if (!cfg.otaPw.length()) return;  // no password set: no page
+  web.on("/", webRoot); web.on("/save", HTTP_POST, webSave); web.on("/page", webPage); web.on("/update", HTTP_POST, webUpdate);
+  web.begin();
+}
+
+// Dim between the night start and end hours using NTP time. Until the clock is set it stays at day brightness.
 int curBright = -1;
 void updateBrightness() {
   static unsigned long last = 0;
+  if (curBrightReset) { curBrightReset = 0; last = 0; curBright = -1; }
   if (millis() - last < 30000 && last) return;
   last = millis();
   struct tm t;
-  int target = DAY_BRIGHTNESS;
-  if (getLocalTime(&t, 0) && NIGHT_START_HOUR != NIGHT_END_HOUR) {
+  int target = S.dayBr;
+  if (getLocalTime(&t, 0) && S.nStart != S.nEnd) {
     int h = t.tm_hour;
-    bool night = NIGHT_START_HOUR < NIGHT_END_HOUR ? (h >= NIGHT_START_HOUR && h < NIGHT_END_HOUR)
-                                                   : (h >= NIGHT_START_HOUR || h < NIGHT_END_HOUR);
-    if (night) target = NIGHT_BRIGHTNESS;
+    bool night = S.nStart < S.nEnd ? (h >= S.nStart && h < S.nEnd)
+                                                   : (h >= S.nStart || h < S.nEnd);
+    if (night) target = S.nightBr;
   }
   if (target != curBright) { curBright = target; panel->setBrightness(target); }
 }
@@ -237,11 +413,12 @@ void updateBrightness() {
 void setup() {
   Serial.begin(115200);
   pinMode(BTN_PIN, INPUT_PULLUP);
-  prefs.begin("display", false); autoPage = prefs.getBool("auto", AUTO_PAGE_MS > 0);
+  prefs.begin("display", false); loadConfig(); loadSettings(); autoPage = prefs.getBool("auto", AUTO_PAGE_MS > 0);
   Wire.begin(TP_SDA, TP_SCL); pinMode(TP_INT, INPUT_PULLUP);
-  gfx->begin(); panel->setBrightness(DAY_BRIGHTNESS);
+  gfx->begin(); panel->setBrightness(S.dayBr);
   configTzTime(TIMEZONE, "pool.ntp.org", "time.google.com");
-  WiFi.mode(WIFI_STA); WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.setHostname(DEVICE_NAME);
+  WiFi.mode(WIFI_STA); WiFi.begin(cfg.ssid.c_str(), cfg.pass.c_str());
   for (int i = 0; i < 6; i++) for (int p = 0; p < HN; p++) hist[i][p] = NAN;
   draw();
 }
@@ -250,8 +427,12 @@ void loop() {
   static unsigned long lastPoll = 0;
   unsigned long now = millis();
   if (now - lastPoll >= POLL_MS || lastPoll == 0) { lastPoll = now; fetch(); draw(); }
-  if (autoPage && now - lastPage >= (AUTO_PAGE_MS > 0 ? AUTO_PAGE_MS : 8000)) { lastPage = now; page = (page + 1) % P_COUNT; draw(); }
-  if (!otaOn && WiFi.status() == WL_CONNECTED) otaStart();
+  if (autoPage && now - lastPage >= S.autoMs) { lastPage = now; page = (page + 1) % P_COUNT; draw(); }
+  static unsigned long lastCheck = 0;
+  if (millis() > 60000 && (!lastCheck || now - lastCheck >= S.updHours * 3600000UL)) { lastCheck = now; checkUpdate(); }
+  if (!otaOn && WiFi.status() == WL_CONNECTED) { otaStart(); webStart(); }
+  if (otaOn) web.handleClient();
+  if (updateNow) { updateNow = false; checkUpdate(); }
   if (otaOn) ArduinoOTA.handle();
   updateBrightness();
   handleButton();
