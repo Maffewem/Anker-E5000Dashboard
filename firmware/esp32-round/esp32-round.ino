@@ -372,26 +372,28 @@ String field(const char *label, const char *name, int val, const char *hint) {
 // Live round preview on the settings page: draws the same layout as the screen from /state, in the browser.
 const char PREVIEW_JS[] = R"JS(
 <div id=pv style="width:min(340px,100%);aspect-ratio:1;margin:1rem auto;border-radius:50%;background:#000;border:4px solid #222;overflow:hidden;cursor:pointer"></div>
-<p style="text-align:center"><small>Live preview of the screen. Tap it to change page.</small></p>
+<p style="text-align:center"><small>Live preview. It redraws as you change the settings below (solar, ring colour levels, day brightness) before you save. Tap it to change page.</small></p>
 <script>
 var st=null,C={sun:'#f6cc2c',bat:'#2fd47a',home:'#f2564b',grid:'#b985f5',org:'#ff9a2e',dim:'#1c1c21'};
 function kw(w){return w==null?'--':Math.abs(w)>=1000?(w/1000).toFixed(2)+'kW':Math.round(w)+'W'}
 function arc(r,a0,a1){var p=function(a){a=a*Math.PI/180;return[233+r*Math.cos(a),233+r*Math.sin(a)]},s=p(a0),e=p(a1);return'M'+s+' A'+r+' '+r+' 0 '+((a1-a0)>180?1:0)+' 1 '+e}
 function T(x,y,t,sz,c){return'<text x="'+x+'" y="'+y+'" font-size="'+sz+'" font-family="system-ui" text-anchor="middle" fill="'+c+'">'+t+'</text>'}
 function big(t,v,sub,c){return T(233,95,t,26,'#e8e8ea')+T(233,205,v,96,c)+T(233,255,sub,26,'#6b6b73')}
-function draw(){var d=st,b='';if(!d)return;
+function fv(n,def){var e=document.querySelector('[name='+n+']');return e&&e.value!==''?+e.value:def}
+function draw(){var d=st,b='';if(!d)return;var gr=fv('green',d.green),rd=fv('red',d.red),so=document.querySelector('[name=solar]');so=so?so.checked:d.solarOn;
 var p=d.page,sc=d.soc==null?0:d.soc;
 if(!d.online){b=T(233,200,'Dashboard',44,C.home)+T(233,260,'unreachable',44,C.home)}
-else if(p==0){var bc=sc>=67?C.bat:sc>=34?C.org:C.home,lc=d.home==null?'#555':d.home<d.green?C.bat:d.home>d.red?C.home:C.org;
-b='<path d="'+arc(198,135,405)+'" stroke="'+C.dim+'" stroke-width="20" fill="none"/><path d="'+arc(198,135,135+270*sc/100)+'" stroke="'+bc+'" stroke-width="20" fill="none" stroke-linecap="round"/><path d="'+arc(173,135,405)+'" stroke="'+C.dim+'" stroke-width="14" fill="none"/>'+(d.home>0?'<path d="'+arc(173,135,135+270*Math.min(d.home/4000,1))+'" stroke="'+lc+'" stroke-width="14" fill="none" stroke-linecap="round"/>':'')+T(233,235,Math.round(sc)+'%',96,'#e8e8ea')+(d.solarOn?T(233,130,'sun '+kw(d.solar),34,C.sun):'')+T(233,320,'home '+kw(d.home),34,C.home)+T(233,362,'grid '+kw(d.grid),34,C.grid)}
+else if(p==0){var bc=sc>=67?C.bat:sc>=34?C.org:C.home,lc=d.home==null?'#555':d.home<gr?C.bat:d.home>rd?C.home:C.org;
+b='<path d="'+arc(198,135,405)+'" stroke="'+C.dim+'" stroke-width="20" fill="none"/><path d="'+arc(198,135,135+270*sc/100)+'" stroke="'+bc+'" stroke-width="20" fill="none" stroke-linecap="round"/><path d="'+arc(173,135,405)+'" stroke="'+C.dim+'" stroke-width="14" fill="none"/>'+(d.home>0?'<path d="'+arc(173,135,135+270*Math.min(d.home/4000,1))+'" stroke="'+lc+'" stroke-width="14" fill="none" stroke-linecap="round"/>':'')+T(233,235,Math.round(sc)+'%',96,'#e8e8ea')+(so?T(233,130,'sun '+kw(d.solar),34,C.sun):'')+T(233,320,'home '+kw(d.home),34,C.home)+T(233,362,'grid '+kw(d.grid),34,C.grid)}
 else if(p==1)b=big('Battery',Math.round(sc)+'%',kw(d.batt)+' '+(d.batt<-20?'charging':d.batt>20?'discharging':'idle'),C.bat);
 else if(p==2)b=big('Solar',kw(d.solar),'generating now',C.sun);
 else if(p==3)b=big('Grid',kw(d.grid),d.grid>0?'importing':'exporting',C.grid);
 else if(p==4)b=big('Home',kw(d.home),'using now',C.home);
 else b=big('Saved today',d.saved==null?'--':'£'+d.saved.toFixed(2),'from the dashboard tariff',C.bat);
-document.getElementById('pv').innerHTML='<svg viewBox="0 0 466 466" width="100%" height="100%">'+b+'</svg>'}
+var br=fv('dayBr',255);document.getElementById('pv').innerHTML='<svg viewBox="0 0 466 466" width="100%" height="100%" style="opacity:'+Math.max(.15,br/255)+'">'+b+'</svg>'}
 function poll(){fetch('/state').then(function(r){return r.json()}).then(function(j){st=j;draw()}).catch(function(){})}
 document.getElementById('pv').onclick=function(){if(!st)return;var n=st.page;do{n=(n+1)%6}while(n==2&&!st.solarOn);fetch('/page?n='+n).then(poll)};
+document.addEventListener('input',draw);
 poll();setInterval(poll,3000);
 </script>
 )JS";
