@@ -189,15 +189,15 @@ void dots() {
   for (int i = 0; i < P_COUNT; i++) if (pageOn(i)) { if (i == page) at = n; n++; }
   for (int i = 0; i < n; i++) gfx->fillCircle(C + (i - (n - 1) / 2.0f) * 22, 440, 4, i == at ? WHITE : DIM);
 }
-// Time left from the battery level and power: "Remaining: 2h 47m" while discharging, "Full in 1h 10m" while charging.
+// Time left from the battery level and power: "2h 47m left" while discharging, "full in 1h 10m" while charging.
 String fmtHours(float h) {
   int m = (int)(h * 60 + 0.5f);
   return m >= 60 ? String(m / 60) + "h " + String(m % 60) + "m" : String(m) + "m";
 }
 String timeLeft() {
   if (isnan(d.soc) || isnan(d.batt) || S.capWh <= 0) return "";
-  if (d.batt > 20) return "Remaining: " + fmtHours(d.soc / 100.f * S.capWh / d.batt);
-  if (d.batt < -20) return "Full in " + fmtHours((100.f - d.soc) / 100.f * S.capWh / -d.batt);
+  if (d.batt > 20) return fmtHours(d.soc / 100.f * S.capWh / d.batt) + " left";
+  if (d.batt < -20) return "full in " + fmtHours((100.f - d.soc) / 100.f * S.capWh / -d.batt);
   return "";
 }
 void big(const char *title, const String &v, const String &sub, uint16_t col, int p, const String &extra = "") {
@@ -514,7 +514,7 @@ void webRoot() {
   h += String("<label><input type=checkbox name=auto value=1") + (autoPage ? " checked" : "") + "> Auto page</label>";
   h += field("Seconds per page", "autoS", S.autoMs / 1000, "");
   h += String("<label><input type=checkbox name=nclock value=1") + (S.nightClock ? " checked" : "") + "> Show a dim clock at night instead of the pages</label>";
-  h += field("Battery size (Wh) for time left", "capWh", S.capWh, "usable energy, used for Remaining and Full in");
+  h += field("Battery size (Wh) for time left", "capWh", S.capWh, "usable energy, used for the time left");
   h += field("Alert at or below (%)", "floorPct", S.floorPct, "shows Battery limited");
   h += field("Day brightness", "dayBr", S.dayBr, "0 to 255");
   h += field("Night brightness", "nightBr", S.nightBr, "0 to 255, 0 = off");
