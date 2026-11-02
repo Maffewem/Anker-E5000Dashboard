@@ -40,8 +40,10 @@
 #define TP_INT 11
 #define TP_ADDR 0x5A  // CST9217
 
+#define PANEL_COL_OFFSET 6  // this 466x466 CO5300 panel starts 6 columns in; 0 leaves a stray line at the right edge
 Arduino_DataBus *bus = new Arduino_ESP32QSPI(LCD_CS, LCD_SCK, LCD_D0, LCD_D1, LCD_D2, LCD_D3);
-Arduino_CO5300 *panel = new Arduino_CO5300(bus, LCD_RST, 0, 466, 466);
+Arduino_CO5300 *panel = new Arduino_CO5300(bus, LCD_RST, 0, 466, 466, PANEL_COL_OFFSET, 0, 0, 0);
+// If a thin stray line shows at an edge, this offset is wrong: try 0 (no offset) or 6.
 Arduino_Canvas *gfx = new Arduino_Canvas(466, 466, panel);  // draw off-screen, then flush: no flicker
 
 const int W = 466, C = 233;
