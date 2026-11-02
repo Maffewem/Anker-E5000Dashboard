@@ -1,6 +1,7 @@
 // Anker Solarbank overview for the Waveshare ESP32-S3 1.75" AMOLED round touch board (466x466).
 // Polls the dashboard's read-only /api/widget and draws swipeable pages. Display only: it never writes to the battery.
 // Libraries: "GFX Library for Arduino" (moononournation) and "U8g2" (for the smooth fonts). UNTESTED on hardware, see README.md.
+#include <U8g2lib.h>  // included here so the build finds the library; GFX Library for Arduino then enables its smooth fonts
 #include <Arduino_GFX_Library.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
