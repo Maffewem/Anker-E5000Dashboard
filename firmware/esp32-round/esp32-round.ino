@@ -209,9 +209,9 @@ void draw() {
     case P_OVERVIEW: {
       arc(d.soc / 100, loadColour(), 202, 222);
       ctext(String(isnan(d.soc) ? 0 : (int)d.soc) + "%", 190, 6, WHITE);
-      ctext("sun " + kw(d.solar), 100, 3, YEL);
-      ctext("home " + kw(d.home), 270, 3, RED);
-      ctext("grid " + kw(d.grid), 320, 3, PUR);
+      ctext("sun " + kw(d.solar), 112, 3, YEL);
+      ctext("home " + kw(d.home), 296, 3, RED);
+      ctext("grid " + kw(d.grid), 342, 3, PUR);
       break; }
     case P_BATTERY: {
       String state = isnan(d.batt) ? "" : d.batt > 20 ? "discharging" : d.batt < -20 ? "charging" : "idle";
