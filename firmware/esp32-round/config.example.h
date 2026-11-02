@@ -7,7 +7,7 @@
 // Same value as WIDGET_TOKEN on the dashboard stack (16+ characters).
 #define WIDGET_TOKEN   "paste-the-WIDGET_TOKEN-here"
 #define POLL_MS        5000     // how often to fetch
-#define AUTO_PAGE_MS   0        // >0 cycles pages by itself (ms), 0 = swipe/tap only
+#define AUTO_PAGE_MS   8000     // time per page when auto page is on (ms); 0 = default 8000 and auto starts off
 // Password for Wi-Fi uploads (OTA). Arduino IDE asks for it when you upload over the network.
 #define OTA_PASSWORD   "choose-a-password"
 // Night dimming (optional). Brightness is 0-255; the screen dims from NIGHT_START_HOUR until NIGHT_END_HOUR.

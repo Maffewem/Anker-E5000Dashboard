@@ -22,3 +22,6 @@ The board and your computer must be on the same network, and anyone on that netw
 
 ## Night dimming
 Set `DAY_BRIGHTNESS`, `NIGHT_BRIGHTNESS`, `NIGHT_START_HOUR`, `NIGHT_END_HOUR` and `TIMEZONE` in `config.h` (all optional; defaults dim to 15 from 22:00 to 07:00 UK time). The time comes from the internet (NTP) over Wi-Fi, and until it is known the screen stays at day brightness. Set `NIGHT_BRIGHTNESS` to 0 to turn the screen off at night.
+
+## Auto page on and off
+Press the **BOOT** button, or hold a finger still on the screen for one second, to turn auto page on or off. A small "auto" label shows at the top while it is on. The choice is remembered after a restart. `AUTO_PAGE_MS` sets the time per page (default 8000); if it is above 0 in `config.h`, auto starts on the first boot. A touch restarts the timer.

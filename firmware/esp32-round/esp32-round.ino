@@ -7,6 +7,7 @@
 #include <ArduinoJson.h>
 #include <Wire.h>
 #include <ArduinoOTA.h>
+#include <Preferences.h>
 #include "config.h"
 
 // Optional settings: an older config.h without these still compiles with the defaults.
@@ -47,6 +48,12 @@ const int W = 466, C = 233;
 const uint16_t BG = 0x0000, DIM = 0x18E3, WHITE = 0xFFFF, YEL = 0xFE60, GRN = 0x2FEA, RED = 0xF9A6, PUR = 0xBA1F;
 enum { P_OVERVIEW, P_BATTERY, P_SOLAR, P_GRID, P_HOME, P_SAVING, P_COUNT };
 int page = 0;
+#define BTN_PIN 0  // BOOT button on the board
+bool autoPage = false;  // toggled by the BOOT button or a long press; remembered across restarts
+unsigned long lastPage = 0;
+Preferences prefs;
+void setAuto(bool on) { autoPage = on; lastPage = millis(); prefs.putBool("auto", on); }
+
 
 struct Data { float soc = NAN, solar = NAN, home = NAN, batt = NAN, grid = NAN, saved = NAN; bool online = false; long age = -1; } d;
 String err = "starting";
@@ -125,6 +132,7 @@ void draw() {
     case P_HOME: big("Home", kw(d.home), "using now", RED, P_HOME); break;
     case P_SAVING: big("Saved today", isnan(d.saved) ? "--" : String(d.saved, 2), "from the dashboard tariff", GRN, P_SAVING); break;
   }
+  if (autoPage) ctext("auto", 30, 2, DIM);
   if (err.length()) ctext(err, 380, 2, RED);
   else if (!d.online || d.age > 120) ctext("battery offline", 380, 2, RED);
   dots();
@@ -142,17 +150,34 @@ bool touchRead(int &x, int &y) {
   x = (b[1] << 4) | (b[3] >> 4); y = (b[2] << 4) | (b[3] & 0x0F);
   return true;
 }
-int downX = -1, lastX = -1; unsigned long lastTouch = 0;
+int downX = -1, lastX = -1; unsigned long lastTouch = 0, downT = 0; bool longDone = false;
 void handleTouch() {
   int x, y;
-  if (touchRead(x, y)) { if (downX < 0) downX = x; lastX = x; lastTouch = millis(); return; }
-  if (downX >= 0 && millis() - lastTouch > 80) {
-    int dx = lastX - downX;
-    if (dx < -60) page = (page + 1) % P_COUNT;
-    else if (dx > 60) page = (page + P_COUNT - 1) % P_COUNT;
-    else page = (page + 1) % P_COUNT;
-    downX = -1; draw();
+  if (touchRead(x, y)) {
+    if (downX < 0) { downX = x; downT = millis(); longDone = false; }
+    lastX = x; lastTouch = millis();
+    // Hold still for 1 second: turn auto page on or off.
+    if (!longDone && abs(lastX - downX) < 30 && millis() - downT > 1000) { longDone = true; setAuto(!autoPage); draw(); }
+    return;
   }
+  if (downX >= 0 && millis() - lastTouch > 80) {
+    if (!longDone) {
+      int dx = lastX - downX;
+      if (dx < -60) page = (page + 1) % P_COUNT;
+      else if (dx > 60) page = (page + P_COUNT - 1) % P_COUNT;
+      else page = (page + 1) % P_COUNT;
+      lastPage = millis();  // a touch restarts the auto timer
+      draw();
+    }
+    downX = -1;
+  }
+}
+// BOOT button: press to turn auto page on or off.
+void handleButton() {
+  static bool was = false; static unsigned long t = 0;
+  bool down = digitalRead(BTN_PIN) == LOW;
+  if (down && !was && millis() - t > 250) { t = millis(); setAuto(!autoPage); draw(); }
+  was = down;
 }
 
 // Over-the-air updates: after one USB flash, upload from Arduino IDE (Tools > Port > anker-display) over Wi-Fi.
@@ -187,6 +212,8 @@ void updateBrightness() {
 
 void setup() {
   Serial.begin(115200);
+  pinMode(BTN_PIN, INPUT_PULLUP);
+  prefs.begin("display", false); autoPage = prefs.getBool("auto", AUTO_PAGE_MS > 0);
   Wire.begin(TP_SDA, TP_SCL); pinMode(TP_INT, INPUT_PULLUP);
   gfx->begin(); panel->setBrightness(DAY_BRIGHTNESS);
   configTzTime(TIMEZONE, "pool.ntp.org", "time.google.com");
@@ -196,13 +223,14 @@ void setup() {
 }
 
 void loop() {
-  static unsigned long lastPoll = 0, lastPage = 0;
+  static unsigned long lastPoll = 0;
   unsigned long now = millis();
   if (now - lastPoll >= POLL_MS || lastPoll == 0) { lastPoll = now; fetch(); draw(); }
-  if (AUTO_PAGE_MS > 0 && now - lastPage >= AUTO_PAGE_MS) { lastPage = now; page = (page + 1) % P_COUNT; draw(); }
+  if (autoPage && now - lastPage >= (AUTO_PAGE_MS > 0 ? AUTO_PAGE_MS : 8000)) { lastPage = now; page = (page + 1) % P_COUNT; draw(); }
   if (!otaOn && WiFi.status() == WL_CONNECTED) otaStart();
   if (otaOn) ArduinoOTA.handle();
   updateBrightness();
+  handleButton();
   handleTouch();
   delay(10);
 }
