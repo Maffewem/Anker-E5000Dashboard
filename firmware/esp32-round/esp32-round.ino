@@ -9,7 +9,7 @@
 #include <ArduinoOTA.h>
 #include <Preferences.h>
 #include <WebServer.h>
-#include <HTTPUpdate.h>
+#include <Update.h>
 #include <WiFiClientSecure.h>
 #include "config.h"
 
@@ -318,15 +318,26 @@ void checkUpdate() {
   if (md5 == ESP.getSketchMD5() || md5 == prefs.getString("lastmd5")) return;
 
   gfx->fillScreen(BG); ctext("Updating...", 200, 3, WHITE); gfx->flush();
-  httpUpdate.rebootOnUpdate(false);
-  httpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  httpUpdate.onProgress(updateProgress);
+  // Download and flash by hand with HTTPClient + Update, so it needs no HTTPUpdate extras and works on any arduino-esp32 core.
   String binUrl = base + ".bin" + (gh ? "?ref=" + cfg.ghBranch : "");
-  if (gh) { httpUpdate.addHeader("Authorization", "Bearer " + cfg.ghToken); httpUpdate.addHeader("Accept", "application/vnd.github.raw+json"); httpUpdate.addHeader("User-Agent", "anker-display"); }
-  else httpUpdate.addHeader("Authorization", "Bearer " + cfg.token);
   WiFiClientSecure sec; WiFiClient plain; if (gh) sec.setInsecure();
-  t_httpUpdate_return r = gh ? httpUpdate.update(sec, binUrl) : httpUpdate.update(plain, binUrl);
-  if (r == HTTP_UPDATE_OK) { prefs.putString("lastmd5", md5); ESP.restart(); }
+  HTTPClient h; h.setTimeout(15000); h.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  if (!(gh ? h.begin(sec, binUrl) : h.begin(plain, binUrl))) { err = "update failed"; draw(); return; }
+  if (gh) { h.addHeader("Authorization", "Bearer " + cfg.ghToken); h.addHeader("Accept", "application/vnd.github.raw+json"); h.addHeader("User-Agent", DEVICE_NAME); }
+  else h.addHeader("Authorization", "Bearer " + cfg.token);
+  bool ok = false;
+  if (h.GET() == 200) {
+    int len = h.getSize();
+    if (Update.begin(len > 0 ? len : UPDATE_SIZE_UNKNOWN)) {
+      Update.setMD5(md5.c_str());  // refuse the image unless it matches the build's checksum
+      Update.onProgress([](size_t done, size_t total) { if (total) updateProgress(done, total); });
+      size_t written = Update.writeStream(*h.getStreamPtr());
+      ok = (len <= 0 || written == (size_t)len) && Update.end(true);
+      if (!ok) Update.abort();
+    }
+  }
+  h.end();
+  if (ok) { prefs.putString("lastmd5", md5); ESP.restart(); }
   err = "update failed"; draw();
 }
 
