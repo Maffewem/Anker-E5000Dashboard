@@ -162,3 +162,20 @@ def test_widget_is_off_without_a_token_and_needs_it_with_one(tmp_path, monkeypat
         body = c.get("/api/widget", headers={"Authorization": f"Bearer {token}"}).json()
         assert {"soc", "solar_w", "home_w", "grid_w", "saved_today", "online"} <= set(body)
         assert c.get("/api/widget", headers={"X-Widget-Token": token}).status_code == 200
+
+
+def test_firmware_download_uses_the_widget_token(tmp_path, monkeypatch):
+    token = "x" * 20
+    monkeypatch.setenv("FIRMWARE_DIR", str(tmp_path))
+    monkeypatch.delenv("WIDGET_TOKEN", raising=False)
+    with _client(tmp_path, monkeypatch) as c:
+        assert c.get("/api/firmware/esp32-round").status_code == 404  # off without a token
+    with _client(tmp_path, monkeypatch, WIDGET_TOKEN=token) as c:
+        assert c.get("/api/firmware/esp32-round").status_code == 401
+        auth = {"Authorization": f"Bearer {token}"}
+        assert c.get("/api/firmware/esp32-round", headers=auth).status_code == 404  # nothing built yet
+        (tmp_path / "esp32-round.bin").write_bytes(b"firmware")
+        info = c.get("/api/firmware/esp32-round", headers=auth).json()
+        assert info == {"md5": "74b5b5e9570efc5c0553bb327cd41940", "size": 8}
+        assert c.get("/api/firmware/esp32-round.bin", headers=auth).content == b"firmware"
+        assert c.get("/api/firmware/esp32-round.bin").status_code == 401

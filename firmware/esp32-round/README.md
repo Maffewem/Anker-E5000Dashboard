@@ -31,3 +31,14 @@ Press the **BOOT** button, or hold a finger still on the screen for one second, 
 - The sparklines now cover the last 3 hours (one point a minute, kept in memory, so a restart clears them).
 - Four small bars at the bottom show Wi-Fi signal.
 - If the dashboard has never answered since boot, a full screen says "Dashboard unreachable" (or "No Wi-Fi") with the reason, such as "bad token" or "widget off". After the first good reply, a later outage shows the last values with a red message instead.
+
+## Automatic updates (no manual upload)
+Every merge that changes `firmware/esp32-round/` is built by the **Firmware** GitHub Action, which commits `esp32-round.bin` and its MD5 to `firmware/dist/`. The board checks every `UPDATE_CHECK_HOURS` (default 6, first check a minute after boot) and installs the build by itself if its MD5 differs from what it runs. Pick the source in `config.h`:
+
+- `UPDATE_SOURCE "dashboard"` (default): the board asks your dashboard at `/api/firmware/esp32-round`, using the same `WIDGET_TOKEN`. The `.bin` is copied into the dashboard image, so a merge reaches the board after you redeploy the stack (Portainer repository stack). No extra secret on the board.
+- `UPDATE_SOURCE "github"`: the board reads `firmware/dist/` from the repo directly. Create a fine-grained GitHub token limited to this repo with **Contents: read-only**, and put it in `GITHUB_TOKEN`. It updates minutes after the Action runs, with no redeploy. The board does not verify GitHub's TLS certificate, so keep the token read-only.
+- `UPDATE_SOURCE "off"`: never check.
+
+Because the shared build has placeholder settings, the board keeps its **Wi-Fi, URL and tokens in its own memory**: every USB or Arduino IDE upload copies your `config.h` into it, while the Action's build only reads what is already there. So flash once from your computer with a real `config.h`, and after that updates are automatic. Changing a setting means one more upload from your computer.
+
+Limits: there is no automatic rollback, so a broken build needs a USB re-flash. If the Action can't push to `main` (branch protection), allow `github-actions[bot]` to bypass it or the build won't be committed.

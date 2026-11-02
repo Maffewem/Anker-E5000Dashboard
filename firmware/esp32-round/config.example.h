@@ -16,3 +16,10 @@
 #define NIGHT_START_HOUR  22
 #define NIGHT_END_HOUR    7
 #define TIMEZONE          "GMT0BST,M3.5.0/1,M10.5.0"  // POSIX TZ string; this is UK time with daylight saving
+// Automatic updates. "dashboard" = ask your dashboard (needs the dashboard to be updated too); "github" = read the build
+// from the repo with a read-only token; "off" = never check. The board checks every UPDATE_CHECK_HOURS.
+#define UPDATE_SOURCE        "dashboard"
+#define UPDATE_CHECK_HOURS   6
+#define GITHUB_REPO          "Maffewem/Anker-E5000Dashboard"
+#define GITHUB_BRANCH        "main"
+#define GITHUB_TOKEN         ""   // only for UPDATE_SOURCE "github": fine-grained token, repo Contents = read-only

@@ -36,14 +36,19 @@ def _presented(request: Request) -> str:
     return request.headers.get("x-widget-token", "").strip()
 
 
-@router.get("/api/widget")
-def widget(request: Request) -> dict:
-    """Battery, solar, home and grid power plus today's saving, for a home-screen widget."""
+def require_token(request: Request) -> None:
+    """404 while WIDGET_TOKEN is off or too short, 401 for a wrong token. Shared with the firmware download."""
     token = _token()
     if len(token) < MIN_TOKEN:
         raise HTTPException(status_code=404, detail="Not found")  # off, and looks like it isn't there
     if not hmac.compare_digest(_presented(request).encode(), token.encode()):
         raise HTTPException(status_code=401, detail="Wrong token")
+
+
+@router.get("/api/widget")
+def widget(request: Request) -> dict:
+    """Battery, solar, home and grid power plus today's saving, for a home-screen widget."""
+    require_token(request)
     battery = state.collectors["battery"]
     snap = battery.snapshot or {}
     out = {k: snap.get(k) for k in ("soc", "solar_w", "home_w", "battery_w", "grid_w")}

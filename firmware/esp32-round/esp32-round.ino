@@ -8,6 +8,8 @@
 #include <Wire.h>
 #include <ArduinoOTA.h>
 #include <Preferences.h>
+#include <HTTPUpdate.h>
+#include <WiFiClientSecure.h>
 #include "config.h"
 
 // Optional settings: an older config.h without these still compiles with the defaults.
@@ -22,6 +24,21 @@
 #endif
 #ifndef NIGHT_END_HOUR
 #define NIGHT_END_HOUR 7          // ...until this hour. Set both equal to disable dimming.
+#endif
+#ifndef UPDATE_SOURCE
+#define UPDATE_SOURCE "dashboard"   // "dashboard", "github" or "off"
+#endif
+#ifndef UPDATE_CHECK_HOURS
+#define UPDATE_CHECK_HOURS 6
+#endif
+#ifndef GITHUB_REPO
+#define GITHUB_REPO "Maffewem/Anker-E5000Dashboard"
+#endif
+#ifndef GITHUB_BRANCH
+#define GITHUB_BRANCH "main"
+#endif
+#ifndef GITHUB_TOKEN
+#define GITHUB_TOKEN ""             // fine-grained token, read-only "Contents" on that repo
 #endif
 #ifndef TIMEZONE
 #define TIMEZONE "GMT0BST,M3.5.0/1,M10.5.0"  // UK time with daylight saving
@@ -54,6 +71,22 @@ int page = 0;
 bool autoPage = false;  // toggled by the BOOT button or a long press; remembered across restarts
 unsigned long lastPage = 0;
 Preferences prefs;
+
+// Wi-Fi, URL and tokens live in the board's own memory (NVS), so a firmware built in CI (which has placeholder
+// values) never overwrites them. A normal USB or Arduino IDE build copies config.h into NVS at boot; a CI build only reads NVS.
+struct Cfg { String ssid, pass, url, token, otaPw, updSrc, ghRepo, ghBranch, ghToken; } cfg;
+void loadConfig() {
+#ifdef CI_BUILD
+  cfg.ssid = prefs.getString("ssid"); cfg.pass = prefs.getString("pass"); cfg.url = prefs.getString("url");
+  cfg.token = prefs.getString("token"); cfg.otaPw = prefs.getString("otapw"); cfg.updSrc = prefs.getString("updsrc", "dashboard");
+  cfg.ghRepo = prefs.getString("ghrepo"); cfg.ghBranch = prefs.getString("ghbranch", "main"); cfg.ghToken = prefs.getString("ghtoken");
+#else
+  cfg = {WIFI_SSID, WIFI_PASSWORD, WIDGET_URL, WIDGET_TOKEN, OTA_PASSWORD, UPDATE_SOURCE, GITHUB_REPO, GITHUB_BRANCH, GITHUB_TOKEN};
+  prefs.putString("ssid", cfg.ssid); prefs.putString("pass", cfg.pass); prefs.putString("url", cfg.url);
+  prefs.putString("token", cfg.token); prefs.putString("otapw", cfg.otaPw); prefs.putString("updsrc", cfg.updSrc);
+  prefs.putString("ghrepo", cfg.ghRepo); prefs.putString("ghbranch", cfg.ghBranch); prefs.putString("ghtoken", cfg.ghToken);
+#endif
+}
 void setAuto(bool on) { autoPage = on; lastPage = millis(); prefs.putBool("auto", on); }
 
 
@@ -69,8 +102,8 @@ void fetch() {
   if (WiFi.status() != WL_CONNECTED) { err = "wifi"; return; }
   HTTPClient http;
   http.setTimeout(4000);
-  http.begin(WIDGET_URL);
-  http.addHeader("Authorization", "Bearer " WIDGET_TOKEN);
+  http.begin(cfg.url);
+  http.addHeader("Authorization", "Bearer " + cfg.token);
   int code = http.GET();
   if (code != 200) { err = code == 401 ? "bad token" : code == 404 ? "widget off" : "http " + String(code); http.end(); return; }
   JsonDocument j;
@@ -210,13 +243,65 @@ void handleButton() {
 bool otaOn = false;
 void otaStart() {
   ArduinoOTA.setHostname("anker-display");
-  ArduinoOTA.setPassword(OTA_PASSWORD);
+  ArduinoOTA.setPassword(cfg.otaPw.c_str());
   ArduinoOTA.onStart([]() { gfx->fillScreen(BG); ctext("Updating...", 200, 3, WHITE); gfx->flush(); });
   ArduinoOTA.onProgress([](unsigned int done, unsigned int total) {
     arc((float)done / total, GRN, 202, 222); gfx->flush();
   });
   ArduinoOTA.begin();
   otaOn = true;
+}
+
+// ---- Automatic updates: the board checks every UPDATE_CHECK_HOURS and installs a newer build by itself. ----
+// "dashboard": asks your dashboard (/api/firmware/esp32-round, same token). "github": reads firmware/dist/ from the repo
+// with a read-only token. Either way the CI build's MD5 is compared with the running firmware's.
+// Security note: GitHub mode talks https without checking the server certificate (setInsecure); the token is read-only.
+void updateProgress(int done, int total) { arc((float)done / total, GRN, 202, 222); gfx->flush(); }
+
+bool httpGet(const String &url, const char *auth, bool raw, String &out) {
+  bool tls = url.startsWith("https");
+  WiFiClientSecure sec; WiFiClient plain; if (tls) sec.setInsecure();
+  HTTPClient h; h.setTimeout(8000); h.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  if (!(tls ? h.begin(sec, url) : h.begin(plain, url))) return false;
+  if (*auth) h.addHeader("Authorization", String("Bearer ") + auth);
+  if (raw) { h.addHeader("Accept", "application/vnd.github.raw+json"); h.addHeader("User-Agent", "anker-display"); }
+  int code = h.GET();
+  if (code == 200) out = h.getString();
+  h.end();
+  return code == 200;
+}
+
+void checkUpdate() {
+  if (cfg.updSrc == "off" || WiFi.status() != WL_CONNECTED) return;
+  bool gh = cfg.updSrc == "github";
+  String base, md5, body;
+  if (gh) {
+    if (!cfg.ghToken.length()) return;
+    base = "https://api.github.com/repos/" + cfg.ghRepo + "/contents/firmware/dist/esp32-round";
+    if (!httpGet(base + ".md5?ref=" + cfg.ghBranch, cfg.ghToken.c_str(), true, body)) return;
+    md5 = body;
+  } else {
+    base = cfg.url; base.replace("/api/widget", "/api/firmware/esp32-round");
+    if (!httpGet(base, cfg.token.c_str(), false, body)) return;
+    JsonDocument j; if (deserializeJson(j, body)) return;
+    md5 = String((const char *)(j["md5"] | ""));
+  }
+  md5.trim(); md5.toLowerCase();
+  if (md5.length() != 32) return;
+  // Skip if we already run it, or already installed it once (stops an install loop if the two checksums ever differ).
+  if (md5 == ESP.getSketchMD5() || md5 == prefs.getString("lastmd5")) return;
+
+  gfx->fillScreen(BG); ctext("Updating...", 200, 3, WHITE); gfx->flush();
+  httpUpdate.rebootOnUpdate(false);
+  httpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  httpUpdate.onProgress(updateProgress);
+  String binUrl = base + ".bin" + (gh ? "?ref=" + cfg.ghBranch : "");
+  if (gh) { httpUpdate.addHeader("Authorization", "Bearer " + cfg.ghToken); httpUpdate.addHeader("Accept", "application/vnd.github.raw+json"); httpUpdate.addHeader("User-Agent", "anker-display"); }
+  else httpUpdate.addHeader("Authorization", "Bearer " + cfg.token);
+  WiFiClientSecure sec; WiFiClient plain; if (gh) sec.setInsecure();
+  t_httpUpdate_return r = gh ? httpUpdate.update(sec, binUrl) : httpUpdate.update(plain, binUrl);
+  if (r == HTTP_UPDATE_OK) { prefs.putString("lastmd5", md5); ESP.restart(); }
+  err = "update failed"; draw();
 }
 
 // Dim between NIGHT_START_HOUR and NIGHT_END_HOUR using NTP time. Until the clock is set it stays at day brightness.
@@ -239,11 +324,11 @@ void updateBrightness() {
 void setup() {
   Serial.begin(115200);
   pinMode(BTN_PIN, INPUT_PULLUP);
-  prefs.begin("display", false); autoPage = prefs.getBool("auto", AUTO_PAGE_MS > 0);
+  prefs.begin("display", false); loadConfig(); autoPage = prefs.getBool("auto", AUTO_PAGE_MS > 0);
   Wire.begin(TP_SDA, TP_SCL); pinMode(TP_INT, INPUT_PULLUP);
   gfx->begin(); panel->setBrightness(DAY_BRIGHTNESS);
   configTzTime(TIMEZONE, "pool.ntp.org", "time.google.com");
-  WiFi.mode(WIFI_STA); WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.mode(WIFI_STA); WiFi.begin(cfg.ssid.c_str(), cfg.pass.c_str());
   for (int i = 0; i < 6; i++) for (int p = 0; p < HN; p++) hist[i][p] = NAN;
   draw();
 }
@@ -253,6 +338,8 @@ void loop() {
   unsigned long now = millis();
   if (now - lastPoll >= POLL_MS || lastPoll == 0) { lastPoll = now; fetch(); draw(); }
   if (autoPage && now - lastPage >= (AUTO_PAGE_MS > 0 ? AUTO_PAGE_MS : 8000)) { lastPage = now; page = (page + 1) % P_COUNT; draw(); }
+  static unsigned long lastCheck = 0;
+  if (millis() > 60000 && (!lastCheck || now - lastCheck >= UPDATE_CHECK_HOURS * 3600000UL)) { lastCheck = now; checkUpdate(); }
   if (!otaOn && WiFi.status() == WL_CONNECTED) otaStart();
   if (otaOn) ArduinoOTA.handle();
   updateBrightness();

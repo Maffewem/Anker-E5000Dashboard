@@ -1,0 +1,39 @@
+name: Firmware
+
+# Builds the ESP32 round display firmware and commits the result to firmware/dist/, where the dashboard serves it
+# (and the board can read it from GitHub). The build uses config.example.h; the board keeps its own Wi-Fi and
+# tokens in its memory, set by the first USB flash (see firmware/esp32-round/README.md).
+on:
+  push:
+    branches: [main]
+    paths: ["firmware/esp32-round/**", ".github/workflows/firmware.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-arduino-cli@v2
+      - name: Install board package and libraries
+        run: |
+          arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core install esp32:esp32 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli lib install "GFX Library for Arduino" U8g2 ArduinoJson
+      - name: Compile
+        working-directory: firmware/esp32-round
+        run: |
+          cp config.example.h config.h
+          arduino-cli compile --fqbn "esp32:esp32:esp32s3:CDCOnBoot=cdc,PSRAM=opi,FlashSize=16M,PartitionScheme=default_16MB" \
+            --build-property "compiler.cpp.extra_flags=-DCI_BUILD" --output-dir /tmp/fw .
+      - name: Commit the build
+        run: |
+          cp /tmp/fw/esp32-round.ino.bin firmware/dist/esp32-round.bin
+          md5sum firmware/dist/esp32-round.bin | cut -d' ' -f1 > firmware/dist/esp32-round.md5
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add firmware/dist
+          git diff --cached --quiet || (git commit -m "Firmware: new build [skip ci]" && git push)
