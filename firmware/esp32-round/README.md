@@ -48,3 +48,6 @@ The board announces itself as `DEVICE_NAME` (default `anker-display`) on your ro
 
 ## Overview ring colour
 The ring on the Overview page shows the battery percentage by its length and the home's current use by its colour: green below `LOAD_GREEN_BELOW_W` (300), red above `LOAD_RED_ABOVE_W` (2000), orange in between. The Battery page still shows charging as green and discharging as orange.
+
+## Settings web page
+Open `http://anker-display.local/` (or the board's IP, shown in your router) in a browser on the same network. Sign in with user `admin` and your `OTA_PASSWORD`. You can see the current numbers, jump to a page, switch auto page on or off, set seconds per page, day and night brightness and hours, the ring colour levels, and how often it checks for updates, or check for an update right now. Changes apply straight away and are remembered after a restart; `config.h` values are only the starting defaults. It uses plain http on your home network, so use a real password and don't expose the board to the internet.

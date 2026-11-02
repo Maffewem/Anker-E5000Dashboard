@@ -8,6 +8,7 @@
 #include <Wire.h>
 #include <ArduinoOTA.h>
 #include <Preferences.h>
+#include <WebServer.h>
 #include <HTTPUpdate.h>
 #include <WiFiClientSecure.h>
 #include "config.h"
@@ -80,6 +81,19 @@ int page = 0;
 bool autoPage = false;  // toggled by the BOOT button or a long press; remembered across restarts
 unsigned long lastPage = 0;
 Preferences prefs;
+
+// Settings you can change from the web page (http://DEVICE_NAME.local/). config.h values are only the defaults.
+struct Settings { int dayBr, nightBr, nStart, nEnd, green, red, updHours, autoMs; } S;
+void loadSettings() {
+  S.dayBr = prefs.getInt("dayBr", DAY_BRIGHTNESS); S.nightBr = prefs.getInt("nightBr", NIGHT_BRIGHTNESS);
+  S.nStart = prefs.getInt("nStart", NIGHT_START_HOUR); S.nEnd = prefs.getInt("nEnd", NIGHT_END_HOUR);
+  S.green = prefs.getInt("green", LOAD_GREEN_BELOW_W); S.red = prefs.getInt("red", LOAD_RED_ABOVE_W);
+  S.updHours = prefs.getInt("updHours", UPDATE_CHECK_HOURS); S.autoMs = prefs.getInt("autoMs", AUTO_PAGE_MS > 0 ? AUTO_PAGE_MS : 8000);
+}
+void saveSettings() {
+  prefs.putInt("dayBr", S.dayBr); prefs.putInt("nightBr", S.nightBr); prefs.putInt("nStart", S.nStart); prefs.putInt("nEnd", S.nEnd);
+  prefs.putInt("green", S.green); prefs.putInt("red", S.red); prefs.putInt("updHours", S.updHours); prefs.putInt("autoMs", S.autoMs);
+}
 
 // Wi-Fi, URL and tokens live in the board's own memory (NVS), so a firmware built in CI (which has placeholder
 // values) never overwrites them. A normal USB or Arduino IDE build copies config.h into NVS at boot; a CI build only reads NVS.
@@ -166,7 +180,7 @@ void big(const char *title, const String &v, const String &sub, uint16_t col, in
 }
 
 // Overview ring colour follows how much the home is using: green when low, orange in between, red when high.
-uint16_t loadColour() { return isnan(d.home) ? DIM : d.home < LOAD_GREEN_BELOW_W ? GRN : d.home > LOAD_RED_ABOVE_W ? RED : ORG; }
+uint16_t loadColour() { return isnan(d.home) ? DIM : d.home < S.green ? GRN : d.home > S.red ? RED : ORG; }
 
 void wifiBars() {  // four small bars from the Wi-Fi signal, bottom right of centre
   int rssi = WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : -100;
@@ -316,19 +330,82 @@ void checkUpdate() {
   err = "update failed"; draw();
 }
 
-// Dim between NIGHT_START_HOUR and NIGHT_END_HOUR using NTP time. Until the clock is set it stays at day brightness.
+// ---- Web settings page: http://DEVICE_NAME.local/ (or the board's IP). Sign in as "admin" with OTA_PASSWORD. ----
+WebServer web(80);
+bool updateNow = false;
+int curBrightReset = 0;
+
+int argInt(const char *name, int lo, int hi, int def) {
+  if (!web.hasArg(name)) return def;
+  return constrain(web.arg(name).toInt(), lo, hi);
+}
+String field(const char *label, const char *name, int val, const char *hint) {
+  return String("<label>") + label + "<input type=number name=" + name + " value=" + val + "><small>" + hint + "</small></label>";
+}
+void webRoot() {
+  if (!web.authenticate("admin", cfg.otaPw.c_str())) return web.requestAuthentication();
+  String h = F("<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'><title>Anker display</title>"
+               "<style>body{font:16px system-ui;background:#111;color:#eee;max-width:30rem;margin:1rem auto;padding:0 1rem}"
+               "label{display:block;margin:.7rem 0}input{display:block;width:100%;padding:.5rem;font:inherit;margin-top:.2rem}"
+               "input[type=checkbox]{width:auto;display:inline}small{color:#999}button,a.b{display:inline-block;padding:.6rem 1rem;margin:.3rem .3rem .3rem 0;"
+               "background:#2a6;border:0;color:#fff;font:inherit;border-radius:.3rem;text-decoration:none}</style>");
+  h += "<h2>Anker display</h2><p>Battery " + String(isnan(d.soc) ? 0 : (int)d.soc) + "%, home " + kw(d.home) + ", solar " + kw(d.solar) +
+       ", grid " + kw(d.grid) + "<br><small>Wi-Fi " + String(WiFi.RSSI()) + " dBm, up " + String(millis() / 60000) + " min, firmware " + ESP.getSketchMD5().substring(0, 8) + "</small></p>";
+  h += "<p>Show page: ";
+  const char *names[] = {"Overview", "Battery", "Solar", "Grid", "Home", "Saved"};
+  for (int i = 0; i < P_COUNT; i++) h += String("<a class=b href='/page?n=") + i + "'>" + names[i] + "</a>";
+  h += "</p><form method=post action=/save>";
+  h += String("<label><input type=checkbox name=auto value=1") + (autoPage ? " checked" : "") + "> Auto page</label>";
+  h += field("Seconds per page", "autoS", S.autoMs / 1000, "");
+  h += field("Day brightness", "dayBr", S.dayBr, "0 to 255");
+  h += field("Night brightness", "nightBr", S.nightBr, "0 to 255, 0 = off");
+  h += field("Night starts (hour)", "nStart", S.nStart, "0 to 23");
+  h += field("Night ends (hour)", "nEnd", S.nEnd, "0 to 23; same as start = no dimming");
+  h += field("Ring green below (W)", "green", S.green, "home use");
+  h += field("Ring red above (W)", "red", S.red, "orange in between");
+  h += field("Check for update every (hours)", "updHours", S.updHours, "1 to 168");
+  h += "<button>Save</button></form><form method=post action=/update><button>Check for update now</button></form>";
+  web.send(200, "text/html", h);
+}
+void webSave() {
+  if (!web.authenticate("admin", cfg.otaPw.c_str())) return web.requestAuthentication();
+  S.dayBr = argInt("dayBr", 0, 255, S.dayBr); S.nightBr = argInt("nightBr", 0, 255, S.nightBr);
+  S.nStart = argInt("nStart", 0, 23, S.nStart); S.nEnd = argInt("nEnd", 0, 23, S.nEnd);
+  S.green = argInt("green", 0, 20000, S.green); S.red = argInt("red", 0, 20000, S.red);
+  S.updHours = argInt("updHours", 1, 168, S.updHours); S.autoMs = argInt("autoS", 2, 600, S.autoMs / 1000) * 1000;
+  saveSettings(); setAuto(web.hasArg("auto")); curBrightReset = 1; draw();
+  web.sendHeader("Location", "/"); web.send(303);
+}
+void webPage() {
+  if (!web.authenticate("admin", cfg.otaPw.c_str())) return web.requestAuthentication();
+  page = argInt("n", 0, P_COUNT - 1, page); lastPage = millis(); draw();
+  web.sendHeader("Location", "/"); web.send(303);
+}
+void webUpdate() {
+  if (!web.authenticate("admin", cfg.otaPw.c_str())) return web.requestAuthentication();
+  updateNow = true;
+  web.sendHeader("Location", "/"); web.send(303);
+}
+void webStart() {
+  if (!cfg.otaPw.length()) return;  // no password set: no page
+  web.on("/", webRoot); web.on("/save", HTTP_POST, webSave); web.on("/page", webPage); web.on("/update", HTTP_POST, webUpdate);
+  web.begin();
+}
+
+// Dim between the night start and end hours using NTP time. Until the clock is set it stays at day brightness.
 int curBright = -1;
 void updateBrightness() {
   static unsigned long last = 0;
+  if (curBrightReset) { curBrightReset = 0; last = 0; curBright = -1; }
   if (millis() - last < 30000 && last) return;
   last = millis();
   struct tm t;
-  int target = DAY_BRIGHTNESS;
-  if (getLocalTime(&t, 0) && NIGHT_START_HOUR != NIGHT_END_HOUR) {
+  int target = S.dayBr;
+  if (getLocalTime(&t, 0) && S.nStart != S.nEnd) {
     int h = t.tm_hour;
-    bool night = NIGHT_START_HOUR < NIGHT_END_HOUR ? (h >= NIGHT_START_HOUR && h < NIGHT_END_HOUR)
-                                                   : (h >= NIGHT_START_HOUR || h < NIGHT_END_HOUR);
-    if (night) target = NIGHT_BRIGHTNESS;
+    bool night = S.nStart < S.nEnd ? (h >= S.nStart && h < S.nEnd)
+                                                   : (h >= S.nStart || h < S.nEnd);
+    if (night) target = S.nightBr;
   }
   if (target != curBright) { curBright = target; panel->setBrightness(target); }
 }
@@ -336,9 +413,9 @@ void updateBrightness() {
 void setup() {
   Serial.begin(115200);
   pinMode(BTN_PIN, INPUT_PULLUP);
-  prefs.begin("display", false); loadConfig(); autoPage = prefs.getBool("auto", AUTO_PAGE_MS > 0);
+  prefs.begin("display", false); loadConfig(); loadSettings(); autoPage = prefs.getBool("auto", AUTO_PAGE_MS > 0);
   Wire.begin(TP_SDA, TP_SCL); pinMode(TP_INT, INPUT_PULLUP);
-  gfx->begin(); panel->setBrightness(DAY_BRIGHTNESS);
+  gfx->begin(); panel->setBrightness(S.dayBr);
   configTzTime(TIMEZONE, "pool.ntp.org", "time.google.com");
   WiFi.setHostname(DEVICE_NAME);
   WiFi.mode(WIFI_STA); WiFi.begin(cfg.ssid.c_str(), cfg.pass.c_str());
@@ -350,10 +427,12 @@ void loop() {
   static unsigned long lastPoll = 0;
   unsigned long now = millis();
   if (now - lastPoll >= POLL_MS || lastPoll == 0) { lastPoll = now; fetch(); draw(); }
-  if (autoPage && now - lastPage >= (AUTO_PAGE_MS > 0 ? AUTO_PAGE_MS : 8000)) { lastPage = now; page = (page + 1) % P_COUNT; draw(); }
+  if (autoPage && now - lastPage >= S.autoMs) { lastPage = now; page = (page + 1) % P_COUNT; draw(); }
   static unsigned long lastCheck = 0;
-  if (millis() > 60000 && (!lastCheck || now - lastCheck >= UPDATE_CHECK_HOURS * 3600000UL)) { lastCheck = now; checkUpdate(); }
-  if (!otaOn && WiFi.status() == WL_CONNECTED) otaStart();
+  if (millis() > 60000 && (!lastCheck || now - lastCheck >= S.updHours * 3600000UL)) { lastCheck = now; checkUpdate(); }
+  if (!otaOn && WiFi.status() == WL_CONNECTED) { otaStart(); webStart(); }
+  if (otaOn) web.handleClient();
+  if (updateNow) { updateNow = false; checkUpdate(); }
   if (otaOn) ArduinoOTA.handle();
   updateBrightness();
   handleButton();
