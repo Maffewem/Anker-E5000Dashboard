@@ -51,3 +51,6 @@ The ring on the Overview page shows the battery percentage by its length and the
 
 ## Settings web page
 Open `http://anker-display.local/` (or the board's IP, shown in your router) in a browser on the same network. Sign in with user `admin` and your `OTA_PASSWORD`. You can see the current numbers, jump to a page, switch auto page on or off, set seconds per page, day and night brightness and hours, the ring colour levels, and how often it checks for updates, or check for an update right now. Changes apply straight away and are remembered after a restart; `config.h` values are only the starting defaults. It uses plain http on your home network, so use a real password and don't expose the board to the internet.
+
+## Core updates
+The Arduino core is part of the firmware, so updating it means building and installing new firmware. The **Core update** workflow checks weekly for a newer stable arduino-esp32 release and opens a PR that bumps `ARDUINO_ESP32` in `.github/workflows/firmware.yml`, then builds that branch so you can see if it compiles. Merge it and the board installs the result like any update. It needs the repo setting Actions > General > "Allow GitHub Actions to create and approve pull requests". Merging is still your decision, because a broken build has no automatic rollback.

@@ -1,0 +1,43 @@
+name: Core update
+
+# Weekly: if Espressif has released a newer arduino-esp32 core, open a PR that bumps the version the firmware is built
+# with, and build it on that branch so you can see whether the sketch still compiles. Merging it builds new firmware,
+# which the display installs by itself. Needs Settings > Actions > General > "Allow GitHub Actions to create and
+# approve pull requests".
+on:
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bump if a newer stable core exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest=$(gh api repos/espressif/arduino-esp32/releases/latest --jq .tag_name | sed 's/^v//')
+          current=$(grep -oP 'ARDUINO_ESP32: "\K[^"]+' .github/workflows/firmware.yml)
+          echo "latest=$latest current=$current"
+          if [ -z "$latest" ] || [ "$latest" = "$current" ] || [ "$(printf '%s\n%s\n' "$current" "$latest" | sort -V | tail -1)" != "$latest" ]; then
+            echo "Already up to date"; exit 0
+          fi
+          branch="core-update-$latest"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then echo "$branch already open"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          sed -i "s/ARDUINO_ESP32: \"$current\"/ARDUINO_ESP32: \"$latest\"/" .github/workflows/firmware.yml
+          sed -i "s/(3.3.12, the version/($latest, the version/;s/(${current}, the version/($latest, the version/" firmware/esp32-round/README.md
+          git commit -am "Firmware: build with arduino-esp32 $latest"
+          git push origin "$branch"
+          gh pr create --base main --head "$branch" --title "Firmware: arduino-esp32 $latest" \
+            --body "Bumps the arduino-esp32 core used to build the display firmware from $current to $latest. The Firmware workflow is building this branch now: only merge if it passes. Merging builds new firmware, which the display installs by itself (there is no automatic rollback, so a broken build needs a USB re-flash)."
+          gh workflow run firmware.yml --ref "$branch"

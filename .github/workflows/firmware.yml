@@ -12,6 +12,9 @@ on:
 permissions:
   contents: write
 
+env:
+  ARDUINO_ESP32: "3.3.12"  # the arduino-esp32 core the firmware is built with; the Core update workflow bumps this
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -22,7 +25,7 @@ jobs:
       - name: Install board package and libraries
         run: |
           arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
-          arduino-cli core install esp32:esp32@3.3.12 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core install esp32:esp32@${ARDUINO_ESP32} --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
           arduino-cli lib install "GFX Library for Arduino" U8g2 ArduinoJson
       - name: Compile
         working-directory: firmware/esp32-round
@@ -33,6 +36,7 @@ jobs:
             --build-property "build.partitions=app3M_fat9M_16MB" --build-property "upload.maximum_size=3342336" \
             --build-property "compiler.cpp.extra_flags=-DCI_BUILD" --output-dir /tmp/fw .
       - name: Commit the build
+        if: github.ref == 'refs/heads/main'  # other branches (like a core bump) only check that it compiles
         run: |
           cp /tmp/fw/esp32-round.ino.bin firmware/dist/esp32-round.bin
           md5sum firmware/dist/esp32-round.bin | cut -d' ' -f1 > firmware/dist/esp32-round.md5
