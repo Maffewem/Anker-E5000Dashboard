@@ -27,7 +27,7 @@ Set `DAY_BRIGHTNESS`, `NIGHT_BRIGHTNESS`, `NIGHT_START_HOUR`, `NIGHT_END_HOUR` a
 Press the **BOOT** button, or hold a finger still on the screen for one second, to turn auto page on or off. A small "auto" label shows at the top while it is on. The choice is remembered after a restart. `AUTO_PAGE_MS` sets the time per page (default 8000); if it is above 0 in `config.h`, auto starts on the first boot. A touch restarts the timer.
 
 ## Status and history
-- The Battery page and the overview ring are green while charging and orange while discharging.
+- The Battery page is green while charging and orange while discharging.
 - The sparklines now cover the last 3 hours (one point a minute, kept in memory, so a restart clears them).
 - Four small bars at the bottom show Wi-Fi signal.
 - If the dashboard has never answered since boot, a full screen says "Dashboard unreachable" (or "No Wi-Fi") with the reason, such as "bad token" or "widget off". After the first good reply, a later outage shows the last values with a red message instead.
@@ -46,8 +46,8 @@ Limits: there is no automatic rollback, so a broken build needs a USB re-flash. 
 ## Device name
 The board announces itself as `DEVICE_NAME` (default `anker-display`) on your router and in Arduino IDE, instead of `esp32s3-XXXXXX`. Set it in `config.h`; use letters, digits and hyphens only. Your router may keep showing the old name until the board reconnects or you release its lease.
 
-## Overview ring colour
-The ring on the Overview page shows the battery percentage by its length and the home's current use by its colour: green below `LOAD_GREEN_BELOW_W` (300), red above `LOAD_RED_ABOVE_W` (2000), orange in between. The Battery page still shows charging as green and discharging as orange.
+## Overview rings
+The outer ring shows the battery percentage by its length. Its colour follows the level: green from 67%, orange from 34%, red below 34%. The thin inner ring is live home use, full at 4 kW, coloured green below `LOAD_GREEN_BELOW_W` (300), red above `LOAD_RED_ABOVE_W` (2000), orange in between.
 
 ## Settings web page
 Open `http://anker-display.local/` (or the board's IP, shown in your router) in a browser on the same network. Sign in with user `admin` and your `OTA_PASSWORD`. You can see the current numbers, jump to a page, switch auto page on or off, set seconds per page, day and night brightness and hours, the ring colour levels, and how often it checks for updates, or check for an update right now. Changes apply straight away and are remembered after a restart; `config.h` values are only the starting defaults. It uses plain http on your home network, so use a real password and don't expose the board to the internet.
