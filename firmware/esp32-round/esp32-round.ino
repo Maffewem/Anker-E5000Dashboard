@@ -131,6 +131,20 @@ float hist[P_COUNT][HN]; int hn = 0; unsigned long lastHist = 0;
 bool haveData = false;
 uint16_t battColour() { return isnan(d.batt) || d.batt < -20 ? GRN : d.batt > 20 ? ORG : GREY; }  // charging green, discharging orange
 
+extern bool onTrial;
+bool onTrialFlag() { return onTrial; }
+unsigned long lastOk = 0;  // millis() of the last good fetch
+// Self-healing: re-join Wi-Fi if it has been down for a while, and restart if nothing has worked for a long time.
+void watchdog() {
+  static unsigned long lastRejoin = 0;
+  unsigned long now = millis(), since = lastOk ? now - lastOk : now;
+  if (WiFi.status() != WL_CONNECTED && since > 30000UL && now - lastRejoin > 30000UL) {
+    lastRejoin = now; WiFi.disconnect(); WiFi.begin(cfg.ssid.c_str(), cfg.pass.c_str());
+  }
+  if (since > 15UL * 60000UL && !onTrialFlag()) ESP.restart();  // 15 minutes with no data: a clean start clears a wedged network stack
+}
+bool stale() { return lastOk && millis() - lastOk > 60000UL; }  // shown data is more than a minute old
+
 void fetch() {
   if (WiFi.status() != WL_CONNECTED) { err = "wifi"; return; }
   HTTPClient http;
@@ -142,7 +156,7 @@ void fetch() {
   JsonDocument j;
   if (deserializeJson(j, http.getString())) { err = "bad json"; http.end(); return; }
   http.end();
-  err = ""; haveData = true;
+  err = ""; haveData = true; lastOk = millis() ? millis() : 1;
   d.soc = j["soc"] | NAN; d.solar = j["solar_w"] | NAN; d.home = j["home_w"] | NAN;
   d.batt = j["battery_w"] | NAN; d.grid = j["grid_w"] | NAN; d.saved = j["saved_today"] | NAN;
   if (!isnan(d.batt)) {
@@ -219,6 +233,7 @@ void big(const char *title, const String &v, const String &sub, uint16_t col, in
 }
 // A red pill at the top when the battery is offline or at its limit.
 String alertText() {
+  if (stale()) return "Data out of date";
   if (!d.online || d.age > 120) return "Battery offline";
   if (!isnan(d.soc) && d.soc <= S.floorPct) return "Battery limited";
   return "";
@@ -620,6 +635,7 @@ void loop() {
   if (updateNow) { updateNow = false; checkUpdate(); }
   if (otaOn) ArduinoOTA.handle();
   trialCheck();
+  watchdog();
   updateBrightness();
   static bool wasClock = false; static int lastMin = -1;
   struct tm tt; int mn = getLocalTime(&tt, 0) ? tt.tm_min : -1;
