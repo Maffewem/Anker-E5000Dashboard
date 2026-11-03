@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+    # Display-only changes (the firmware and its published build) don't need a new Docker image.
+    # Tags still build. The dashboard's baked-in copy of the firmware catches up at the next real build.
+    paths-ignore:
+      - "firmware/**"
   pull_request:
 
 permissions:
