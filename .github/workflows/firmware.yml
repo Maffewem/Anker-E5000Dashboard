@@ -1,11 +1,11 @@
 name: Firmware
 
-# Builds the ESP32 round display firmware and commits the result to firmware/dist/, where the dashboard serves it
+# Builds the ESP32 round display firmware on the esp32-dev branch and commits the result to firmware/dist/ there, where the dashboard serves it
 # (and the board can read it from GitHub). The build uses config.example.h; the board keeps its own Wi-Fi and
 # tokens in its memory, set by the first USB flash (see firmware/esp32-round/README.md).
 on:
   push:
-    branches: [main]
+    branches: [esp32-dev]
     paths: ["firmware/esp32-round/**", ".github/workflows/firmware.yml"]
   workflow_dispatch:
 
@@ -40,23 +40,23 @@ jobs:
             --build-property "build.partitions=app3M_fat9M_16MB" --build-property "upload.maximum_size=3342336" \
             --build-property "compiler.cpp.extra_flags=-DCI_BUILD" --output-dir /tmp/fw .
       - name: Commit the build
-        if: github.ref == 'refs/heads/main'  # other branches (like a core bump) only check that it compiles
+        if: github.ref == 'refs/heads/esp32-dev'  # the build is published on esp32-dev only; main never receives firmware builds
         run: |
           mkdir -p /tmp/dist
           cp /tmp/fw/esp32-round.ino.bin /tmp/dist/esp32-round.bin
           md5sum /tmp/dist/esp32-round.bin | cut -d' ' -f1 > /tmp/dist/esp32-round.md5
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # If main moved while we built (a merge, or the previous build's commit), start again from its latest state
+          # If esp32-dev moved while we built (a merge, or the previous build's commit), start again from its latest state
           # and put our two files on top, rather than rebasing (the binaries would conflict).
           for i in 1 2 3 4 5; do
-            git fetch origin main
-            git reset --hard origin/main
+            git fetch origin esp32-dev
+            git reset --hard origin/esp32-dev
             cp /tmp/dist/esp32-round.bin /tmp/dist/esp32-round.md5 firmware/dist/
             git add firmware/dist
             git diff --cached --quiet && exit 0
             git commit -m "Firmware: new build [skip ci]"
-            git push origin HEAD:main && exit 0
+            git push origin HEAD:esp32-dev && exit 0
             sleep 5
           done
           exit 1
