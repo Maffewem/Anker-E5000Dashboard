@@ -70,3 +70,7 @@ After the board installs an update it is "on trial". It is confirmed once Wi-Fi 
 This needs the older firmware to still be in the other app slot. It can't help the first USB flash, and it can't save a build so broken that it never reaches the point of counting its restarts (for example one that fails before the screen starts). That still needs a USB flash.
 
 When the dashboard is recent enough, the time-left line comes from the dashboard's own runtime estimate instead, which follows how the battery is usually used and the next planned charge: "lasts to 05:30", "empty 21:40", "full 14:20", "80% 07:00" or "at reserve". Without it (an older dashboard, or no estimate yet) the board falls back to its own averaged calculation.
+
+## Charging indicator
+
+While the battery is charging (more than 20 W in), the Overview ring breathes slowly and a small blue bolt shows above the percentage. The ring keeps its level colour (red when low), so you can see both "low" and "recovering". It redraws about five times a second and only on the Overview page. Switch it off on the settings page ("Breathing ring and bolt while the battery is charging"). The settings preview shows the same effect.
