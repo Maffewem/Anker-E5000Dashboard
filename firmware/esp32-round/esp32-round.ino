@@ -497,6 +497,10 @@ int argInt(const char *name, int lo, int hi, int def) {
 String field(const char *label, const char *name, int val, const char *hint) {
   return String("<label>") + label + "<input type=number name=" + name + " value=" + val + "><small>" + hint + "</small></label>";
 }
+String esc(String v) { v.replace("&", "&amp;"); v.replace("'", "&#39;"); v.replace("<", "&lt;"); return v; }
+String tfield(const char *label, const char *name, const String &val, const char *hint, bool pw = false) {
+  return String("<label>") + label + "<input type=" + (pw ? "password" : "text") + " name=" + name + " value='" + esc(val) + "' autocomplete=off><small>" + hint + "</small></label>";
+}
 // Live round preview on the settings page: draws the same layout as the screen from /state, in the browser.
 const char PREVIEW_JS[] = R"JS(
 <div id=pv style="width:min(340px,100%);aspect-ratio:1;margin:1rem auto;border-radius:50%;background:#000;border:4px solid #222;overflow:hidden;cursor:pointer"></div>
@@ -567,6 +571,10 @@ void webRoot() {
   h += field("Ring red above (W)", "red", S.red, "orange in between");
   h += field("Confirm a new update within (seconds)", "confirmSec", S.confirmSec, "else it goes back to the previous firmware; 60 to 3600");
   h += field("Check for update every (hours)", "updHours", S.updHours, "1 to 168");
+  h += tfield("Update source", "updsrc", cfg.updSrc, "dashboard, github or off");
+  h += tfield("GitHub repo", "ghrepo", cfg.ghRepo, "owner/name, for source github");
+  h += tfield("GitHub branch", "ghbranch", cfg.ghBranch, "esp32-dev for the display's own builds");
+  h += tfield("GitHub token", "ghtoken", "", cfg.ghToken.length() ? "set; leave empty to keep it" : "not set; a read-only token (Contents: read)", true);
   h += "<button>Save</button></form><form method=post action=/update><button>Check for update now</button></form>";
   if (onTrial) h += "<p><b>New firmware on trial</b>, it is confirmed once the dashboard answers (or after " + String(S.confirmSec) + " s with Wi-Fi up).</p>";
   if (rollbackMsg.length()) h += "<p><b>Went back to the previous firmware:</b> " + rollbackMsg + ".</p>";
@@ -581,6 +589,11 @@ void webSave() {
   S.updHours = argInt("updHours", 1, 168, S.updHours); S.autoMs = argInt("autoS", 2, 600, S.autoMs / 1000) * 1000;
   S.solar = web.hasArg("solar"); S.nightClock = web.hasArg("nclock"); S.chgfx = web.hasArg("chgfx");
   S.confirmSec = argInt("confirmSec", 60, 3600, S.confirmSec); S.capWh = argInt("capWh", 500, 100000, S.capWh); S.floorPct = argInt("floorPct", 0, 50, S.floorPct); if (!pageOn(page)) page = P_OVERVIEW;
+  { String v = web.arg("updsrc"); v.trim(); v.toLowerCase(); if (v == "dashboard" || v == "github" || v == "off") cfg.updSrc = v;
+    v = web.arg("ghrepo"); v.trim(); if (v.length()) cfg.ghRepo = v;
+    v = web.arg("ghbranch"); v.trim(); if (v.length()) cfg.ghBranch = v;
+    v = web.arg("ghtoken"); v.trim(); if (v.length()) cfg.ghToken = v;
+    prefs.putString("updsrc", cfg.updSrc); prefs.putString("ghrepo", cfg.ghRepo); prefs.putString("ghbranch", cfg.ghBranch); prefs.putString("ghtoken", cfg.ghToken); }
   saveSettings(); setAuto(web.hasArg("auto")); curBrightReset = 1; draw();
   web.sendHeader("Location", "/"); web.send(303);
 }
