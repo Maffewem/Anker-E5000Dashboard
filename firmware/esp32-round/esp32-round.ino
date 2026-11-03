@@ -88,7 +88,7 @@ unsigned long lastPage = 0;
 Preferences prefs;
 
 // Settings you can change from the web page (http://DEVICE_NAME.local/). config.h values are only the defaults.
-struct Settings { int dayBr, nightBr, nStart, nEnd, green, red, updHours, autoMs, capWh, floorPct, confirmSec; bool solar, nightClock; } S;
+struct Settings { int dayBr, nightBr, nStart, nEnd, green, red, updHours, autoMs, capWh, floorPct, confirmSec; bool solar, nightClock, chgfx; } S;
 void loadSettings() {
   S.dayBr = prefs.getInt("dayBr", DAY_BRIGHTNESS); S.nightBr = prefs.getInt("nightBr", NIGHT_BRIGHTNESS);
   S.nStart = prefs.getInt("nStart", NIGHT_START_HOUR); S.nEnd = prefs.getInt("nEnd", NIGHT_END_HOUR);
@@ -96,11 +96,11 @@ void loadSettings() {
   S.updHours = prefs.getInt("updHours", UPDATE_CHECK_HOURS); S.autoMs = prefs.getInt("autoMs", AUTO_PAGE_MS > 0 ? AUTO_PAGE_MS : 8000);
   S.solar = prefs.getBool("solar", true);
   S.confirmSec = prefs.getInt("confirmSec", 180);
-  S.capWh = prefs.getInt("capWh", 5000); S.floorPct = prefs.getInt("floorPct", 10); S.nightClock = prefs.getBool("nclock", false);
+  S.capWh = prefs.getInt("capWh", 5000); S.floorPct = prefs.getInt("floorPct", 10); S.nightClock = prefs.getBool("nclock", false); S.chgfx = prefs.getBool("chgfx", true);
 }
 void saveSettings() {
   prefs.putInt("dayBr", S.dayBr); prefs.putInt("nightBr", S.nightBr); prefs.putInt("nStart", S.nStart); prefs.putInt("nEnd", S.nEnd);
-  prefs.putInt("green", S.green); prefs.putInt("red", S.red); prefs.putInt("updHours", S.updHours); prefs.putInt("autoMs", S.autoMs); prefs.putBool("solar", S.solar); prefs.putInt("confirmSec", S.confirmSec); prefs.putInt("capWh", S.capWh); prefs.putInt("floorPct", S.floorPct); prefs.putBool("nclock", S.nightClock);
+  prefs.putInt("green", S.green); prefs.putInt("red", S.red); prefs.putInt("updHours", S.updHours); prefs.putInt("autoMs", S.autoMs); prefs.putBool("solar", S.solar); prefs.putInt("confirmSec", S.confirmSec); prefs.putInt("capWh", S.capWh); prefs.putInt("floorPct", S.floorPct); prefs.putBool("nclock", S.nightClock); prefs.putBool("chgfx", S.chgfx);
 }
 
 // Wi-Fi, URL and tokens live in the board's own memory (NVS), so a firmware built in CI (which has placeholder
@@ -251,6 +251,15 @@ uint16_t loadColour() { return isnan(d.home) ? DIM : d.home < S.green ? GRN : d.
 
 // Outer ring colour follows the battery level: green from 67%, orange from 34%, red below.
 #define USAGE_FULL_W 4000.f  // inner ring is full at this home load
+bool chargingFx() { return S.chgfx && !isnan(d.batt) && d.batt < -20 && haveData; }  // ring breathes and a bolt shows while charging
+float pulse = 1.f;  // 0.6 to 1.0, set from loop()
+uint16_t dimColour(uint16_t c, float f) {
+  return (((int)(((c >> 11) & 31) * f)) << 11) | (((int)(((c >> 5) & 63) * f)) << 5) | (int)((c & 31) * f);
+}
+void bolt(int cx, int cy, uint16_t col) {
+  gfx->fillTriangle(cx + 7, cy - 16, cx - 9, cy + 6, cx + 4, cy + 6, col);
+  gfx->fillTriangle(cx - 3, cy, cx + 11, cy, cx - 7, cy + 28, col);
+}
 uint16_t ringColour() { return isnan(d.soc) ? DIM : d.soc >= 67 ? GRN : d.soc >= 34 ? ORG : RED; }
 
 void wifiBars() {  // four small bars from the Wi-Fi signal, bottom right of centre
@@ -275,9 +284,10 @@ void draw() {
   gfx->fillScreen(BG);
   switch (page) {
     case P_OVERVIEW: {
-      arc(d.soc / 100, ringColour(), 188, 208);                          // outer: battery %, coloured by battery power
+      arc(d.soc / 100, chargingFx() ? dimColour(ringColour(), pulse) : ringColour(), 188, 208);                          // outer: battery %, coloured by battery power
       arc(isnan(d.home) ? 0 : d.home / USAGE_FULL_W, loadColour(), 166, 180);  // inner: live home use
       ctext(String(isnan(d.soc) ? 0 : (int)d.soc) + "%", 190, 6, WHITE);
+      if (chargingFx()) bolt(C, 152, C565(74, 168, 255));
       if (S.solar) ctext("sun " + kw(d.solar), 112, 3, YEL);
       else if (timeLeft().length()) ctext(timeLeft(), 118, 2, WHITE);
       ctext("home " + kw(d.home), 296, 3, RED);
@@ -485,10 +495,10 @@ function big(t,v,sub,c,x){return T(233,95,t,26,'#e8e8ea')+T(233,205,v,96,c)+T(23
 function pill(d){if(!d.rateKind)return'';var k=d.rateKind,cheap=k=='cheap',peak=k=='peak',fg=cheap?C.bat:peak?C.home:C.org,bg=cheap?'#12301f':peak?'#461614':'#42280c';return'<rect x="153" y="392" width="160" height="28" rx="14" fill="'+bg+'"/>'+T(233,412,(cheap?'cheap':peak?'peak':'mid')+' until '+d.rateUntil,18,fg)}
 function fv(n,def){var e=document.querySelector('[name='+n+']');return e&&e.value!==''?+e.value:def}
 function draw(){var d=st,b='';if(!d)return;var gr=fv('green',d.green),rd=fv('red',d.red),so=document.querySelector('[name=solar]');so=so?so.checked:d.solarOn;
-var p=d.page,sc=d.soc==null?0:d.soc;
+var p=d.page,sc=d.soc==null?0:d.soc,cf=document.querySelector('[name=chgfx]');cf=(cf?cf.checked:d.chgfx)&&d.batt<-20;
 if(!d.online){b=T(233,200,'Dashboard',44,C.home)+T(233,260,'unreachable',44,C.home)}
 else if(p==0){var bc=sc>=67?C.bat:sc>=34?C.org:C.home,lc=d.home==null?'#555':d.home<gr?C.bat:d.home>rd?C.home:C.org;
-b='<path d="'+arc(198,135,405)+'" stroke="'+C.dim+'" stroke-width="20" fill="none"/><path d="'+arc(198,135,135+270*sc/100)+'" stroke="'+bc+'" stroke-width="20" fill="none" stroke-linecap="round"/><path d="'+arc(173,135,405)+'" stroke="'+C.dim+'" stroke-width="14" fill="none"/>'+(d.home>0?'<path d="'+arc(173,135,135+270*Math.min(d.home/4000,1))+'" stroke="'+lc+'" stroke-width="14" fill="none" stroke-linecap="round"/>':'')+T(233,235,Math.round(sc)+'%',96,'#e8e8ea')+(so?T(233,130,'sun '+kw(d.solar),34,C.sun):(d.left?T(233,136,d.left,24,'#e8e8ea'):''))+T(233,320,'home '+kw(d.home),34,C.home)+T(233,362,'grid '+kw(d.grid),34,C.grid)+pill(d)}
+b='<path d="'+arc(198,135,405)+'" stroke="'+C.dim+'" stroke-width="20" fill="none"/><path d="'+arc(198,135,135+270*sc/100)+'" stroke="'+bc+'" stroke-width="20" fill="none" stroke-linecap="round"'+(cf?' class="br"':'')+'/><path d="'+arc(173,135,405)+'" stroke="'+C.dim+'" stroke-width="14" fill="none"/>'+(d.home>0?'<path d="'+arc(173,135,135+270*Math.min(d.home/4000,1))+'" stroke="'+lc+'" stroke-width="14" fill="none" stroke-linecap="round"/>':'')+T(233,235,Math.round(sc)+'%',96,'#e8e8ea')+(so?T(233,130,'sun '+kw(d.solar),34,C.sun):(d.left?T(233,136,d.left,24,'#e8e8ea'):''))+T(233,320,'home '+kw(d.home),34,C.home)+T(233,362,'grid '+kw(d.grid),34,C.grid)+pill(d)+(cf?'<polygon points="240,138 224,158 237,158 226,180 244,152 231,152" fill="#4aa8ff"/>':'')}
 else if(p==1)b=big('Battery',Math.round(sc)+'%',kw(d.batt)+' '+(d.batt<-20?'charging':d.batt>20?'discharging':'idle'),C.bat,d.left);
 else if(p==2)b=big('Solar',kw(d.solar),'generating now',C.sun);
 else if(p==3)b=big('Grid',kw(d.grid),d.grid>0?'importing':'exporting',C.grid);
@@ -496,7 +506,7 @@ else if(p==4)b=big('Home',kw(d.home),'using now',C.home);
 else if(p==6)b=big('Self-sufficient',d.self==null?'--':Math.round(d.self)+'%','of today\'s use not from grid',C.bat);
 else b=big('Saved today',d.saved==null?'--':String.fromCharCode(163)+d.saved.toFixed(2),'from the dashboard tariff',C.bat);
 var br=fv('dayBr',255);if(d.alert&&d.online)b+='<rect x="123" y="20" width="220" height="34" rx="17" fill="#5a1410"/>'+T(233,43,d.alert,18,'#ffb4ac');
-document.getElementById('pv').innerHTML='<svg viewBox="0 0 466 466" width="100%" height="100%" style="opacity:'+Math.max(.15,br/255)+'">'+b+'</svg>'}
+document.getElementById('pv').innerHTML='<svg viewBox="0 0 466 466" width="100%" height="100%" style="opacity:'+Math.max(.15,br/255)+'">'+(cf&&p==0?'<style>@keyframes br{0%,100%{opacity:.65}50%{opacity:1}}.br{animation:br 4s ease-in-out infinite}</style>':'')+b+'</svg>'}
 function poll(){fetch('/state').then(function(r){return r.json()}).then(function(j){st=j;draw()}).catch(function(){})}
 document.getElementById('pv').onclick=function(){if(!st)return;var n=st.page;do{n=(n+1)%7}while(n==2&&!st.solarOn);fetch('/page?n='+n).then(poll)};
 document.addEventListener('input',draw);
@@ -506,7 +516,7 @@ poll();setInterval(poll,3000);
 void webState() {
   if (!web.authenticate("admin", cfg.otaPw.c_str())) return web.requestAuthentication();
   JsonDocument j;
-  j["page"] = page; j["online"] = !(err.length() && !haveData); j["solarOn"] = S.solar; j["green"] = S.green; j["red"] = S.red;
+  j["page"] = page; j["online"] = !(err.length() && !haveData); j["solarOn"] = S.solar; j["chgfx"] = S.chgfx; j["green"] = S.green; j["red"] = S.red;
   if (!isnan(d.soc)) j["soc"] = d.soc; if (!isnan(d.solar)) j["solar"] = d.solar; if (!isnan(d.home)) j["home"] = d.home;
   if (!isnan(d.batt)) j["batt"] = d.batt; if (!isnan(d.grid)) j["grid"] = d.grid; if (!isnan(d.saved)) j["saved"] = d.saved; if (!isnan(d.self)) j["self"] = d.self;
   j["left"] = timeLeft(); j["alert"] = alertText(); j["rateKind"] = d.rateKind; j["rateUntil"] = d.rateUntil;
@@ -530,6 +540,7 @@ void webRoot() {
   h += String("<label><input type=checkbox name=solar value=1") + (S.solar ? " checked" : "") + "> Show solar (the sun line and Solar page)</label>";
   h += String("<label><input type=checkbox name=auto value=1") + (autoPage ? " checked" : "") + "> Auto page</label>";
   h += field("Seconds per page", "autoS", S.autoMs / 1000, "");
+  h += String("<label><input type=checkbox name=chgfx value=1") + (S.chgfx ? " checked" : "") + "> Breathing ring and bolt while the battery is charging</label>";
   h += String("<label><input type=checkbox name=nclock value=1") + (S.nightClock ? " checked" : "") + "> Show a dim clock at night instead of the pages</label>";
   h += field("Battery size (Wh) for time left", "capWh", S.capWh, "usable energy, used for the time left");
   h += field("Alert at or below (%)", "floorPct", S.floorPct, "shows Battery limited");
@@ -553,7 +564,7 @@ void webSave() {
   S.nStart = argInt("nStart", 0, 23, S.nStart); S.nEnd = argInt("nEnd", 0, 23, S.nEnd);
   S.green = argInt("green", 0, 20000, S.green); S.red = argInt("red", 0, 20000, S.red);
   S.updHours = argInt("updHours", 1, 168, S.updHours); S.autoMs = argInt("autoS", 2, 600, S.autoMs / 1000) * 1000;
-  S.solar = web.hasArg("solar"); S.nightClock = web.hasArg("nclock");
+  S.solar = web.hasArg("solar"); S.nightClock = web.hasArg("nclock"); S.chgfx = web.hasArg("chgfx");
   S.confirmSec = argInt("confirmSec", 60, 3600, S.confirmSec); S.capWh = argInt("capWh", 500, 100000, S.capWh); S.floorPct = argInt("floorPct", 0, 50, S.floorPct); if (!pageOn(page)) page = P_OVERVIEW;
   saveSettings(); setAuto(web.hasArg("auto")); curBrightReset = 1; draw();
   web.sendHeader("Location", "/"); web.send(303);
@@ -612,6 +623,10 @@ void loop() {
   static unsigned long lastPoll = 0;
   unsigned long now = millis();
   if (now - lastPoll >= POLL_MS || lastPoll == 0) { lastPoll = now; fetch(); draw(); }
+  static unsigned long lastPulse = 0;
+  if (chargingFx() && page == P_OVERVIEW && !clockActive() && now - lastPulse >= 200) {  // slow breathing, about 5 redraws a second
+    lastPulse = now; pulse = 0.65f + 0.35f * (0.5f + 0.5f * sinf(now / 640.f)); draw();
+  }
   if (autoPage && now - lastPage >= S.autoMs) { lastPage = now; page = stepPage(page, 1); draw(); }
   static unsigned long lastCheck = 0;
   if (millis() > 60000 && (!lastCheck || now - lastCheck >= S.updHours * 3600000UL)) { lastCheck = now; checkUpdate(); }
