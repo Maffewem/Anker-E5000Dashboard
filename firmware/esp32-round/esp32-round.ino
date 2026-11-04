@@ -121,7 +121,7 @@ void loadConfig() {
 void setAuto(bool on) { autoPage = on; lastPage = millis(); prefs.putBool("auto", on); }
 
 
-struct Data { float soc = NAN, solar = NAN, home = NAN, batt = NAN, grid = NAN, saved = NAN, self = NAN, rateP = NAN; String rateKind, rateUntil, runText; bool online = false; long age = -1; } d;
+struct Data { float soc = NAN, solar = NAN, home = NAN, batt = NAN, grid = NAN, saved = NAN, savedMonth = NAN, savedTotal = NAN, self = NAN, rateP = NAN; String rateKind, rateUntil, runText; bool online = false; long age = -1; } d;
 float battAvg = NAN; unsigned long battAvgT = 0;  // battery power averaged over about 10 minutes, so the time left doesn't jump about
 #define AVG_TAU_MS 600000UL
 String err = "starting";
@@ -158,7 +158,7 @@ void fetch() {
   http.end();
   err = ""; haveData = true; lastOk = millis() ? millis() : 1;
   d.soc = j["soc"] | NAN; d.solar = j["solar_w"] | NAN; d.home = j["home_w"] | NAN;
-  d.batt = j["battery_w"] | NAN; d.grid = j["grid_w"] | NAN; d.saved = j["saved_today"] | NAN;
+  d.batt = j["battery_w"] | NAN; d.grid = j["grid_w"] | NAN; d.saved = j["saved_today"] | NAN; d.savedMonth = j["saved_month"] | NAN; d.savedTotal = j["saved_total"] | NAN;
   if (!isnan(d.batt)) {
     unsigned long t = millis(), dt = battAvgT ? t - battAvgT : 0; battAvgT = t;
     // Start again when the battery really changes direction (not for small swings around zero).
@@ -315,7 +315,10 @@ void draw() {
     case P_SOLAR: big("Solar", kw(d.solar), "generating now", YEL, P_SOLAR); break;
     case P_GRID: big("Grid", kw(d.grid), isnan(d.grid) ? "" : d.grid > 0 ? "importing" : "exporting", PUR, P_GRID); break;
     case P_HOME: big("Home", kw(d.home), "using now", RED, P_HOME); break;
-    case P_SAVING: big("Saved today", isnan(d.saved) ? "--" : String("\xC2\xA3") + String(d.saved, 2), "from the dashboard tariff", GRN, P_SAVING); break;
+    case P_SAVING: {
+      String m = isnan(d.savedMonth) ? "" : "month \xC2\xA3" + String(d.savedMonth, 2);
+      String t = isnan(d.savedTotal) ? "" : "total \xC2\xA3" + String(d.savedTotal, 2);
+      big("Saved today", isnan(d.saved) ? "--" : String("\xC2\xA3") + String(d.saved, 2), m, GRN, P_SAVING, t); break; }
     case P_SELF: {
       arc(isnan(d.self) ? 0 : d.self / 100, GRN, 188, 208);
       ctext("Self-sufficient", 110, 2, WHITE);
@@ -341,25 +344,31 @@ bool touchRead(int &x, int &y) {
   return true;
 }
 int downX = -1, lastX = -1; unsigned long lastTouch = 0, downT = 0; bool longDone = false;
+bool swiped = false;
 void handleTouch() {
   int x, y;
   if (touchRead(x, y)) {
     if (downX < 0) { downX = x; downT = millis(); longDone = false; }
     lastX = x; lastTouch = millis();
+    // Change page as soon as the finger has moved far enough, rather than waiting for it to lift.
+    if (!longDone && !swiped && abs(lastX - downX) > 50) {
+      swiped = true;
+      page = stepPage(page, lastX > downX ? -1 : 1);
+      lastPage = millis(); wakeUntil = millis() + 15000;
+      draw();
+    }
     // Hold still for 1 second: turn auto page on or off.
     if (!longDone && abs(lastX - downX) < 30 && millis() - downT > 1000) { longDone = true; setAuto(!autoPage); draw(); }
     return;
   }
-  if (downX >= 0 && millis() - lastTouch > 80) {
-    if (!longDone) {
-      int dx = lastX - downX;
-      if (dx > 60) page = stepPage(page, -1);
-      else page = stepPage(page, 1);
+  if (downX >= 0 && millis() - lastTouch > 40) {
+    if (!longDone && !swiped) {  // a short tap with little movement goes to the next page
+      page = stepPage(page, 1);
       lastPage = millis();  // a touch restarts the auto timer
       wakeUntil = millis() + 15000;  // a touch at night shows the pages for a while
       draw();
     }
-    downX = -1;
+    downX = -1; swiped = false;
   }
 }
 // BOOT button: press to turn auto page on or off.
@@ -523,7 +532,7 @@ else if(p==2)b=big('Solar',kw(d.solar),'generating now',C.sun);
 else if(p==3)b=big('Grid',kw(d.grid),d.grid>0?'importing':'exporting',C.grid);
 else if(p==4)b=big('Home',kw(d.home),'using now',C.home);
 else if(p==6)b=big('Self-sufficient',d.self==null?'--':Math.round(d.self)+'%','of today\'s use not from grid',C.bat);
-else b=big('Saved today',d.saved==null?'--':String.fromCharCode(163)+d.saved.toFixed(2),'from the dashboard tariff',C.bat);
+else{var P=String.fromCharCode(163);b=big('Saved today',d.saved==null?'--':P+d.saved.toFixed(2),d.savedMonth==null?'':'month '+P+d.savedMonth.toFixed(2),C.bat,d.savedTotal==null?'':'total '+P+d.savedTotal.toFixed(2))}
 var br=fv('dayBr',255);if(d.alert&&d.online)b+='<rect x="123" y="20" width="220" height="34" rx="17" fill="#5a1410"/>'+T(233,43,d.alert,18,'#ffb4ac');
 document.getElementById('pv').innerHTML='<svg viewBox="0 0 466 466" width="100%" height="100%" style="opacity:'+Math.max(.15,br/255)+'">'+(cf&&p==0?'<style>@keyframes br{0%,100%{opacity:.65}50%{opacity:1}}.br{animation:br 4s ease-in-out infinite}</style>':'')+b+'</svg>'}
 function poll(){fetch('/state').then(function(r){return r.json()}).then(function(j){st=j;draw()}).catch(function(){})}
@@ -537,7 +546,7 @@ void webState() {
   JsonDocument j;
   j["page"] = page; j["online"] = !(err.length() && !haveData); j["solarOn"] = S.solar; j["chgfx"] = S.chgfx; j["green"] = S.green; j["red"] = S.red;
   if (!isnan(d.soc)) j["soc"] = d.soc; if (!isnan(d.solar)) j["solar"] = d.solar; if (!isnan(d.home)) j["home"] = d.home;
-  if (!isnan(d.batt)) j["batt"] = d.batt; if (!isnan(d.grid)) j["grid"] = d.grid; if (!isnan(d.saved)) j["saved"] = d.saved; if (!isnan(d.self)) j["self"] = d.self;
+  if (!isnan(d.batt)) j["batt"] = d.batt; if (!isnan(d.grid)) j["grid"] = d.grid; if (!isnan(d.saved)) j["saved"] = d.saved; if (!isnan(d.savedMonth)) j["savedMonth"] = d.savedMonth; if (!isnan(d.savedTotal)) j["savedTotal"] = d.savedTotal; if (!isnan(d.self)) j["self"] = d.self;
   j["left"] = timeLeft(); j["alert"] = alertText(); j["rateKind"] = d.rateKind; j["rateUntil"] = d.rateUntil;
   String out; serializeJson(j, out); web.send(200, "application/json", out);
 }
@@ -670,5 +679,5 @@ void loop() {
   if (clockActive() != wasClock || (clockActive() && mn != lastMin)) { wasClock = clockActive(); lastMin = mn; draw(); }
   handleButton();
   handleTouch();
-  delay(10);
+  delay(4);
 }
