@@ -19,8 +19,8 @@ from fastapi import APIRouter, HTTPException, Request
 from ..context import state
 from ..runtime import run_summary
 from .data import runtime_estimate
-from ..tariff import daily_costs
-from .tariff import _pricing
+from ..tariff import daily_costs, payback
+from .tariff import _lifetime, _pricing
 
 log = logging.getLogger("solarbank.web")
 router = APIRouter()
@@ -45,6 +45,12 @@ def require_token(request: Request) -> None:
         raise HTTPException(status_code=404, detail="Not found")  # off, and looks like it isn't there
     if not hmac.compare_digest(_presented(request).encode(), token.encode()):
         raise HTTPException(status_code=401, detail="Wrong token")
+
+
+def month_saved(rows: list[dict], today: str) -> float:
+    """Sum of the saving over the days of today's month. `rows` are daily_costs() rows."""
+    prefix = today[:7]
+    return round(sum(r.get("saved") or 0.0 for r in rows if str(r.get("day", "")).startswith(prefix)), 2)
 
 
 def self_sufficiency(slots: list[dict], today: str) -> float | None:
@@ -96,12 +102,19 @@ def widget(request: Request) -> dict:
         log.warning("Widget couldn't load the tariff: %s", err)
         tariff = prices = None
     now = datetime.now(state.storage.tz)
-    out["saved_today"] = None
+    out["saved_today"] = out["saved_month"] = out["saved_total"] = None
     if tariff is not None:
         try:
             out["saved_today"] = daily_costs(tariff, state.storage.battery_slots(), now.date(), 1, prices)["today"]["saved"]
         except Exception as err:
             log.warning("Widget couldn't work out today's saving: %s", err)
+        try:
+            slots = state.storage.battery_slots()
+            month = daily_costs(tariff, slots, now.date(), now.day, prices)
+            out["saved_month"] = month_saved(month["days"], now.date().isoformat())
+            out["saved_total"] = payback(tariff, slots, now.date(), prices, _lifetime())["saved"]
+        except Exception as err:
+            log.warning("Widget couldn't work out the month or lifetime saving: %s", err)
         try:
             out.update(rate_now(tariff.slot_rates(), now))
         except Exception as err:
