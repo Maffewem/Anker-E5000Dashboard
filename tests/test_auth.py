@@ -212,3 +212,12 @@ def test_run_summary_lines():
     assert run_summary({**base, "soc": 10}, now) == "at reserve"
     assert run_summary({**base, "charging": True, "full_at": iso(2)}, now) == "full tmrw 00:00"
     assert run_summary({**base, "charging": True, "full_at": iso(2), "charge_target": 80}, now) == "80% tmrw 00:00"
+
+
+def test_widget_month_saved_adds_only_this_months_days():
+    from app.routes.widget import month_saved
+
+    rows = [{"day": "2026-11-03", "saved": 1.25}, {"day": "2026-11-01", "saved": 0.5},
+            {"day": "2026-10-31", "saved": 9.0}, {"day": "2026-11-02", "saved": None}]
+    assert month_saved(rows, "2026-11-03") == 1.75
+    assert month_saved([], "2026-11-03") == 0.0
