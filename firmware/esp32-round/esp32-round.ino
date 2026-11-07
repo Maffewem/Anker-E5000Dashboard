@@ -125,6 +125,7 @@ struct Data { float soc = NAN, solar = NAN, home = NAN, batt = NAN, grid = NAN, 
 float battAvg = NAN; unsigned long battAvgT = 0;  // battery power averaged over about 10 minutes, so the time left doesn't jump about
 #define AVG_TAU_MS 600000UL
 String err = "starting";
+bool fetchedOnce = false;  // the first dashboard request has been tried
 #define HN 180        // history points per series
 #define HIST_MS 60000 // one point a minute = the last 3 hours
 float hist[P_COUNT][HN]; int hn = 0; unsigned long lastHist = 0;
@@ -283,10 +284,23 @@ void wifiBars() {  // four small bars from the Wi-Fi signal, bottom right of cen
   for (int i = 0; i < 4; i++) gfx->fillRect(C + 85 + i * 7, 446 - (i + 1) * 5, 5, (i + 1) * 5, i < n ? WHITE : DIM);
 }
 
+#define WIFI_WAIT_MS 30000UL  // "No Wi-Fi" is only shown once joining has taken longer than this
+bool starting() { return err.length() && !haveData && (WiFi.status() == WL_CONNECTED ? !fetchedOnce : millis() < WIFI_WAIT_MS); }
+void drawStarting() {  // boot screen: a progress ring in the same style as the battery ring
+  bool up = WiFi.status() == WL_CONNECTED;
+  float frac = up ? 0.75f : 0.6f * min(1.f, (float)millis() / WIFI_WAIT_MS);
+  gfx->fillScreen(BG);
+  arc(frac, GRN, 188, 208);
+  ctext("Starting up", 150, 3, WHITE);
+  ctext(up ? "Getting data" : "Connecting to Wi-Fi", 200, 2, GREY);
+  wifiBars();
+  gfx->flush();
+}
 void drawUnreachable() {
+  if (starting()) { drawStarting(); return; }
   gfx->fillScreen(BG);
   ctext(WiFi.status() == WL_CONNECTED ? "Dashboard" : "No Wi-Fi", 150, 3, RED);
-  ctext(WiFi.status() == WL_CONNECTED ? "unreachable" : "connecting...", 190, 3, RED);
+  ctext(WiFi.status() == WL_CONNECTED ? "unreachable" : "still trying...", 190, 3, RED);
   ctext(err, 250, 2, WHITE);
   ctext("retrying every few seconds", 300, 2, GREY);
   wifiBars();
@@ -650,7 +664,13 @@ void setup() {
 void loop() {
   static unsigned long lastPoll = 0;
   unsigned long now = millis();
-  if (now - lastPoll >= POLL_MS || lastPoll == 0) { lastPoll = now; fetch(); draw(); }
+  static bool wasUp = false;
+  bool up = WiFi.status() == WL_CONNECTED;
+  if (up && !wasUp) lastPoll = 0;  // fetch straight away once Wi-Fi joins
+  wasUp = up;
+  if (now - lastPoll >= POLL_MS || lastPoll == 0) { lastPoll = now; fetch(); if (up) fetchedOnce = true; draw(); }
+  static unsigned long lastBoot = 0;
+  if (starting() && !clockActive() && now - lastBoot >= 250) { lastBoot = now; draw(); }  // keeps the boot ring moving
   static unsigned long lastPulse = 0;
   if (chargingFx() && page == P_OVERVIEW && !clockActive() && now - lastPulse >= 200) {  // slow breathing, about 5 redraws a second
     lastPulse = now; pulse = 0.65f + 0.35f * (0.5f + 0.5f * sinf(now / 640.f)); draw();
