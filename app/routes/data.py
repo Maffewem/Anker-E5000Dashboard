@@ -67,6 +67,12 @@ def energy(days: int = Query(14, ge=1, le=366)) -> list[dict]:
     return state.storage.daily_energy(days)
 
 
+@router.get("/api/import-check")
+def import_check(days: int = Query(30, ge=1, le=366)) -> list[dict]:
+    """Each finished day's grid import as recorded, against the Smart Meter's counter."""
+    return state.storage.import_checks(days)
+
+
 @router.get("/api/events")
 def events(
     limit: int = Query(100, ge=1, le=1000),
