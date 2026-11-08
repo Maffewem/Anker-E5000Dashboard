@@ -30,7 +30,8 @@ Press the **BOOT** button, or hold a finger still on the screen for one second, 
 - The Battery page is green while charging and orange while discharging.
 - The sparklines now cover the last 3 hours (one point a minute, kept in memory, so a restart clears them).
 - Four small bars at the bottom show Wi-Fi signal.
-- If the dashboard has never answered since boot, a full screen says "Dashboard unreachable" (or "No Wi-Fi") with the reason, such as "bad token" or "widget off". After the first good reply, a later outage shows the last values with a red message instead.
+- While starting, a "Starting up" screen with a progress ring shows "Connecting to Wi-Fi" for up to 30 seconds, then "Getting data". Only after that does it say "No Wi-Fi".
+- If the dashboard has never answered since boot, a full screen says "Dashboard unreachable" (or "No Wi-Fi" once joining has failed for 30 seconds) with the reason, such as "bad token" or "widget off". After the first good reply, a later outage shows the last values with a red message instead.
 
 ## Automatic updates (no manual upload)
 Every merge that changes `firmware/esp32-round/` is built by the **Firmware** GitHub Action, which commits `esp32-round.bin` and its MD5 to `firmware/dist/`. The board checks every `UPDATE_CHECK_HOURS` (default 6, first check a minute after boot) and installs the build by itself if its MD5 differs from what it runs. Pick the source in `config.h`:
