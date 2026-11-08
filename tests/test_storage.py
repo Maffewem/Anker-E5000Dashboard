@@ -188,3 +188,17 @@ def test_grid_compare_lines_up_recorded_and_metered_import_per_hour():
     assert rows[0]["recorded_import_kwh"] == 1.2
     assert rows[0]["meter_power_kwh"] == 0.6
     assert rows[1]["meter_counter_kwh"] == 0.6  # 60 minutes at 0.01 kWh
+
+
+def test_a_second_dashboard_on_the_same_data_folder_is_refused(tmp_path):
+    import pytest
+
+    from app.storage import AlreadyRunning, lock_data_folder
+
+    db = str(tmp_path / "solarbank.db")
+    first = lock_data_folder(db)
+    with pytest.raises(AlreadyRunning):
+        lock_data_folder(db)
+    first.close()  # the lock goes with the process
+    lock_data_folder(db).close()
+    assert lock_data_folder(":memory:") is None

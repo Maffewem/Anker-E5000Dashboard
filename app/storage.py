@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -309,6 +310,39 @@ def discharge_runs(rows) -> list[tuple[float, float]]:
         prev_ts = r["ts"]
     close()
     return runs
+
+
+class AlreadyRunning(RuntimeError):
+    """Another dashboard is already using this data folder."""
+
+
+def lock_data_folder(db_path: str):
+    """Hold a lock beside the database for as long as this process runs.
+
+    Two dashboards on one data folder would each record every minute (doubling
+    the energy figures) and each run its own battery control. The second one
+    refuses to start instead. Returns the open lock file, to keep for the life
+    of the process; None for an in-memory database or where locks aren't available.
+    """
+    if db_path == ":memory:":
+        return None
+    try:
+        import fcntl
+    except ImportError:  # Windows: no lock, as before
+        return None
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    handle = open(db_path + ".lock", "w")  # noqa: SIM115 - kept open on purpose
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as err:
+        handle.close()
+        raise AlreadyRunning(
+            f"Another Solarbank dashboard is already using {Path(db_path).parent}. Two copies on the same data "
+            "would double the readings and fight over the battery's charge speed. Stop the other container "
+            "(check Portainer for a second stack or an old one) and start this one again.") from err
+    handle.write(str(os.getpid()))
+    handle.flush()
+    return handle
 
 
 class Storage:
