@@ -795,6 +795,58 @@ class Storage:
                     source="dashboard")
         return fixed
 
+    def grid_compare(self, start: date, end: date) -> list[dict]:
+        """Grid import per local hour from each source, to see where they part ways.
+
+        recorded_import_kwh: what the Solarbank's grid reading added up to (this
+        feeds the charging spend). meter_counter_kwh: the Smart Meter's lifetime
+        counter, as billed. meter_power_kwh: the meter's power reading added up.
+        Charge and discharge are the battery's, for the same hour.
+        """
+        lo, hi = self._day_start(start), self._day_start(end + timedelta(days=1))
+        with self._lock:
+            mins = self._db.execute(
+                "SELECT ts, import_wh, charge_wh, discharge_wh, estimated FROM minutes WHERE ts >= ? AND ts < ?",
+                (lo, hi)).fetchall()
+            meter = self._db.execute(
+                "SELECT ts, grid_w, import_total_kwh FROM meter_minutes WHERE ts >= ? - 3600 AND ts < ? ORDER BY ts",
+                (lo, hi)).fetchall()
+        hours: dict[int, dict] = {}
+
+        def bucket(ts: int) -> dict:
+            h = ts // 3600 * 3600
+            return hours.setdefault(h, {"recorded_import_kwh": 0.0, "meter_power_kwh": 0.0, "charge_kwh": 0.0,
+                                         "discharge_kwh": 0.0, "estimated_minutes": 0, "counter_last": None})
+
+        for r in mins:
+            b = bucket(r["ts"])
+            b["recorded_import_kwh"] += (r["import_wh"] or 0.0) / 1000
+            b["charge_kwh"] += (r["charge_wh"] or 0.0) / 1000
+            b["discharge_kwh"] += (r["discharge_wh"] or 0.0) / 1000
+            b["estimated_minutes"] += 1 if r["estimated"] else 0
+        before = None
+        for r in meter:
+            if r["ts"] < lo:
+                before = r["import_total_kwh"] if r["import_total_kwh"] is not None else before
+                continue
+            b = bucket(r["ts"])
+            b["meter_power_kwh"] += max(0.0, r["grid_w"] or 0.0) / 60000
+            if r["import_total_kwh"] is not None:
+                b["counter_last"] = r["import_total_kwh"]
+        out, prev = [], before
+        for h in sorted(hours):
+            if not lo <= h < hi:
+                continue
+            b = hours[h]
+            last = b.pop("counter_last")
+            counter = None if last is None or prev is None else round(last - prev, 3)
+            prev = last if last is not None else prev
+            local = datetime.fromtimestamp(h, self.tz)
+            out.append({"day": local.date().isoformat(), "hour": local.hour,
+                        **{k: round(v, 3) if isinstance(v, float) else v for k, v in b.items()},
+                        "meter_counter_kwh": counter})
+        return out
+
     def import_checks(self, days: int = 30) -> list[dict]:
         """Recorded against metered grid import for the latest checked days, newest first."""
         with self._lock:

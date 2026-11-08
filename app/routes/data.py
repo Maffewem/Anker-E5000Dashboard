@@ -73,6 +73,32 @@ def import_check(days: int = Query(30, ge=1, le=366)) -> list[dict]:
     return state.storage.import_checks(days)
 
 
+@router.get("/api/grid-compare")
+def grid_compare(
+    start: date | None = None,
+    end: date | None = None,
+    format: str = Query("json", pattern="^(csv|json)$"),
+):
+    """Grid import per hour as the Solarbank recorded it, against the Smart Meter's counter and power.
+
+    Defaults to the last 3 days. Use it to see which hours the two disagree in.
+    """
+    storage: Storage = state.storage
+    end = end or datetime.now(storage.tz).date()
+    start = start or end - timedelta(days=2)
+    if start > end or (end - start).days > 31:
+        raise HTTPException(status_code=422, detail="Choose up to 31 days, start before end")
+    rows = storage.grid_compare(start, end)
+    if format == "json":
+        return JSONResponse(rows)
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=list(rows[0]) if rows else ["day"], lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(rows)
+    return Response(out.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="grid-compare-{start}-to-{end}.csv"'})
+
+
 @router.get("/api/events")
 def events(
     limit: int = Query(100, ge=1, le=1000),

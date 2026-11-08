@@ -169,3 +169,22 @@ def test_reconcile_skips_today_and_days_without_meter_readings():
     assert s.reconcile_import(now=start + 3600) == []  # still today
     assert s.reconcile_import(now=start + 2 * 86400) == []  # no meter readings
     assert s.import_checks() == []
+
+
+def test_grid_compare_lines_up_recorded_and_metered_import_per_hour():
+    from datetime import date, datetime
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo("UTC")
+    s = Storage(":memory:", 0, "UTC")
+    start = int(datetime(2026, 11, 4, tzinfo=tz).timestamp())
+    for m in range(120):  # two hours: recorded double what the meter saw
+        ts = start + m * 60
+        s.write_minute({"ts": ts, "import_wh": 20.0, "charge_wh": 10.0})
+        s.write_meter_minute({"ts": ts, "grid_w": 600.0, "voltage": 240.0,
+                              "import_total_kwh": 100 + (m + 1) * 0.01, "export_total_kwh": 0.0})
+    rows = s.grid_compare(date(2026, 11, 4), date(2026, 11, 4))
+    assert [r["hour"] for r in rows] == [0, 1]
+    assert rows[0]["recorded_import_kwh"] == 1.2
+    assert rows[0]["meter_power_kwh"] == 0.6
+    assert rows[1]["meter_counter_kwh"] == 0.6  # 60 minutes at 0.01 kWh
