@@ -365,6 +365,7 @@ class Storage:
         self._add_columns("minutes", PEAK_FIELDS + COUNTER_FIELDS)
         self._add_columns("minutes", ("estimated",), "INTEGER NOT NULL DEFAULT 0")
         self._add_columns("slots", ("estimated_minutes",), "INTEGER NOT NULL DEFAULT 0")
+        self._add_columns("import_checks", ("rebuilt",), "INTEGER NOT NULL DEFAULT 0")
 
     def _add_columns(self, table: str, names: tuple[str, ...], kind: str = "REAL") -> None:
         with self._lock:
@@ -809,25 +810,84 @@ class Storage:
                 continue
             factor = meter_wh / recorded
             bad = abs(factor - 1) > tolerance
+            rebuilt = False
+            if bad:
+                # Two copies writing to one database double the half-hour totals but not the
+                # per-minute rows (one row per minute), so the minutes can rebuild the day exactly.
+                rebuilt = self._rebuild_slots(iso, meter_wh, tolerance)
             with self._lock:
-                if bad:
-                    # Scale the day's import, and the part of the charging that counted as grid.
+                if bad and not rebuilt:
+                    # No minutes to rebuild from: scale the day's import, and the part of the charging that counted as grid.
                     self._db.execute(
                         "UPDATE slots SET solar_charge_wh = solar_charge_wh + grid_charge_wh * (1 - ?), "
                         "grid_charge_wh = grid_charge_wh * ?, import_wh = import_wh * ? WHERE day = ?",
                         (factor, factor, factor, iso))
                 self._db.execute(
-                    "INSERT OR REPLACE INTO import_checks (day, recorded_kwh, meter_kwh, factor, corrected) "
-                    "VALUES (?, ?, ?, ?, ?)", (iso, recorded / 1000, meter_wh / 1000, factor, int(bad)))
+                    "INSERT OR REPLACE INTO import_checks (day, recorded_kwh, meter_kwh, factor, corrected, rebuilt) "
+                    "VALUES (?, ?, ?, ?, ?, ?)", (iso, recorded / 1000, meter_wh / 1000, factor, int(bad), int(rebuilt)))
                 self._db.commit()
             if bad:
                 fixed.append({"day": iso, "recorded_kwh": round(recorded / 1000, 2), "meter_kwh": round(meter_wh / 1000, 2)})
+                how = "rebuilt from the minute readings" if rebuilt else "scaled to the meter"
                 self.record_event(
-                    "data", f"Grid import for {day:%-d %b} corrected to the Smart Meter's {meter_wh / 1000:.1f} kWh "
-                            f"(was recorded as {recorded / 1000:.1f} kWh)",
+                    "data", f"Energy for {day:%-d %b} {how}: grid import {meter_wh / 1000:.1f} kWh as the Smart Meter "
+                            f"counted it (was recorded as {recorded / 1000:.1f} kWh)",
                     device="meter", field="import_kwh", old=round(recorded / 1000, 2), new=round(meter_wh / 1000, 2),
                     source="dashboard")
+        self._rebuild_corrected_days(tolerance)
+        if fixed:
+            self._drop_duplicate_events(min(f["day"] for f in fixed))
         return fixed
+
+    def _rebuild_slots(self, iso: str, meter_wh: float, tolerance: float) -> bool:
+        """Recompute a day's half-hour totals from its per-minute rows. Only kept if the day's import then matches the meter."""
+        day = date.fromisoformat(iso)
+        start, end = self._day_start(day), self._day_start(day + timedelta(days=1))
+        with self._lock:
+            rows = [dict(r) for r in self._db.execute(
+                f"SELECT ts, estimated, {', '.join(ENERGY_FIELDS)} FROM minutes WHERE ts >= ? AND ts < ?",
+                (start, end)).fetchall()]
+            if not rows or meter_wh <= 0:
+                return False
+            if abs(sum(r["import_wh"] or 0.0 for r in rows) - meter_wh) > tolerance * meter_wh:
+                return False  # the minutes disagree with the meter too; leave the day to be scaled
+            self._db.execute("DELETE FROM slots WHERE day = ?", (iso,))
+            for r in rows:
+                self._add_slot(r, estimated=bool(r["estimated"]))
+            self._db.commit()
+        return True
+
+    def _rebuild_corrected_days(self, tolerance: float) -> None:
+        """Days an earlier version only scaled the import of: rebuild them from the minutes now."""
+        with self._lock:
+            todo = self._db.execute(
+                "SELECT day, meter_kwh FROM import_checks WHERE corrected = 1 AND rebuilt = 0").fetchall()
+        for r in todo:
+            if self._rebuild_slots(r["day"], r["meter_kwh"] * 1000, tolerance):
+                with self._lock:
+                    self._db.execute("UPDATE import_checks SET rebuilt = 1 WHERE day = ?", (r["day"],))
+                    self._db.commit()
+                self.record_event("data", f"Energy for {date.fromisoformat(r['day']):%-d %b} rebuilt from the minute readings",
+                                  device="meter", source="dashboard")
+
+    def _drop_duplicate_events(self, since_day: str) -> int:
+        """Remove event-log lines written twice (the same line from a second copy within 2 minutes), from `since_day` on."""
+        since = self._day_start(date.fromisoformat(since_day))
+        removed = 0
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT id, ts, device, kind, message FROM events WHERE ts >= ? AND kind != 'data' ORDER BY ts, id",
+                (since,)).fetchall()
+            last: dict[tuple, int] = {}
+            for r in rows:
+                key = (r["device"], r["kind"], r["message"])
+                if key in last and r["ts"] - last[key] <= 120:
+                    self._db.execute("DELETE FROM events WHERE id = ?", (r["id"],))
+                    removed += 1
+                else:
+                    last[key] = r["ts"]
+            self._db.commit()
+        return removed
 
     def grid_compare(self, start: date, end: date) -> list[dict]:
         """Grid import per local hour from each source, to see where they part ways.
@@ -885,9 +945,9 @@ class Storage:
         """Recorded against metered grid import for the latest checked days, newest first."""
         with self._lock:
             rows = self._db.execute(
-                "SELECT day, recorded_kwh, meter_kwh, factor, corrected FROM import_checks ORDER BY day DESC LIMIT ?",
+                "SELECT day, recorded_kwh, meter_kwh, factor, corrected, rebuilt FROM import_checks ORDER BY day DESC LIMIT ?",
                 (days,)).fetchall()
-        return [{**dict(r), "corrected": bool(r["corrected"])} for r in rows]
+        return [{**dict(r), "corrected": bool(r["corrected"]), "rebuilt": bool(r["rebuilt"])} for r in rows]
 
     def prune(self) -> None:
         # Summarise finished days first, so nothing goes before it is kept.

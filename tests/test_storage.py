@@ -124,20 +124,22 @@ def _day_with_import(s, day_start, import_wh_per_slot, meter_kwh):
                               "export_total_kwh": 0.0})
 
 
-def test_reconcile_corrects_a_doubled_import_to_the_meter():
+def _tz_day(year, month, day):
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
-    tz = ZoneInfo("UTC")
+    return int(datetime(year, month, day, tzinfo=ZoneInfo("UTC")).timestamp())
+
+
+def test_reconcile_scales_when_the_minutes_disagree_with_the_meter_too():
     s = Storage(":memory:", 0, "UTC")
-    start = int(datetime(2026, 11, 4, tzinfo=tz).timestamp())
-    _day_with_import(s, start, 1000.0, 24.0)  # recorded 48 kWh, the meter saw 24
+    start = _tz_day(2026, 11, 4)
+    _day_with_import(s, start, 1000.0, 30.0)  # recorded 48 kWh in the minutes too, the meter saw 30
     fixed = s.reconcile_import(now=start + 2 * 86400)
-    assert fixed == [{"day": "2026-11-04", "recorded_kwh": 48.0, "meter_kwh": 24.0}]
+    assert fixed == [{"day": "2026-11-04", "recorded_kwh": 48.0, "meter_kwh": 30.0}]
     rows = s.battery_slots()
-    assert round(sum(r["import_wh"] for r in rows)) == 24000
-    # The 48 kWh charged stays, but only half of it came from the grid now.
-    assert round(sum(r["grid_charge_wh"] for r in rows)) == 24000
+    assert round(sum(r["import_wh"] for r in rows)) == 30000
+    # The 48 kWh charged stays, but only part of it came from the grid now.
     assert round(sum(r["grid_charge_wh"] + r["solar_charge_wh"] for r in rows)) == 48000
     assert s.import_checks()[0]["corrected"] is True
     assert s.events(kinds=["data"])
@@ -145,12 +147,8 @@ def test_reconcile_corrects_a_doubled_import_to_the_meter():
 
 
 def test_reconcile_leaves_a_matching_day_alone():
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-
-    tz = ZoneInfo("UTC")
     s = Storage(":memory:", 0, "UTC")
-    start = int(datetime(2026, 11, 2, tzinfo=tz).timestamp())
+    start = _tz_day(2026, 11, 2)
     _day_with_import(s, start, 1000.0, 46.0)  # 48 recorded, 46 metered: within tolerance
     assert s.reconcile_import(now=start + 2 * 86400) == []
     assert round(sum(r["import_wh"] for r in s.battery_slots())) == 48000
@@ -158,12 +156,8 @@ def test_reconcile_leaves_a_matching_day_alone():
 
 
 def test_reconcile_skips_today_and_days_without_meter_readings():
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-
-    tz = ZoneInfo("UTC")
     s = Storage(":memory:", 0, "UTC")
-    start = int(datetime(2026, 11, 4, tzinfo=tz).timestamp())
+    start = _tz_day(2026, 11, 4)
     for slot in range(4):
         s.write_minute({"ts": start + slot * 1800, "import_wh": 1000.0, "charge_wh": 500.0})
     assert s.reconcile_import(now=start + 3600) == []  # still today
@@ -171,13 +165,61 @@ def test_reconcile_skips_today_and_days_without_meter_readings():
     assert s.import_checks() == []
 
 
-def test_grid_compare_lines_up_recorded_and_metered_import_per_hour():
-    from datetime import date, datetime
-    from zoneinfo import ZoneInfo
-
-    tz = ZoneInfo("UTC")
+def test_a_day_written_twice_is_rebuilt_from_its_minutes():
+    """Two copies writing to one database: the minute rows are replaced, the half-hour totals are added twice."""
     s = Storage(":memory:", 0, "UTC")
-    start = int(datetime(2026, 11, 4, tzinfo=tz).timestamp())
+    start = _tz_day(2026, 11, 4)
+    for slot in range(48):
+        row = {"ts": start + slot * 1800, "import_wh": 500.0, "charge_wh": 500.0, "discharge_wh": 300.0,
+               "home_wh": 400.0}
+        s.write_minute(row)
+        s.write_minute(row)  # the second copy: the minute is replaced, the slot is added to
+    assert round(sum(r["import_wh"] for r in s.battery_slots())) == 48000
+    for ts, total in ((start, 100.0), (start + 86400, 124.0)):
+        s.write_meter_minute({"ts": ts, "grid_w": 0.0, "voltage": 240.0, "import_total_kwh": total,
+                              "export_total_kwh": 0.0})
+    s.reconcile_import(now=start + 2 * 86400)
+    rows = s.energy_slots()
+    assert round(sum(r["import_wh"] for r in rows)) == 24000
+    assert round(sum(r["discharge_wh"] for r in rows)) == 14400
+    assert round(sum(r["home_wh"] for r in rows)) == 19200
+    assert round(sum(r["grid_charge_wh"] + r["solar_charge_wh"] for r in rows)) == 24000
+    assert s.import_checks()[0]["rebuilt"] is True
+
+
+def test_days_corrected_for_import_only_are_rebuilt_later():
+    s = Storage(":memory:", 0, "UTC")
+    start = _tz_day(2026, 11, 4)
+    for slot in range(48):
+        s.write_minute({"ts": start + slot * 1800, "import_wh": 500.0, "charge_wh": 500.0, "discharge_wh": 300.0})
+    for slot in range(48):  # the first version's result: slots doubled, then import scaled, nothing else
+        s._db.execute("UPDATE slots SET discharge_wh = 600, grid_charge_wh = 250 WHERE day = '2026-11-04' AND slot = ?",
+                      (slot,))
+    s._db.execute("INSERT INTO import_checks (day, recorded_kwh, meter_kwh, factor, corrected, rebuilt) "
+                  "VALUES ('2026-11-04', 48, 24, 0.5, 1, 0)")
+    s._db.commit()
+    s.reconcile_import(now=start + 2 * 86400)
+    assert round(sum(r["discharge_wh"] for r in s.energy_slots())) == 14400
+    assert s.import_checks()[0]["rebuilt"] is True
+    s.reconcile_import(now=start + 2 * 86400)
+    assert round(sum(r["discharge_wh"] for r in s.energy_slots())) == 14400  # once only
+
+
+def test_duplicate_event_lines_from_a_second_copy_are_dropped():
+    s = Storage(":memory:", 0, "UTC")
+    start = _tz_day(2026, 11, 4)
+    _day_with_import(s, start, 1000.0, 30.0)
+    for ts in (start + 100, start + 100, start + 130, start + 5000):
+        s.record_event("charging", "Charging at 2500 W", ts=ts)
+    s.reconcile_import(now=start + 2 * 86400)
+    assert [e["ts"] for e in s.events(kinds=["charging"])] == [start + 5000, start + 100]
+
+
+def test_grid_compare_lines_up_recorded_and_metered_import_per_hour():
+    from datetime import date
+
+    s = Storage(":memory:", 0, "UTC")
+    start = _tz_day(2026, 11, 4)
     for m in range(120):  # two hours: recorded double what the meter saw
         ts = start + m * 60
         s.write_minute({"ts": ts, "import_wh": 20.0, "charge_wh": 10.0})
