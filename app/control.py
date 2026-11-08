@@ -443,8 +443,12 @@ def pace_charge(now: datetime, window: Window, soc: float, target: int, rated_kw
                 "next": None if now_slot else min((lo for lo, _, _ in chosen if lo > now), default=None)}
     power = max(need_wh / left_h, PACE_MIN_W)
     power = min(cap_w, -(-int(power) // PACE_STEP_W) * PACE_STEP_W)
-    if current_w and (power <= current_w <= power + PACE_STEP_W or (settled and current_w >= power * 0.8)):
-        power = min(current_w, cap_w)  # close enough: don't fiddle with the setpoint
+    # Deadband: a steady rate beats a perfect one. Keep the current setpoint while it
+    # is within ~15% under (the margin absorbs it) or ~40% over what's needed.
+    if current_w and (power <= current_w <= power + PACE_STEP_W
+                      or power * 0.85 <= current_w <= power * 1.4
+                      or (settled and current_w >= power * 0.8)):
+        power = min(current_w, cap_w)
     return {"power": power, "kind": "even", "finish": now + timedelta(hours=need_wh / power), "deadline": deadline}
 
 

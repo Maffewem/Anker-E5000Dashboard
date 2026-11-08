@@ -897,3 +897,9 @@ def test_forecast_basis_counts_matching_days():
     prof = slot_profile(rows, datetime(2026, 10, 25).date())  # 12th is a Monday; 17th/18th and 24th are weekend days
     b = basis(prof, datetime(2026, 10, 25, 11, 0))  # a Sunday
     assert b == {"days": 13, "same_weekday": 1, "same_kind": 3}
+
+
+def test_pace_deadband_keeps_the_rate_steady_through_noisy_estimates():
+    base = pace_charge(IN, PACE_WINDOW, 20, 80, 5.0, 2500, 90)["power"]
+    for delivery in (0.85, 0.9, 0.95):  # wobbling delivery estimates shouldn't move a running setpoint
+        assert pace_charge(IN, PACE_WINDOW, 20, 80, 5.0, 2500, 90, delivery=delivery, current_w=base)["power"] == base
