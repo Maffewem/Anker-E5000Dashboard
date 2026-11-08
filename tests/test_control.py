@@ -711,7 +711,7 @@ def test_pace_spreads_the_charge_and_leaves_the_margin():
 
 
 def test_pace_never_exceeds_the_cap_and_falls_back_to_full_power_when_behind():
-    late = datetime(2026, 10, 10, 3, 30, tzinfo=UTC)  # 30 min to the 04:00 deadline, a long way to go
+    late = datetime(2026, 10, 10, 4, 30, tzinfo=UTC)  # 50 min to the 05:20 hard end, a long way to go
     assert pace_charge(late, PACE_WINDOW, 20, 80, 5.0, 2500, 90)["kind"] == "full"
     assert decide(_paced(), [PACE_WINDOW], {"soc": 20, "rated_kwh": 5.0, "max_charge_w": 1000}, late, pace={})[:2] == (CHARGE, -1000)
     assert pace_charge(IN, PACE_WINDOW, 70, 80, 5.0, 2500, 90)["power"] >= 300  # floor
@@ -903,3 +903,10 @@ def test_pace_deadband_keeps_the_rate_steady_through_noisy_estimates():
     base = pace_charge(IN, PACE_WINDOW, 20, 80, 5.0, 2500, 90)["power"]
     for delivery in (0.85, 0.9, 0.95):  # wobbling delivery estimates shouldn't move a running setpoint
         assert pace_charge(IN, PACE_WINDOW, 20, 80, 5.0, 2500, 90, delivery=delivery, current_w=base)["power"] == base
+
+
+def test_pace_past_the_margin_keeps_a_steady_rate_to_the_window_end_instead_of_full_power():
+    behind = datetime(2026, 10, 10, 3, 30, tzinfo=UTC)  # past the 04:00 deadline, but 1h50 left in the window
+    plan = pace_charge(behind, PACE_WINDOW, 20, 80, 5.0, 2500, 90)
+    assert plan["kind"] == "even" and plan["power"] < 2500
+    assert pace_charge(behind, PACE_WINDOW, 20, 80, 5.0, 2500, 90, current_w=plan["power"] + 100)["power"] == plan["power"] + 100

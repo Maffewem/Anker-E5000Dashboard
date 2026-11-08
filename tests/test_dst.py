@@ -60,7 +60,7 @@ def test_paced_charge_uses_the_extra_hour_in_october_and_speeds_up_in_march():
 def test_march_window_too_short_for_the_target_charges_flat_out():
     spring = Window(*window_on(SPRING), "Off-peak")
     plan = pace_charge(spring.start, spring, 5, 100, 5.0, 1500, 45)
-    assert plan["kind"] == "full" and plan["power"] == 1500
+    assert plan["power"] == 1500  # flat out either way: full, or steady at the cap
 
 
 def test_estimate_counts_real_hours_across_the_change():

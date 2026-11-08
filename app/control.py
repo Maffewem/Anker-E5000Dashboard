@@ -52,7 +52,8 @@ MAX_SETPOINT_W = 5000  # no setpoint beyond this either way, whatever the batter
 PACE_MIN_W = 300  # paced charging doesn't go below this; very low power is inefficient
 PACE_SETTLE_SECONDS = 10 * 60  # after changing the paced power, leave it alone this long unless it's well off pace
 PACE_STEP_W = 100  # paced power moves in steps of this, so the setpoint (and event log) stays calm
-DEFAULT_PACE_MARGIN = 45  # minutes before the window ends that a paced charge aims to be done
+HARD_END_MIN = 10  # a paced charge that has used up its margin still aims to finish this long before the window ends
+DEFAULT_PACE_MARGIN = 45 # minutes before the window ends that a paced charge aims to be done
 # What the battery itself accepts for its own limits (from Anker's integration):
 # it refuses a charge limit under 80% or a discharge limit over 20%.
 LIMIT_RANGES = {"charging_limit_soc": (80, 100), "discharge_limit_soc": (0, 20)}
@@ -425,6 +426,16 @@ def pace_charge(now: datetime, window: Window, soc: float, target: int, rated_kw
         return {"power": cap_w, "kind": "full", "finish": now + timedelta(hours=need_wh / cap_w), "deadline": deadline}
 
     if left_h <= 0 or need_wh >= cap_w * left_h:
+        # Behind the margin but still inside the window: rather than slamming to full power
+        # (and finishing early at a different pace), keep one steady rate to a few minutes
+        # before the window ends. Only go flat out when even that can't make it.
+        hard = window.end - min(timedelta(minutes=HARD_END_MIN), length / 4)
+        hard_h = (hard - now).total_seconds() / 3600
+        if hard_h > 0 and need_wh < cap_w * hard_h and not window.prices:
+            power = min(cap_w, max(PACE_MIN_W, -(-int(need_wh / hard_h) // PACE_STEP_W) * PACE_STEP_W))
+            if current_w and power * 0.85 <= current_w <= power * 1.4:
+                power = min(current_w, cap_w)
+            return {"power": power, "kind": "even", "finish": now + timedelta(hours=need_wh / power), "deadline": deadline}
         return full()
     slots = [(max(t, now), min(t + timedelta(minutes=30), deadline), p) for t, p in window.prices]
     slots = [s for s in slots if s[1] > s[0]]
