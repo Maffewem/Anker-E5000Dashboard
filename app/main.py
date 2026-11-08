@@ -28,7 +28,7 @@ from .config import ConnectionStore, Settings
 from .control import Controller, cheap_windows, happy_windows, schedule_windows
 from .octopus import Octopus
 from .relay import Relay
-from .storage import Storage
+from .storage import Storage, lock_data_folder
 from .updates import CHECK_SECONDS, RETRY_SECONDS, Updates
 from .tariff import Tariff
 
@@ -137,6 +137,7 @@ async def lifespan(app: FastAPI):
         log.info("ADMIN_PASSWORD is set: changes need signing in")
     elif auth.source == "dashboard":
         log.info("A dashboard password is set: changes need signing in")
+    data_lock = lock_data_folder(settings.db_path)  # noqa: F841 - held until the process ends
     storage = Storage(settings.db_path, settings.retention_days, settings.timezone, settings.sample_days)
     store = ConnectionStore(settings.settings_path)
     collectors = {
