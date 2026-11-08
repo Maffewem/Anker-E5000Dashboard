@@ -112,3 +112,79 @@ def test_short_gaps_are_left_alone():
     _minute(s, start)
     _minute(s, start + 120)
     assert s.fill_gaps() == []
+
+
+def _day_with_import(s, day_start, import_wh_per_slot, meter_kwh):
+    """A day of 48 half hours charging 1 kWh each from a recorded import, and a meter counter over the day."""
+    for slot in range(48):
+        s.write_minute({"ts": day_start + slot * 1800, "grid_w": 0.0, "import_wh": import_wh_per_slot,
+                        "charge_wh": 1000.0})
+    for ts, total in ((day_start, 100.0), (day_start + 86400, 100.0 + meter_kwh)):
+        s.write_meter_minute({"ts": ts, "grid_w": 0.0, "voltage": 240.0, "import_total_kwh": total,
+                              "export_total_kwh": 0.0})
+
+
+def test_reconcile_corrects_a_doubled_import_to_the_meter():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo("UTC")
+    s = Storage(":memory:", 0, "UTC")
+    start = int(datetime(2026, 11, 4, tzinfo=tz).timestamp())
+    _day_with_import(s, start, 1000.0, 24.0)  # recorded 48 kWh, the meter saw 24
+    fixed = s.reconcile_import(now=start + 2 * 86400)
+    assert fixed == [{"day": "2026-11-04", "recorded_kwh": 48.0, "meter_kwh": 24.0}]
+    rows = s.battery_slots()
+    assert round(sum(r["import_wh"] for r in rows)) == 24000
+    # The 48 kWh charged stays, but only half of it came from the grid now.
+    assert round(sum(r["grid_charge_wh"] for r in rows)) == 24000
+    assert round(sum(r["grid_charge_wh"] + r["solar_charge_wh"] for r in rows)) == 48000
+    assert s.import_checks()[0]["corrected"] is True
+    assert s.events(kinds=["data"])
+    assert s.reconcile_import(now=start + 2 * 86400) == []  # checked once
+
+
+def test_reconcile_leaves_a_matching_day_alone():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo("UTC")
+    s = Storage(":memory:", 0, "UTC")
+    start = int(datetime(2026, 11, 2, tzinfo=tz).timestamp())
+    _day_with_import(s, start, 1000.0, 46.0)  # 48 recorded, 46 metered: within tolerance
+    assert s.reconcile_import(now=start + 2 * 86400) == []
+    assert round(sum(r["import_wh"] for r in s.battery_slots())) == 48000
+    assert s.import_checks()[0]["corrected"] is False
+
+
+def test_reconcile_skips_today_and_days_without_meter_readings():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo("UTC")
+    s = Storage(":memory:", 0, "UTC")
+    start = int(datetime(2026, 11, 4, tzinfo=tz).timestamp())
+    for slot in range(4):
+        s.write_minute({"ts": start + slot * 1800, "import_wh": 1000.0, "charge_wh": 500.0})
+    assert s.reconcile_import(now=start + 3600) == []  # still today
+    assert s.reconcile_import(now=start + 2 * 86400) == []  # no meter readings
+    assert s.import_checks() == []
+
+
+def test_grid_compare_lines_up_recorded_and_metered_import_per_hour():
+    from datetime import date, datetime
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo("UTC")
+    s = Storage(":memory:", 0, "UTC")
+    start = int(datetime(2026, 11, 4, tzinfo=tz).timestamp())
+    for m in range(120):  # two hours: recorded double what the meter saw
+        ts = start + m * 60
+        s.write_minute({"ts": ts, "import_wh": 20.0, "charge_wh": 10.0})
+        s.write_meter_minute({"ts": ts, "grid_w": 600.0, "voltage": 240.0,
+                              "import_total_kwh": 100 + (m + 1) * 0.01, "export_total_kwh": 0.0})
+    rows = s.grid_compare(date(2026, 11, 4), date(2026, 11, 4))
+    assert [r["hour"] for r in rows] == [0, 1]
+    assert rows[0]["recorded_import_kwh"] == 1.2
+    assert rows[0]["meter_power_kwh"] == 0.6
+    assert rows[1]["meter_counter_kwh"] == 0.6  # 60 minutes at 0.01 kWh

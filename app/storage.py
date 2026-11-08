@@ -135,6 +135,16 @@ CREATE TABLE IF NOT EXISTS free_slots (
     slot INTEGER NOT NULL,
     PRIMARY KEY (day, slot)
 );
+-- Each finished day's grid import as the dashboard recorded it, against the
+-- Smart Meter's own lifetime counter (which is what the supplier bills), and
+-- whether the day's figures were corrected to match.
+CREATE TABLE IF NOT EXISTS import_checks (
+    day TEXT PRIMARY KEY,
+    recorded_kwh REAL NOT NULL,
+    meter_kwh REAL NOT NULL,
+    factor REAL NOT NULL,
+    corrected INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS event_state (
     device TEXT NOT NULL,
     field TEXT NOT NULL,
@@ -147,7 +157,12 @@ CREATE TABLE IF NOT EXISTS event_state (
 # setting: SOC limits, reserve, power limits. connection: online/offline or a
 # new address. firmware: a firmware update. control: something the dashboard
 # itself asked the battery to do. tariff: electricity prices or tariff changed.
-EVENT_KINDS = ("charging", "mode", "setting", "connection", "firmware", "control", "tariff")
+# data: recorded energy was corrected against the Smart Meter.
+EVENT_KINDS = ("charging", "mode", "setting", "connection", "firmware", "control", "tariff", "data")
+
+# A day's recorded grid import may differ from the meter's counter by this much
+# (gaps, rounding at midnight) before it is corrected.
+IMPORT_TOLERANCE = 0.15
 
 METER_FIELDS = ("grid_w", "voltage", "import_total_kwh", "export_total_kwh")
 
@@ -722,9 +737,128 @@ class Storage:
         )
         return {"start": a + 60, "end": b, "minutes": mins, "method": method, "counters": sorted(used)}
 
+    def reconcile_import(self, tolerance: float = IMPORT_TOLERANCE, now: float | None = None) -> list[dict]:
+        """Check each finished day's recorded grid import against the Smart Meter's counter.
+
+        The meter's lifetime import counter is what the supplier bills, so when
+        a day's recorded import is off by more than `tolerance`, the day's
+        import and grid charging are scaled to match it (the energy charged
+        stays the same; what no longer counts as grid becomes solar). Each day
+        is checked once, finished days only, and only when the meter was
+        recorded across the whole day. Returns the days corrected.
+        """
+        now = now if now is not None else time.time()
+        today = datetime.fromtimestamp(now, self.tz).date()
+        with self._lock:
+            checked = {r[0] for r in self._db.execute("SELECT day FROM import_checks")}
+            days = [r[0] for r in self._db.execute(
+                "SELECT DISTINCT day FROM slots WHERE import_wh > 0 AND day < ? ORDER BY day", (today.isoformat(),))]
+        fixed = []
+        for iso in days:
+            if iso in checked:
+                continue
+            day = date.fromisoformat(iso)
+            start, end = self._day_start(day), self._day_start(day + timedelta(days=1))
+            with self._lock:
+                first = self._db.execute(
+                    "SELECT ts, import_total_kwh FROM meter_minutes WHERE ts >= ? - 900 AND ts <= ? + 900 "
+                    "AND import_total_kwh IS NOT NULL ORDER BY ABS(ts - ?) LIMIT 1", (start, start, start)).fetchone()
+                last = self._db.execute(
+                    "SELECT ts, import_total_kwh FROM meter_minutes WHERE ts >= ? - 900 AND ts <= ? + 900 "
+                    "AND import_total_kwh IS NOT NULL ORDER BY ABS(ts - ?) LIMIT 1", (end, end, end)).fetchone()
+                recorded = self._db.execute(
+                    "SELECT SUM(import_wh) FROM slots WHERE day = ?", (iso,)).fetchone()[0] or 0.0
+            if not first or not last or first["ts"] == last["ts"]:
+                continue  # the meter wasn't recorded across the day; leave it for now
+            meter_wh = (last["import_total_kwh"] - first["import_total_kwh"]) * 1000
+            if meter_wh <= 0 or recorded <= 0:
+                continue
+            factor = meter_wh / recorded
+            bad = abs(factor - 1) > tolerance
+            with self._lock:
+                if bad:
+                    # Scale the day's import, and the part of the charging that counted as grid.
+                    self._db.execute(
+                        "UPDATE slots SET solar_charge_wh = solar_charge_wh + grid_charge_wh * (1 - ?), "
+                        "grid_charge_wh = grid_charge_wh * ?, import_wh = import_wh * ? WHERE day = ?",
+                        (factor, factor, factor, iso))
+                self._db.execute(
+                    "INSERT OR REPLACE INTO import_checks (day, recorded_kwh, meter_kwh, factor, corrected) "
+                    "VALUES (?, ?, ?, ?, ?)", (iso, recorded / 1000, meter_wh / 1000, factor, int(bad)))
+                self._db.commit()
+            if bad:
+                fixed.append({"day": iso, "recorded_kwh": round(recorded / 1000, 2), "meter_kwh": round(meter_wh / 1000, 2)})
+                self.record_event(
+                    "data", f"Grid import for {day:%-d %b} corrected to the Smart Meter's {meter_wh / 1000:.1f} kWh "
+                            f"(was recorded as {recorded / 1000:.1f} kWh)",
+                    device="meter", field="import_kwh", old=round(recorded / 1000, 2), new=round(meter_wh / 1000, 2),
+                    source="dashboard")
+        return fixed
+
+    def grid_compare(self, start: date, end: date) -> list[dict]:
+        """Grid import per local hour from each source, to see where they part ways.
+
+        recorded_import_kwh: what the Solarbank's grid reading added up to (this
+        feeds the charging spend). meter_counter_kwh: the Smart Meter's lifetime
+        counter, as billed. meter_power_kwh: the meter's power reading added up.
+        Charge and discharge are the battery's, for the same hour.
+        """
+        lo, hi = self._day_start(start), self._day_start(end + timedelta(days=1))
+        with self._lock:
+            mins = self._db.execute(
+                "SELECT ts, import_wh, charge_wh, discharge_wh, estimated FROM minutes WHERE ts >= ? AND ts < ?",
+                (lo, hi)).fetchall()
+            meter = self._db.execute(
+                "SELECT ts, grid_w, import_total_kwh FROM meter_minutes WHERE ts >= ? - 3600 AND ts < ? ORDER BY ts",
+                (lo, hi)).fetchall()
+        hours: dict[int, dict] = {}
+
+        def bucket(ts: int) -> dict:
+            h = ts // 3600 * 3600
+            return hours.setdefault(h, {"recorded_import_kwh": 0.0, "meter_power_kwh": 0.0, "charge_kwh": 0.0,
+                                         "discharge_kwh": 0.0, "estimated_minutes": 0, "counter_last": None})
+
+        for r in mins:
+            b = bucket(r["ts"])
+            b["recorded_import_kwh"] += (r["import_wh"] or 0.0) / 1000
+            b["charge_kwh"] += (r["charge_wh"] or 0.0) / 1000
+            b["discharge_kwh"] += (r["discharge_wh"] or 0.0) / 1000
+            b["estimated_minutes"] += 1 if r["estimated"] else 0
+        before = None
+        for r in meter:
+            if r["ts"] < lo:
+                before = r["import_total_kwh"] if r["import_total_kwh"] is not None else before
+                continue
+            b = bucket(r["ts"])
+            b["meter_power_kwh"] += max(0.0, r["grid_w"] or 0.0) / 60000
+            if r["import_total_kwh"] is not None:
+                b["counter_last"] = r["import_total_kwh"]
+        out, prev = [], before
+        for h in sorted(hours):
+            if not lo <= h < hi:
+                continue
+            b = hours[h]
+            last = b.pop("counter_last")
+            counter = None if last is None or prev is None else round(last - prev, 3)
+            prev = last if last is not None else prev
+            local = datetime.fromtimestamp(h, self.tz)
+            out.append({"day": local.date().isoformat(), "hour": local.hour,
+                        **{k: round(v, 3) if isinstance(v, float) else v for k, v in b.items()},
+                        "meter_counter_kwh": counter})
+        return out
+
+    def import_checks(self, days: int = 30) -> list[dict]:
+        """Recorded against metered grid import for the latest checked days, newest first."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT day, recorded_kwh, meter_kwh, factor, corrected FROM import_checks ORDER BY day DESC LIMIT ?",
+                (days,)).fetchall()
+        return [{**dict(r), "corrected": bool(r["corrected"])} for r in rows]
+
     def prune(self) -> None:
         # Summarise finished days first, so nothing goes before it is kept.
         self.day_summaries()
+        self.reconcile_import()
         now = int(time.time())
         with self._lock:
             if self.sample_days > 0:
