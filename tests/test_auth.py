@@ -160,7 +160,7 @@ def test_widget_is_off_without_a_token_and_needs_it_with_one(tmp_path, monkeypat
         assert c.get("/api/widget").status_code == 401
         assert c.get("/api/widget", headers={"Authorization": "Bearer nope"}).status_code == 401
         body = c.get("/api/widget", headers={"Authorization": f"Bearer {token}"}).json()
-        assert {"soc", "solar_w", "home_w", "grid_w", "saved_today", "online"} <= set(body)
+        assert {"soc", "solar_w", "home_w", "grid_w", "saved_today", "online", "capacity_wh"} <= set(body)
         assert c.get("/api/widget", headers={"X-Widget-Token": token}).status_code == 200
 
 
