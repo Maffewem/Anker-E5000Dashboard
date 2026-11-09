@@ -244,3 +244,29 @@ def test_a_second_dashboard_on_the_same_data_folder_is_refused(tmp_path):
     first.close()  # the lock goes with the process
     lock_data_folder(db).close()
     assert lock_data_folder(":memory:") is None
+
+
+def test_a_day_with_less_recorded_than_metered_is_not_scaled_up():
+    s = Storage(":memory:", 0, "UTC")
+    start = _tz_day(2026, 10, 11)
+    _day_with_import(s, start, 1000.0, 60.0)  # the dashboard was off for part of the day: 48 recorded, 60 metered
+    assert s.reconcile_import(now=start + 2 * 86400) == []
+    assert round(sum(r["import_wh"] for r in s.battery_slots())) == 48000
+    assert s.import_checks()[0]["corrected"] is False
+
+
+def test_an_earlier_scaling_up_is_taken_back():
+    s = Storage(":memory:", 0, "UTC")
+    start = _tz_day(2026, 10, 11)
+    for slot in range(48):  # as left by the first version: x1.25 on import and grid charge
+        s._db.execute("INSERT INTO slots (day, slot, import_wh, grid_charge_wh, solar_charge_wh) "
+                      "VALUES ('2026-10-11', ?, 1250, 250, 750)", (slot,))
+    s._db.execute("INSERT INTO import_checks (day, recorded_kwh, meter_kwh, factor, corrected, rebuilt) "
+                  "VALUES ('2026-10-11', 48, 60, 1.25, 1, 0)")
+    s._db.commit()
+    s.reconcile_import(now=start + 2 * 86400)
+    rows = s.battery_slots()
+    assert round(sum(r["import_wh"] for r in rows)) == 48000
+    assert round(sum(r["grid_charge_wh"] for r in rows)) == 9600
+    assert round(sum(r["grid_charge_wh"] + r["solar_charge_wh"] for r in rows)) == 48000
+    assert s.import_checks()[0]["corrected"] is False

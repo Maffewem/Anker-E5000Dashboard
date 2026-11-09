@@ -811,6 +811,9 @@ class Storage:
             factor = meter_wh / recorded
             bad = abs(factor - 1) > tolerance
             rebuilt = False
+            # Less recorded than the meter counted is a gap in the readings (the dashboard was off), not
+            # an error to scale up: only too much recorded is corrected.
+            bad = bad and factor < 1
             if bad:
                 # Two copies writing to one database double the half-hour totals but not the
                 # per-minute rows (one row per minute), so the minutes can rebuild the day exactly.
@@ -834,6 +837,7 @@ class Storage:
                             f"counted it (was recorded as {recorded / 1000:.1f} kWh)",
                     device="meter", field="import_kwh", old=round(recorded / 1000, 2), new=round(meter_wh / 1000, 2),
                     source="dashboard")
+        self._undo_upscaling()
         self._rebuild_corrected_days(tolerance)
         if fixed:
             self._drop_duplicate_events(min(f["day"] for f in fixed))
@@ -856,6 +860,19 @@ class Storage:
                 self._add_slot(r, estimated=bool(r["estimated"]))
             self._db.commit()
         return True
+
+    def _undo_upscaling(self) -> None:
+        """Take back the first version's scaling of a day *up* to the meter (a day with gaps, not a duplicate)."""
+        with self._lock:
+            todo = self._db.execute(
+                "SELECT day, factor FROM import_checks WHERE corrected = 1 AND rebuilt = 0 AND factor > 1").fetchall()
+            for r in todo:
+                f = r["factor"]
+                self._db.execute(
+                    "UPDATE slots SET import_wh = import_wh / ?, solar_charge_wh = MAX(0, solar_charge_wh - grid_charge_wh / ? * (1 - ?)), "
+                    "grid_charge_wh = grid_charge_wh / ? WHERE day = ?", (f, f, f, f, r["day"]))
+                self._db.execute("UPDATE import_checks SET corrected = 0 WHERE day = ?", (r["day"],))
+            self._db.commit()
 
     def _rebuild_corrected_days(self, tolerance: float) -> None:
         """Days an earlier version only scaled the import of: rebuild them from the minutes now."""
