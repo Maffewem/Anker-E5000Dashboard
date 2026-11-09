@@ -96,7 +96,7 @@ void loadSettings() {
   S.updHours = prefs.getInt("updHours", UPDATE_CHECK_HOURS); S.autoMs = prefs.getInt("autoMs", AUTO_PAGE_MS > 0 ? AUTO_PAGE_MS : 8000);
   S.solar = prefs.getBool("solar", true);
   S.confirmSec = prefs.getInt("confirmSec", 180);
-  S.capWh = prefs.getInt("capWh", 5000); S.floorPct = prefs.getInt("floorPct", 10); S.nightClock = prefs.getBool("nclock", false); S.chgfx = prefs.getBool("chgfx", true);
+  S.capWh = prefs.getInt("capWh", 0); S.floorPct = prefs.getInt("floorPct", 10); S.nightClock = prefs.getBool("nclock", false); S.chgfx = prefs.getBool("chgfx", true);
 }
 void saveSettings() {
   prefs.putInt("dayBr", S.dayBr); prefs.putInt("nightBr", S.nightBr); prefs.putInt("nStart", S.nStart); prefs.putInt("nEnd", S.nEnd);
@@ -121,7 +121,7 @@ void loadConfig() {
 void setAuto(bool on) { autoPage = on; lastPage = millis(); prefs.putBool("auto", on); }
 
 
-struct Data { float soc = NAN, solar = NAN, home = NAN, batt = NAN, grid = NAN, saved = NAN, savedMonth = NAN, savedTotal = NAN, self = NAN, rateP = NAN; String rateKind, rateUntil, runText; bool online = false; long age = -1; } d;
+struct Data { float capWh = NAN, soc = NAN, solar = NAN, home = NAN, batt = NAN, grid = NAN, saved = NAN, savedMonth = NAN, savedTotal = NAN, self = NAN, rateP = NAN; String rateKind, rateUntil, runText; bool online = false; long age = -1; } d;
 float battAvg = NAN; unsigned long battAvgT = 0;  // battery power averaged over about 10 minutes, so the time left doesn't jump about
 #define AVG_TAU_MS 600000UL
 String err = "starting";
@@ -158,7 +158,7 @@ void fetch() {
   if (deserializeJson(j, http.getString())) { err = "bad json"; http.end(); return; }
   http.end();
   err = ""; haveData = true; lastOk = millis() ? millis() : 1;
-  d.soc = j["soc"] | NAN; d.solar = j["solar_w"] | NAN; d.home = j["home_w"] | NAN;
+  d.soc = j["soc"] | NAN; d.capWh = j["capacity_wh"] | NAN; d.solar = j["solar_w"] | NAN; d.home = j["home_w"] | NAN;
   d.batt = j["battery_w"] | NAN; d.grid = j["grid_w"] | NAN; d.saved = j["saved_today"] | NAN; d.savedMonth = j["saved_month"] | NAN; d.savedTotal = j["saved_total"] | NAN;
   if (!isnan(d.batt)) {
     unsigned long t = millis(), dt = battAvgT ? t - battAvgT : 0; battAvgT = t;
@@ -220,11 +220,16 @@ String fmtHours(float h) {
   if (m >= 60) m = (m + 2) / 5 * 5;  // over an hour: to the nearest 5 minutes
   return m >= 60 ? String(m / 60) + "h " + String(m % 60) + "m" : String(m) + "m";
 }
+float capacityWh() {  // the size typed on the settings page, else the dashboard's detected capacity, else 10 kWh
+  if (S.capWh > 0) return S.capWh;
+  if (!isnan(d.capWh) && d.capWh > 0) return d.capWh;
+  return 10000.f;
+}
 String timeLeft() {
   if (d.runText.length()) return d.runText;  // the dashboard's own estimate: follows the usual pattern and the next planned charge
-  if (isnan(d.soc) || isnan(battAvg) || S.capWh <= 0) return "";
-  if (battAvg > 50) return fmtHours(d.soc / 100.f * S.capWh / battAvg) + " left";
-  if (battAvg < -50) return "full in " + fmtHours((100.f - d.soc) / 100.f * S.capWh / -battAvg);
+  if (isnan(d.soc) || isnan(battAvg)) return "";
+  if (battAvg > 50) return fmtHours(d.soc / 100.f * capacityWh() / battAvg) + " left";
+  if (battAvg < -50) return "full in " + fmtHours((100.f - d.soc) / 100.f * capacityWh() / -battAvg);
   return "";
 }
 void big(const char *title, const String &v, const String &sub, uint16_t col, int p, const String &extra = "") {
@@ -584,7 +589,7 @@ void webRoot() {
   h += field("Seconds per page", "autoS", S.autoMs / 1000, "");
   h += String("<label><input type=checkbox name=chgfx value=1") + (S.chgfx ? " checked" : "") + "> Breathing ring and bolt while the battery is charging</label>";
   h += String("<label><input type=checkbox name=nclock value=1") + (S.nightClock ? " checked" : "") + "> Show a dim clock at night instead of the pages</label>";
-  h += field("Battery size (Wh) for time left", "capWh", S.capWh, "usable energy, used for the time left");
+  h += field("Battery size (Wh) for time left", "capWh", S.capWh, ("0 = use the size the dashboard detects (now " + String((int)capacityWh()) + " Wh). Type a number to override.").c_str());
   h += field("Alert at or below (%)", "floorPct", S.floorPct, "shows Battery limited");
   h += field("Day brightness", "dayBr", S.dayBr, "0 to 255");
   h += field("Night brightness", "nightBr", S.nightBr, "0 to 255, 0 = off");
@@ -611,7 +616,7 @@ void webSave() {
   S.green = argInt("green", 0, 20000, S.green); S.red = argInt("red", 0, 20000, S.red);
   S.updHours = argInt("updHours", 1, 168, S.updHours); S.autoMs = argInt("autoS", 2, 600, S.autoMs / 1000) * 1000;
   S.solar = web.hasArg("solar"); S.nightClock = web.hasArg("nclock"); S.chgfx = web.hasArg("chgfx");
-  S.confirmSec = argInt("confirmSec", 60, 3600, S.confirmSec); S.capWh = argInt("capWh", 500, 100000, S.capWh); S.floorPct = argInt("floorPct", 0, 50, S.floorPct); if (!pageOn(page)) page = P_OVERVIEW;
+  S.confirmSec = argInt("confirmSec", 60, 3600, S.confirmSec); S.capWh = argInt("capWh", 0, 100000, S.capWh); S.floorPct = argInt("floorPct", 0, 50, S.floorPct); if (!pageOn(page)) page = P_OVERVIEW;
   { String v = web.arg("updsrc"); v.trim(); v.toLowerCase(); if (v == "dashboard" || v == "github" || v == "off") cfg.updSrc = v;
     v = web.arg("ghrepo"); v.trim(); if (v.length()) cfg.ghRepo = v;
     v = web.arg("ghbranch"); v.trim(); if (v.length()) cfg.ghBranch = v;
