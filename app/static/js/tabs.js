@@ -1,5 +1,5 @@
-// Optional phone layout: a bottom tab bar that shows one group of cards at a
-// time. Opt in with ?layout=tabs (remembered), back out with ?layout=classic.
+// Phone layout: a bottom tab bar that shows one group of cards at a time. On by
+// default; opt out with ?layout=classic (remembered), back in with ?layout=tabs.
 // Only active on narrow screens; the classic single-column page is untouched.
 (function () {
   const GROUPS = [
@@ -12,8 +12,8 @@
   try {
     const q = new URLSearchParams(location.search).get("layout");
     if (q === "tabs" || q === "classic") localStorage.setItem("layout", q);
-    if (localStorage.getItem("layout") !== "tabs") return;
-  } catch (_) { return; }
+    if (localStorage.getItem("layout") === "classic") return;
+  } catch (_) { /* storage blocked: stay with the default (tabs) */ }
 
   const mq = matchMedia("(max-width: 700px)");
   const main = document.querySelector("main");
