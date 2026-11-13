@@ -81,7 +81,7 @@ async def save_control(body: ControlIn) -> dict:
     state.connection_store.save_section("control", asdict(settings))
     controller: Controller = state.controller
     storage = state.storage
-    storage.set_free_slots(happy_slots(settings.happy_hours, storage.tz), datetime.now(storage.tz).date().isoformat())
+    storage.set_free_slots(happy_slots([*settings.happy_hours, *storage.happy_archive(limit=1000)], storage.tz), datetime.now(storage.tz).date().isoformat())
     controller.update_settings(settings)
     await controller.tick()
     return controller.status()

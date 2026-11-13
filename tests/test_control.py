@@ -910,3 +910,25 @@ def test_pace_past_the_margin_keeps_a_steady_rate_to_the_window_end_instead_of_f
     plan = pace_charge(behind, PACE_WINDOW, 20, 80, 5.0, 2500, 90)
     assert plan["kind"] == "even" and plan["power"] < 2500
     assert pace_charge(behind, PACE_WINDOW, 20, 80, 5.0, 2500, 90, current_w=plan["power"] + 100)["power"] == plan["power"] + 100
+
+
+def test_finished_happy_hours_are_archived_and_free_slots_kept(tmp_path):
+    import asyncio
+    from datetime import datetime, timezone
+    from app.control import expired_happy
+    tz = ZoneInfo("Europe/London")
+    past = {"date": "2026-10-11", "start": "11:00", "end": "12:00"}
+    later = {"date": "2026-10-12", "start": "11:00", "end": "12:00"}
+    now = datetime(2026, 10, 11, 12, 30, tzinfo=timezone.utc)
+    assert expired_happy((past, later), tz, now) == [past]
+    c = FakeCollector(mode=6, soc=40)
+    c.storage = Storage(tmp_path / "s.db", tz)
+    saved = []
+    ctl = Controller(c, load=lambda: {"settings": {}, "state": {}}, save_state=lambda s: None,
+                     windows=lambda n: [], save_settings=saved.append)
+    ctl.settings = ControlSettings(happy_hours=(past, later, ))
+    asyncio.run(ctl.tick(now))
+    assert ctl.settings.happy_hours == (later,)
+    assert saved and saved[-1]["happy_hours"] == (later,)
+    assert c.storage.happy_archive() == [past]
+    assert ctl.status()["happy_archive"] == [past]
