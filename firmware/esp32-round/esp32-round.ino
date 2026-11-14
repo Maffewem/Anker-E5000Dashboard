@@ -437,7 +437,7 @@ extern "C" bool verifyRollbackLater() { return true; }
 bool onTrial = false;
 String rollbackMsg = "";
 void goBack(const char *why) {
-  prefs.putBool("pending", false); prefs.putInt("tries", 0); prefs.putString("rolled", why);
+  prefs.putBool("pending", false); prefs.putInt("tries", 0); prefs.putString("rolled", why); prefs.putString("badmd5", prefs.getString("lastmd5"));
   if (Update.canRollBack()) Update.rollBack();  // restarts into the previous firmware when it works
   // No older firmware to go back to (a first USB flash): carry on with this one.
   onTrial = false; esp_ota_mark_app_valid_cancel_rollback();
@@ -485,7 +485,8 @@ void checkUpdate() {
   md5.trim(); md5.toLowerCase();
   if (md5.length() != 32) { updMsg = "Bad checksum from the update source."; return; }
   // Skip if we already run it, or already installed it once (stops an install loop if the two checksums ever differ).
-  if (md5 == ESP.getSketchMD5() || md5 == prefs.getString("lastmd5")) { updMsg = "Already up to date."; return; }
+  if (md5 == ESP.getSketchMD5()) { updMsg = "Already up to date."; return; }
+  if (md5 == prefs.getString("badmd5")) { updMsg = "NOT installed: the board tried this build and went back from it (" + prefs.getString("rolled") + "), so it is running an older one. Press Retry to try again."; return; }
 
   gfx->fillScreen(BG); ctext("Updating...", 200, 3, WHITE); gfx->flush();
   // Download and flash by hand with HTTPClient + Update, so it needs no HTTPUpdate extras and works on any arduino-esp32 core.
@@ -602,7 +603,7 @@ void webRoot() {
   h += tfield("GitHub repo", "ghrepo", cfg.ghRepo, "owner/name, for source github");
   h += tfield("GitHub branch", "ghbranch", cfg.ghBranch, "esp32-dev for the display's own builds");
   h += tfield("GitHub token", "ghtoken", "", cfg.ghToken.length() ? "set; leave empty to keep it" : "not set; a read-only token (Contents: read)", true);
-  h += "<button>Save</button></form><form method=post action=/update><button>Check for update now</button></form>";
+  h += "<button>Save</button></form><form method=post action=/update><button>Check for update now</button></form><form method=post action=/update?retry=1><button>Retry a build the board went back from</button></form>";
   if (onTrial) h += "<p><b>New firmware on trial</b>, it is confirmed once the dashboard answers (or after " + String(S.confirmSec) + " s with Wi-Fi up).</p>";
   if (rollbackMsg.length()) h += "<p><b>Went back to the previous firmware:</b> " + rollbackMsg + ".</p>";
   if (updMsg.length()) h += "<p><b>Last check:</b> " + updMsg + "</p>";
@@ -631,6 +632,7 @@ void webPage() {
 }
 void webUpdate() {
   if (!web.authenticate("admin", cfg.otaPw.c_str())) return web.requestAuthentication();
+  if (web.hasArg("retry")) prefs.putString("badmd5", "");
   updateNow = true;
   web.sendHeader("Location", "/"); web.send(303);
 }
