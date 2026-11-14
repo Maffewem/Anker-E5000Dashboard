@@ -136,6 +136,14 @@ CREATE TABLE IF NOT EXISTS free_slots (
     slot INTEGER NOT NULL,
     PRIMARY KEY (day, slot)
 );
+-- Booked Happy Hours that have passed, moved out of the active list. History only.
+CREATE TABLE IF NOT EXISTS happy_archive (
+    day TEXT NOT NULL,
+    start TEXT NOT NULL,
+    end TEXT NOT NULL,
+    archived_ts INTEGER NOT NULL,
+    PRIMARY KEY (day, start, end)
+);
 -- Each finished day's grid import as the dashboard recorded it, against the
 -- Smart Meter's own lifetime counter (which is what the supplier bills), and
 -- whether the day's figures were corrected to match.
@@ -640,6 +648,19 @@ class Storage:
                 rows,
             )
             self._db.commit()
+
+    def archive_happy_hours(self, hours) -> None:
+        """Remember Happy Hours that have passed (their free half hours stay in free_slots)."""
+        with self._lock:
+            self._db.executemany("INSERT OR IGNORE INTO happy_archive (day, start, end, archived_ts) VALUES (?, ?, ?, ?)",
+                                 [(h["date"], h["start"], h["end"], int(time.time())) for h in hours])
+            self._db.commit()
+
+    def happy_archive(self, limit: int = 30) -> list[dict]:
+        with self._lock:
+            rows = self._db.execute("SELECT day, start, end FROM happy_archive ORDER BY day DESC, start DESC LIMIT ?",
+                                    (limit,)).fetchall()
+        return [{"date": r["day"], "start": r["start"], "end": r["end"]} for r in rows]
 
     def set_free_slots(self, slots: set[tuple[str, int]], from_day: str) -> None:
         """Make `slots` the free half hours from `from_day` on; earlier ones are history and stay."""

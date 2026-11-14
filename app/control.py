@@ -222,6 +222,21 @@ def happy_windows(happy_hours, tz, now: datetime) -> list[Window]:
     return sorted(out, key=lambda w: w.start)
 
 
+def expired_happy(happy_hours, tz, now: datetime) -> list[dict]:
+    """Booked Happy Hours that have finished. One-off and date-bound, so nothing else is touched."""
+    out = []
+    for h in happy_hours:
+        day = date.fromisoformat(h["date"])
+        a, b = _hhmm(h["start"]), _hhmm(h["end"])
+        start = datetime(day.year, day.month, day.day, *a, tzinfo=tz).astimezone(timezone.utc)
+        end = datetime(day.year, day.month, day.day, *b, tzinfo=tz).astimezone(timezone.utc)
+        if end <= start:
+            end += timedelta(days=1)
+        if end <= now:
+            out.append(h)
+    return out
+
+
 def happy_slots(happy_hours, tz) -> set[tuple[str, int]]:
     """The local (day, half hour) pairs the booked Happy Hours cover."""
     out = set()
@@ -571,7 +586,9 @@ def decide(settings: ControlSettings, windows: list[Window], snapshot: dict, now
 class Controller:
     def __init__(self, collector, load: Callable[[], dict], save_state: Callable[[dict], None],
                  windows: Callable[[datetime], list[Window]],
-                 last_full: Callable[[], float | None] = lambda: None) -> None:
+                 last_full: Callable[[], float | None] = lambda: None,
+                 save_settings: Callable[[dict], None] | None = None) -> None:
+        self._save_settings = save_settings
         self.collector = collector
         self._load = load  # -> {"settings": {...}, "state": {...}}
         self._save_state = save_state
@@ -629,6 +646,13 @@ class Controller:
         self._event("Control settings saved: " + ", ".join(bits), "control_enabled", old.enabled, settings.enabled,
                     "dashboard", always=True)
         self._wake.set()
+
+    def _happy_archive(self) -> list[dict]:
+        storage = getattr(self.collector, "storage", None)
+        try:
+            return storage.happy_archive() if storage is not None else []
+        except Exception:
+            return []
 
     def _note(self, text: str) -> None:
         self.log.appendleft({"ts": time.time(), "text": text})
@@ -785,7 +809,28 @@ class Controller:
         async with self._lock:
             await self._tick(now or datetime.now(timezone.utc))
 
+    def _archive_happy(self, now: datetime) -> None:
+        """Move Happy Hours that have finished out of the active list into the archive.
+        Only cleanup: nothing here touches the battery, and the half hours stay free for past costs."""
+        storage = getattr(self.collector, "storage", None)
+        if storage is None or self._save_settings is None or not self.settings.happy_hours:
+            return
+        try:
+            gone = expired_happy(self.settings.happy_hours, storage.tz, now)
+            if not gone:
+                return
+            keep = tuple(h for h in self.settings.happy_hours if h not in gone)
+            storage.archive_happy_hours(gone)
+            self.settings = replace(self.settings, happy_hours=keep)
+            self._save_settings(asdict(self.settings))
+            for h in gone:
+                self._event(f"Happy Hour {h['date']} {h['start']}-{h['end']} finished and was archived",
+                            "happy_archived", None, f"{h['date']} {h['start']}-{h['end']}", "dashboard", always=True)
+        except Exception as err:  # tidying up must never stop control
+            log.warning("Couldn't archive Happy Hours: %s", err)
+
     async def _tick(self, now: datetime) -> None:
+        self._archive_happy(now)
         snap = self.collector.snapshot or {}
         lost = self._lost_contact(now)
         if lost and self.in_control:
@@ -1152,6 +1197,7 @@ class Controller:
             "in_control": self.in_control,
             "saved_mode": OPERATING_MODES.get(self.saved_mode) if self.saved_mode is not None else None,
             "override": self.override,
+            "happy_archive": self._happy_archive(),
             "happy_room": self.room,
             "happy_forecast": self.forecast,
             "happy_suggestion": self.suggestion,

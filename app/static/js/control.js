@@ -96,6 +96,11 @@ function renderControl(c) {
     : b.due ? `${last} A balance charge is due and will run in the next cheap, free or scheduled charge window.` : `${last} Not due yet.`;
   happyHours = (t.happy_hours || []).map((h) => ({ ...h }));
   renderHappy();
+  const past = c.happy_archive || [];
+  $("happy-archive").hidden = !past.length;
+  $("happy-archive").textContent = past.length
+    ? "Past Happy Hours (archived): " + past.slice(0, 5).map((h) => `${h.date} ${h.start}-${h.end}`).join(", ") + (past.length > 5 ? ` and ${past.length - 5} more` : "")
+    : "";
   schedules = (t.schedules || []).map((s) => ({ ...s }));
   renderSchedules();
   renderModes(c);
