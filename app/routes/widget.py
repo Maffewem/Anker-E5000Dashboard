@@ -92,6 +92,8 @@ def widget(request: Request) -> dict:
     if meter.connected and meter.snapshot.get("grid_w") is not None:
         out["grid_w"] = meter.snapshot["grid_w"]
     out["battery_status"] = snap.get("battery_status")
+    rated = snap.get("rated_kwh")
+    out["capacity_wh"] = round(rated * 1000) if isinstance(rated, (int, float)) and rated > 0 else None
     out["self_sufficiency"] = None
     out["online"] = bool(battery.connected)
     out["updated"] = battery.last_update
