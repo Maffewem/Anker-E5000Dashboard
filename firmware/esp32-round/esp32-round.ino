@@ -88,19 +88,19 @@ unsigned long lastPage = 0;
 Preferences prefs;
 
 // Settings you can change from the web page (http://DEVICE_NAME.local/). config.h values are only the defaults.
-struct Settings { int dayBr, nightBr, nStart, nEnd, green, red, updHours, autoMs, capWh, floorPct, confirmSec; bool solar, nightClock, chgfx; } S;
+struct Settings { int dayBr, nightBr, nStart, nEnd, green, red, updHours, autoMs, capWh, floorPct, confirmSec, wakeSec; bool solar, nightClock, chgfx; } S;
 void loadSettings() {
   S.dayBr = prefs.getInt("dayBr", DAY_BRIGHTNESS); S.nightBr = prefs.getInt("nightBr", NIGHT_BRIGHTNESS);
   S.nStart = prefs.getInt("nStart", NIGHT_START_HOUR); S.nEnd = prefs.getInt("nEnd", NIGHT_END_HOUR);
   S.green = prefs.getInt("green", LOAD_GREEN_BELOW_W); S.red = prefs.getInt("red", LOAD_RED_ABOVE_W);
   S.updHours = prefs.getInt("updHours", UPDATE_CHECK_HOURS); S.autoMs = prefs.getInt("autoMs", AUTO_PAGE_MS > 0 ? AUTO_PAGE_MS : 8000);
   S.solar = prefs.getBool("solar", true);
-  S.confirmSec = prefs.getInt("confirmSec", 180);
+  S.confirmSec = prefs.getInt("confirmSec", 180); S.wakeSec = prefs.getInt("wakeSec", 15);
   S.capWh = prefs.getInt("capWh", 5000); S.floorPct = prefs.getInt("floorPct", 10); S.nightClock = prefs.getBool("nclock", false); S.chgfx = prefs.getBool("chgfx", true);
 }
 void saveSettings() {
   prefs.putInt("dayBr", S.dayBr); prefs.putInt("nightBr", S.nightBr); prefs.putInt("nStart", S.nStart); prefs.putInt("nEnd", S.nEnd);
-  prefs.putInt("green", S.green); prefs.putInt("red", S.red); prefs.putInt("updHours", S.updHours); prefs.putInt("autoMs", S.autoMs); prefs.putBool("solar", S.solar); prefs.putInt("confirmSec", S.confirmSec); prefs.putInt("capWh", S.capWh); prefs.putInt("floorPct", S.floorPct); prefs.putBool("nclock", S.nightClock); prefs.putBool("chgfx", S.chgfx);
+  prefs.putInt("green", S.green); prefs.putInt("red", S.red); prefs.putInt("updHours", S.updHours); prefs.putInt("autoMs", S.autoMs); prefs.putBool("solar", S.solar); prefs.putInt("confirmSec", S.confirmSec); prefs.putInt("wakeSec", S.wakeSec); prefs.putInt("capWh", S.capWh); prefs.putInt("floorPct", S.floorPct); prefs.putBool("nclock", S.nightClock); prefs.putBool("chgfx", S.chgfx);
 }
 
 // Wi-Fi, URL and tokens live in the board's own memory (NVS), so a firmware built in CI (which has placeholder
@@ -367,8 +367,9 @@ void handleTouch() {
     // Change page as soon as the finger has moved far enough, rather than waiting for it to lift.
     if (!longDone && !swiped && abs(lastX - downX) > 50) {
       swiped = true;
+      if (clockActive()) { wakeUntil = millis() + (unsigned long)S.wakeSec * 1000UL; draw(); return; }  // first touch at night only wakes
       page = stepPage(page, lastX > downX ? -1 : 1);
-      lastPage = millis(); wakeUntil = millis() + 15000;
+      lastPage = millis(); wakeUntil = millis() + (unsigned long)S.wakeSec * 1000UL;
       draw();
     }
     // Hold still for 1 second: turn auto page on or off.
@@ -376,10 +377,12 @@ void handleTouch() {
     return;
   }
   if (downX >= 0 && millis() - lastTouch > 40) {
-    if (!longDone && !swiped) {  // a short tap with little movement goes to the next page
+    if (!longDone && !swiped && clockActive()) {  // tap on the night clock: show the current page, don't skip it
+      wakeUntil = millis() + (unsigned long)S.wakeSec * 1000UL; lastPage = millis(); draw();
+    } else if (!longDone && !swiped) {  // a short tap with little movement goes to the next page
       page = stepPage(page, 1);
       lastPage = millis();  // a touch restarts the auto timer
-      wakeUntil = millis() + 15000;  // a touch at night shows the pages for a while
+      wakeUntil = millis() + (unsigned long)S.wakeSec * 1000UL;  // a touch at night shows the pages for a while
       draw();
     }
     downX = -1; swiped = false;
@@ -587,6 +590,7 @@ void webRoot() {
   h += field("Battery size (Wh) for time left", "capWh", S.capWh, "usable energy, used for the time left");
   h += field("Alert at or below (%)", "floorPct", S.floorPct, "shows Battery limited");
   h += field("Day brightness", "dayBr", S.dayBr, "0 to 255");
+  h += field("Tap-to-wake time (seconds)", "wakeSec", S.wakeSec, "how long a tap shows the pages over the night clock; 3 to 300");
   h += field("Night brightness", "nightBr", S.nightBr, "0 to 255, 0 = off");
   h += field("Night starts (hour)", "nStart", S.nStart, "0 to 23");
   h += field("Night ends (hour)", "nEnd", S.nEnd, "0 to 23; same as start = no dimming");
@@ -611,7 +615,7 @@ void webSave() {
   S.green = argInt("green", 0, 20000, S.green); S.red = argInt("red", 0, 20000, S.red);
   S.updHours = argInt("updHours", 1, 168, S.updHours); S.autoMs = argInt("autoS", 2, 600, S.autoMs / 1000) * 1000;
   S.solar = web.hasArg("solar"); S.nightClock = web.hasArg("nclock"); S.chgfx = web.hasArg("chgfx");
-  S.confirmSec = argInt("confirmSec", 60, 3600, S.confirmSec); S.capWh = argInt("capWh", 500, 100000, S.capWh); S.floorPct = argInt("floorPct", 0, 50, S.floorPct); if (!pageOn(page)) page = P_OVERVIEW;
+  S.wakeSec = argInt("wakeSec", 3, 300, S.wakeSec); S.confirmSec = argInt("confirmSec", 60, 3600, S.confirmSec); S.capWh = argInt("capWh", 500, 100000, S.capWh); S.floorPct = argInt("floorPct", 0, 50, S.floorPct); if (!pageOn(page)) page = P_OVERVIEW;
   { String v = web.arg("updsrc"); v.trim(); v.toLowerCase(); if (v == "dashboard" || v == "github" || v == "off") cfg.updSrc = v;
     v = web.arg("ghrepo"); v.trim(); if (v.length()) cfg.ghRepo = v;
     v = web.arg("ghbranch"); v.trim(); if (v.length()) cfg.ghBranch = v;
