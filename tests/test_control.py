@@ -69,7 +69,7 @@ def test_live_hold_then_hand_back(monkeypatch):
     asyncio.run(ctl.tick(IN))
     assert c.writes == [("operating_mode", 3), ("battery_power_setpoint", 0)]
     assert store["state"] == {"saved_mode": 6, "in_control": True, "saved_limits": {}, "override": None, "full_at": None,
-                              "room_ok": None, "room_declined": None}
+                              "room_ok": None, "room_declined": None, "guard": None}
     asyncio.run(ctl.tick(IN + timedelta(seconds=15)))
     assert len(c.writes) == 2  # nothing new to say
     asyncio.run(ctl.tick(OUT))
@@ -932,3 +932,31 @@ def test_finished_happy_hours_are_archived_and_free_slots_kept(tmp_path):
     assert saved and saved[-1]["happy_hours"] == (later,)
     assert c.storage.happy_archive() == [past]
     assert ctl.status()["happy_archive"] == [past]
+
+
+def test_guard_setpoint_never_below_current_need():
+    from app.control import guard_setpoint
+    assert guard_setpoint(0, [200], 40, 150) == 0  # solar covers it
+    assert guard_setpoint(300, [300], 40, 150) == 340
+    assert guard_setpoint(300, [100, 500], 40, 150) == 340 + 0  # average 300 = need
+    assert guard_setpoint(300, [600], 40, 150) == 490  # follows the average but only 150 W above need
+    assert guard_setpoint(500, [100], 40, 150) == 540  # average below need: never under it
+    assert guard_setpoint(301, [301], 40, 150) == 345  # rounded up
+
+
+def test_guard_follows_load_and_respects_reserve(monkeypatch):
+    monkeypatch.setenv("CONTROL_LIVE", "1")
+    c, store = FakeCollector(mode=6, soc=50), {}
+    c.snapshot.update(battery_w=200, grid_w=100, max_discharge_w=800)
+    ctl = make(c, {"enabled": False}, store)
+    asyncio.run(ctl.set_guard(60, IN))
+    assert ("operating_mode", 3) in c.writes and c.writes[-1] == ("battery_power_setpoint", 340)
+    c.snapshot.update(battery_w=340, grid_w=250)  # load jumped: output rises straight away
+    asyncio.run(ctl.tick(IN + timedelta(seconds=5)))
+    assert c.writes[-1][1] > 590 - 1
+    c.snapshot.update(soc=10, reserve_soc=10)
+    c.raw["discharge_limit_soc"] = 10
+    asyncio.run(ctl.tick(IN + timedelta(seconds=10)))
+    assert c.writes[-1] == ("battery_power_setpoint", 0)
+    asyncio.run(ctl.tick(IN + timedelta(hours=2)))  # guard ended
+    assert c.writes[-1] == ("operating_mode", 6)

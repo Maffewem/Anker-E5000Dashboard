@@ -440,6 +440,22 @@
           <label class="switch edit"><input type="checkbox" id="control-enabled" role="switch"><span></span><b id="control-enabled-text">Off</b></label>
         </div>
       </div>
+      <div class="control-section" id="guard-row">
+        <h3>Grid guard (Saving Sessions)</h3>
+        <p class="hint" id="guard-state">Keeps the battery's output just above what the home is using, so the grid never reads import. Switch it on when a Saving Session is announced. It works even when control is off, and the battery's reserve is never breached.</p>
+        <div class="compare-actions edit">
+          <select id="guard-minutes" aria-label="How long">
+            <option value="30">30 minutes</option>
+            <option value="60">1 hour</option>
+            <option value="90" selected>1.5 hours</option>
+            <option value="120">2 hours</option>
+            <option value="180">3 hours</option>
+            <option value="360">6 hours</option>
+          </select>
+          <button type="button" id="guard-on">Guard on</button>
+          <button type="button" class="secondary" id="guard-off" hidden>Switch off</button>
+        </div>
+      </div>
       <div class="control-section" id="override-row">
         <h3>Quick override</h3>
         <p class="hint" id="override-state">Charge, hold or discharge for a while without making a schedule. It ends by itself and works even when control is off.</p>
@@ -524,6 +540,12 @@
           <div><label for="control-pace-margin">Aim to finish early by (minutes)</label><input id="control-pace-margin" type="number" min="15" max="240" step="15" placeholder="45"></div>
         </div>
         <p class="hint" id="pace-status" hidden></p>
+        <label class="compare"><input type="checkbox" id="control-guard-always"> Grid guard always on: keep the output just above the home's use all the time (uses stored energy, so normally only switch it on for a Saving Session above)</label>
+        <div class="row" id="guard-box">
+          <div><label for="control-guard-bias">Aim to export (W)</label><input id="control-guard-bias" type="number" min="0" max="300" step="5" placeholder="40"></div>
+          <div><label for="control-guard-extra">Smoothing allowance (W)</label><input id="control-guard-extra" type="number" min="0" max="1000" step="10" placeholder="150"></div>
+          <div><label for="control-guard-window">Average use over (minutes)</label><input id="control-guard-window" type="number" min="1" max="30" step="1" placeholder="5"></div>
+        </div>
         <label class="compare"><input type="checkbox" id="control-balance"> Auto balance: now and then charge to 100% in a cheap or free window so the battery's level reading stays accurate</label>
         <div class="row" id="balance-box">
           <div><label for="control-balance-days">Every (days since last full)</label><input id="control-balance-days" type="number" min="7" max="120" step="1" placeholder="28"></div>

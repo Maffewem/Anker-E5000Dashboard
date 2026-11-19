@@ -56,6 +56,10 @@ function renderControl(c) {
     $("control-happy").checked = t.charge_happy;
     $("control-pace").checked = t.pace_charge;
     $("control-pace-margin").value = t.pace_margin_min;
+    $("control-guard-always").checked = t.guard_always;
+    $("control-guard-bias").value = t.guard_bias_w;
+    $("control-guard-extra").value = t.guard_extra_w;
+    $("control-guard-window").value = t.guard_window_min;
     $("control-balance").checked = t.auto_balance;
     $("control-balance-days").value = t.balance_days;
     $("control-power").value = t.charge_power_w;
@@ -106,6 +110,7 @@ function renderControl(c) {
   renderModes(c);
   renderLimits(c);
   renderOverride(c);
+  renderGuard(c);
   syncControlInputs();
   $("control-log").replaceChildren(...(c.log.length ? c.log : [{ text: "Nothing yet." }]).map((e) => {
     const li = document.createElement("li");
@@ -114,6 +119,29 @@ function renderControl(c) {
     return li;
   }));
 }
+
+function renderGuard(c) {
+  const g = c.guard || {};
+  const st = g.state;
+  const on = !!g.manual || g.always;
+  $("guard-off").hidden = !g.manual;
+  $("guard-on").textContent = g.manual ? "Extend" : "Guard on";
+  $("guard-state").textContent = on
+    ? `Grid guard is on${g.manual ? ` until ${clock(g.manual.until)}` : " (always)"}. ` +
+      (st && st.grid_w !== null ? `Home needs ${st.need_w} W, output ${st.output_w} W, grid ${st.grid_w > 0 ? "import" : "export"} ${Math.abs(st.grid_w)} W.${st.limited === "max" ? " At the battery's output limit." : ""}${st.limited === "reserve" ? " Battery at its reserve." : ""}` : "Waiting for readings.")
+    : "Keeps the battery's output just above what the home is using, so the grid never reads import. Switch it on when a Saving Session is announced. It works even when control is off, and the battery's reserve is never breached.";
+}
+
+$("guard-on").addEventListener("click", async () => {
+  $("guard-on").disabled = true;
+  try { renderControl(await postSettings("/api/control/guard", { minutes: Number($("guard-minutes").value) })); }
+  catch (err) { $("control-error").hidden = false; $("control-error").textContent = err.message; }
+  finally { $("guard-on").disabled = false; }
+});
+$("guard-off").addEventListener("click", async () => {
+  try { renderControl(await postSettings("/api/control/guard", { minutes: null })); }
+  catch (err) { $("control-error").hidden = false; $("control-error").textContent = err.message; }
+});
 
 function renderOverride(c) {
   const o = c.override;
@@ -392,6 +420,7 @@ async function saveControl(changes = {}) {
       charge_happy: t.charge_happy, happy_hours: happyHours,
       auto_balance: t.auto_balance, balance_days: t.balance_days,
       pace_charge: t.pace_charge, pace_margin_min: t.pace_margin_min,
+      guard_always: t.guard_always, guard_bias_w: t.guard_bias_w, guard_extra_w: t.guard_extra_w, guard_window_min: t.guard_window_min,
       charge_power_w: t.charge_power_w, charge_target_soc: t.charge_target_soc,
       schedules, ...changes,
     }));
@@ -497,6 +526,8 @@ $("control-form").addEventListener("submit", async (e) => {
     charge_happy: $("control-happy").checked,
     auto_balance: $("control-balance").checked, balance_days: Number($("control-balance-days").value) || 28,
     pace_charge: $("control-pace").checked, pace_margin_min: Number($("control-pace-margin").value) || 45,
+    guard_always: $("control-guard-always").checked, guard_bias_w: Number($("control-guard-bias").value) || 0,
+    guard_extra_w: Number($("control-guard-extra").value) || 0, guard_window_min: Number($("control-guard-window").value) || 5,
     charge_power_w: Number($("control-power").value) || 1500, charge_target_soc: Number($("control-target").value) || DEFAULT_TARGET,
   })) {
     $("control-saved").textContent = "Saved";

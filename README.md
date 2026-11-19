@@ -91,6 +91,8 @@ Off by default. When switched on in **Battery control**, the dashboard takes ove
 
 **Quick override** charges, holds or discharges for 30 minutes to 4 hours in one tap, whatever the schedules say, and works even with control switched off. It ends by itself and can be cancelled.
 
+**Grid guard** (for Octopus Saving Sessions) switches the battery to third-party control and sets its output every 5 seconds to what the home is using right now (battery output plus grid import) plus a small export margin (default 40 W), so the grid reading stays at or below 0. The output never drops below current use; it eases down along the recent average (default 5 minutes, at most 150 W above current use) so it does not hunt. One tap with a duration starts it (works even with control off), or tick "always on" in the control settings. It stops at the battery reserve and at its output limit.
+
 To do this it puts the battery in Anker's third-party control mode. Outside cheap hours, when you switch control off, or when the container stops, it writes back the mode the battery was in before (Smart, Self-consumption and so on). If you change the mode here or in the Anker app, the dashboard stands back until the current window ends. Nothing is written unless `CONTROL_LIVE=1` is set; without it, the **Activity** list shows what it would have done.
 
 **Charging spend** shows what charging the battery from the grid cost each day for the last two weeks (kWh, cost, average price and what the battery saved that day), with today, 7 and 30 day totals, priced the same way as the payback. **Download CSV** gives up to a year of it.
