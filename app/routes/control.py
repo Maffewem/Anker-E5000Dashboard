@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from datetime import datetime
 
-from ..control import DEFAULT_CHARGE_TARGET, DEFAULT_PACE_MARGIN, ControlSettings, Controller, Schedule, happy_slots
+from ..control import DEFAULT_CHARGE_TARGET, DEFAULT_GUARD_BIAS, DEFAULT_GUARD_EXTRA, DEFAULT_GUARD_WINDOW, DEFAULT_PACE_MARGIN, ControlSettings, Controller, Schedule, happy_slots
 
 router = APIRouter()
 
@@ -45,6 +45,10 @@ class ControlIn(BaseModel):
     balance_days: int = 28
     pace_charge: bool = False
     pace_margin_min: int = DEFAULT_PACE_MARGIN
+    guard_always: bool = False
+    guard_bias_w: int = DEFAULT_GUARD_BIAS
+    guard_extra_w: int = DEFAULT_GUARD_EXTRA
+    guard_window_min: int = DEFAULT_GUARD_WINDOW
     happy_hours: list[HappyHourIn] = []
     schedules: list[ScheduleIn] = []
 
@@ -84,6 +88,23 @@ async def save_control(body: ControlIn) -> dict:
     storage.set_free_slots(happy_slots([*settings.happy_hours, *storage.happy_archive(limit=1000)], storage.tz), datetime.now(storage.tz).date().isoformat())
     controller.update_settings(settings)
     await controller.tick()
+    return controller.status()
+
+
+class GuardIn(BaseModel):
+    minutes: int | None = 120  # None switches it off
+
+
+@router.post("/api/control/guard")
+async def grid_guard(body: GuardIn) -> dict:
+    """Switch the grid guard (output kept just above the home's use so import stays at 0) on for a while, or off."""
+    controller: Controller = state.controller
+    if body.minutes is not None and not state.collectors["battery"].connected:
+        raise HTTPException(status_code=409, detail="The battery isn't connected")
+    try:
+        await controller.set_guard(body.minutes)
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
     return controller.status()
 
 

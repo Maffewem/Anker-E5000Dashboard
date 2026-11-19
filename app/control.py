@@ -74,6 +74,28 @@ def _env_soc(name: str, default: int) -> int:
 DEFAULT_CHARGE_TARGET = _env_soc("CHARGE_TARGET_SOC", 80)
 
 
+DEFAULT_GUARD_BIAS = 40  # W of slight export the grid guard aims for
+DEFAULT_GUARD_EXTRA = 150  # W the output may sit above the home's current use
+DEFAULT_GUARD_WINDOW = 5  # minutes averaged
+GUARD_TICK_SECONDS = 5  # the guard re-checks this often while it is on
+GUARD_MAX_MINUTES = 12 * 60
+GUARD_STEP_W = 5
+
+
+def guard_setpoint(need_now: float, history: list[float], bias_w: int, extra_w: int) -> int:
+    """Battery output for the grid guard, in W (positive = discharge).
+
+    `need_now` is what the battery must supply right now for the grid to read 0
+    (its own output plus the grid import). Never below that; it follows the
+    recent average up to `extra_w` above it so the output doesn't hunt, then
+    adds the export margin. Rounded up to a few watts."""
+    if need_now <= 0:
+        return 0  # solar covers the home
+    avg = sum(history) / len(history) if history else need_now
+    out = min(max(need_now, avg), need_now + extra_w) + bias_w
+    return int(-(-out // GUARD_STEP_W) * GUARD_STEP_W)
+
+
 def live_writes_allowed() -> bool:
     return os.environ.get("CONTROL_LIVE", "").strip().lower() in ("1", "true", "yes", "on")
 
@@ -161,6 +183,10 @@ class ControlSettings:
     schedules: tuple[Schedule, ...] = ()  # your own windows; they win over cheap hours
     pace_charge: bool = False  # spread a charge over its window instead of charging flat out and then sitting full
     pace_margin_min: int = DEFAULT_PACE_MARGIN  # a paced charge aims to be done this long before the window ends
+    guard_always: bool = False  # run the grid guard all the time, not only when switched on by hand
+    guard_bias_w: int = DEFAULT_GUARD_BIAS  # aim to export this much, so the import reading never goes above 0
+    guard_extra_w: int = DEFAULT_GUARD_EXTRA  # most the output may sit above what the home is using right now (smoothing)
+    guard_window_min: int = DEFAULT_GUARD_WINDOW  # minutes of recent use averaged to smooth the output
 
     @classmethod
     def from_dict(cls, data: dict | None) -> "ControlSettings":
@@ -184,6 +210,12 @@ class ControlSettings:
             raise ValueError("Balance interval must be between 7 and 120 days")
         if not 15 <= int(self.pace_margin_min) <= 240:
             raise ValueError("Finish paced charging early by between 15 and 240 minutes")
+        if not 0 <= int(self.guard_bias_w) <= 300:
+            raise ValueError("Grid guard export margin must be between 0 and 300 W")
+        if not 0 <= int(self.guard_extra_w) <= 1000:
+            raise ValueError("Grid guard smoothing allowance must be between 0 and 1000 W")
+        if not 1 <= int(self.guard_window_min) <= 30:
+            raise ValueError("Grid guard averaging time must be between 1 and 30 minutes")
         happy = tuple(_check_happy(h) for h in self.happy_hours)
         if len(happy) > MAX_HAPPY:
             raise ValueError(f"Up to {MAX_HAPPY} Happy Hours")
@@ -192,7 +224,9 @@ class ControlSettings:
                                charge_target_soc=int(self.charge_target_soc), charge_dispatch=bool(self.charge_dispatch),
                                charge_happy=bool(self.charge_happy),
                                auto_balance=bool(self.auto_balance), balance_days=int(self.balance_days), happy_hours=happy, schedules=schedules,
-                               pace_charge=bool(self.pace_charge), pace_margin_min=int(self.pace_margin_min))
+                               pace_charge=bool(self.pace_charge), pace_margin_min=int(self.pace_margin_min),
+                               guard_always=bool(self.guard_always), guard_bias_w=int(self.guard_bias_w),
+                               guard_extra_w=int(self.guard_extra_w), guard_window_min=int(self.guard_window_min))
 
 
 def _check_happy(h: dict) -> dict:
@@ -605,6 +639,10 @@ class Controller:
         self._last_cap: dict[str, int] = {}
         self._lost_since: float | None = None  # when the battery readings went missing or stale (unix time)
         self.override: dict | None = state.get("override") or None
+        self.guard: dict | None = state.get("guard") or None  # {"until": iso}: grid guard switched on by hand
+        self._guard_need: deque = deque()  # (monotonic time, W the battery had to cover) for the rolling average
+        self._guard_was = False
+        self.guard_state: dict | None = None  # what the guard is doing, for the card
         self.full_at: float | None = state.get("full_at")  # last time we saw it full, kept across restarts
         self.balancing = False
         self.pace: dict | None = None  # the paced charge in progress, for the card
@@ -672,7 +710,7 @@ class Controller:
     def _persist(self) -> None:
         self._save_state({"saved_mode": self.saved_mode, "in_control": self.in_control,
                           "saved_limits": self.saved_limits, "override": self.override, "full_at": self.full_at,
-                          "room_ok": self.room_ok, "room_declined": self.room_declined})
+                          "room_ok": self.room_ok, "room_declined": self.room_declined, "guard": self.guard})
 
     def answer_room(self, start: str, accept: bool) -> None:
         """Yes or no to lowering the charge target for the Happy Hour starting at `start`."""
@@ -842,7 +880,8 @@ class Controller:
         if self.saved_limits and not self.in_control:
             await self._restore_limits()  # e.g. a retry after a failed write, or the mode was changed in the app
         quick = self._override_window(now)
-        settings = replace(self.settings, enabled=True) if quick and not self.settings.enabled else self.settings
+        guard = None if quick else self._guard_window(now)
+        settings = replace(self.settings, enabled=True) if (quick or guard) and not self.settings.enabled else self.settings
         windows = ([quick] if quick else []) + self._windows(now)
         # The battery reserve (its discharge limit) is a floor no dashboard discharge goes under.
         reserve = self.saved_limits.get("discharge_limit_soc", self.collector.raw.get("discharge_limit_soc"))
@@ -866,6 +905,17 @@ class Controller:
             if isinstance(power, (int, float)) and power < 0 and time.monotonic() - self._setpoint_since > 90:
                 pace_io["delivery"] = -power / -self.last_setpoint  # how much of the commanded power it really took
         action, setpoint, reason, window = decide(settings, windows, snap, now, balance, pace_io)
+        if guard:
+            action, setpoint, reason = self._guard_decide(snap, guard, now)
+            window, balance = guard, False
+            if not self._guard_was:
+                self._event("Grid guard on: output follows the home's use plus a small margin so import stays at 0",
+                            "grid_guard", "off", "on", "guard", always=True)
+        else:
+            self.guard_state = None
+            if self._guard_was:
+                self._guard_need.clear()
+        self._guard_was = bool(guard)
         self._update_pace(pace_io.get("plan") if action in (CHARGE, HOLD) else None, window, now, tz, settings)
         balancing = balance and action == CHARGE and (soc is None or soc < FULL_SOC)
         if balancing and not self.balancing:
@@ -946,7 +996,9 @@ class Controller:
                 due = time.monotonic() - self.last_write > REASSERT_SECONDS
                 if setpoint != self.last_setpoint or due:
                     await self._write("battery_power_setpoint", setpoint)
-                    if setpoint != self.last_setpoint:
+                    if setpoint != self.last_setpoint and guard:
+                        self._setpoint_since = time.monotonic()  # changes every few seconds: not logged one by one
+                    elif setpoint != self.last_setpoint:
                         self._setpoint_since = time.monotonic()
                         what = {HOLD: "Holding the battery at 0 W", CHARGE: f"Charging at {-setpoint} W",
                                 DISCHARGE: f"Discharging at {setpoint} W"}[action]
@@ -984,6 +1036,68 @@ class Controller:
             what = f"Pacing the charge at about {plan['power']} W, done by about {done} (window ends {end}, {settings.pace_margin_min} min to spare)"
         self._note(what)
         self._event(what, "pace_charge", None, plan["kind"], window.source, always=True)
+
+    def _guard_window(self, now: datetime) -> Window | None:
+        """The window the grid guard is on for: your manual start, or all day if it is always on."""
+        g = self.guard
+        if g:
+            until = datetime.fromisoformat(g["until"])
+            if now < until:
+                return Window(datetime.fromisoformat(g["started"]), until, "grid guard", "guard")
+            self.guard = None
+            self._persist()
+            self._note("Grid guard finished")
+        if self.settings.guard_always:
+            return Window(now, now + timedelta(days=1), "grid guard (always on)", "guard")
+        return None
+
+    def _guard_decide(self, snap: dict, window: Window, now: datetime) -> tuple[str, int, str]:
+        s = self.settings
+        soc, reserve = snap.get("soc"), snap.get("reserve_soc") or 0
+        battery, grid = snap.get("battery_w"), snap.get("grid_w")
+        mono = time.monotonic()
+        keep = s.guard_window_min * 60
+        while self._guard_need and mono - self._guard_need[0][0] > keep:
+            self._guard_need.popleft()
+        if not isinstance(battery, (int, float)) or not isinstance(grid, (int, float)):
+            self.guard_state = {"need_w": None, "output_w": self.last_setpoint or 0, "grid_w": None}
+            return (DISCHARGE if (self.last_setpoint or 0) > 0 else HOLD), (self.last_setpoint or 0), \
+                "Grid guard: waiting for the battery and grid readings"
+        need = max(0.0, battery + grid)  # + discharging, + importing: what the battery must supply for the grid to read 0
+        self._guard_need.append((mono, need))
+        if soc is not None and soc <= max(reserve, 0):
+            self.guard_state = {"need_w": round(need), "output_w": 0, "grid_w": round(grid), "limited": "reserve"}
+            return HOLD, 0, f"Grid guard: battery is at its {reserve}% reserve, so the house imports"
+        out = guard_setpoint(need, [n for _, n in self._guard_need], s.guard_bias_w, s.guard_extra_w)
+        cap = int(snap.get("max_discharge_w") or MAX_SETPOINT_W)
+        limited = out > cap
+        out = min(out, cap)
+        self.guard_state = {"need_w": round(need), "output_w": out, "grid_w": round(grid), "limited": "max" if limited else None}
+        if out <= 0:
+            return HOLD, 0, "Grid guard: solar covers the home"
+        text = f"Grid guard: output {out} W for a home using {round(need)} W (aiming to export about {s.guard_bias_w} W)"
+        if limited:
+            text += f"; at the battery's {cap} W limit, so some import is unavoidable"
+        return DISCHARGE, out, text
+
+    async def set_guard(self, minutes: int | None, now: datetime | None = None) -> None:
+        """Switch the grid guard on for a while (a Saving Session announced at short notice), or off with None."""
+        now = now or datetime.now(timezone.utc)
+        if minutes is None:
+            if self.guard:
+                self.guard = None
+                self._persist()
+                self._event("Grid guard switched off", "grid_guard", "on", "off", "dashboard", always=True)
+            await self.tick(now)
+            return
+        if not 5 <= int(minutes) <= GUARD_MAX_MINUTES:
+            raise ValueError(f"Pick between 5 minutes and {GUARD_MAX_MINUTES // 60} hours")
+        self.guard = {"started": now.isoformat(), "until": (now + timedelta(minutes=int(minutes))).isoformat()}
+        self.stand_back_until = None
+        self._persist()
+        self._event(f"Grid guard switched on for {int(minutes)} minutes", "grid_guard", "off", "on", "dashboard", always=True)
+        self._wake.set()
+        await self.tick(now)
 
     def _override_window(self, now: datetime) -> Window | None:
         o = self.override
@@ -1183,7 +1297,7 @@ class Controller:
             await self.tick()
             self._wake.clear()
             try:
-                await asyncio.wait_for(self._wake.wait(), TICK_SECONDS)
+                await asyncio.wait_for(self._wake.wait(), GUARD_TICK_SECONDS if self.guard_state else TICK_SECONDS)
             except asyncio.TimeoutError:
                 pass
 
@@ -1197,6 +1311,7 @@ class Controller:
             "in_control": self.in_control,
             "saved_mode": OPERATING_MODES.get(self.saved_mode) if self.saved_mode is not None else None,
             "override": self.override,
+            "guard": {"manual": self.guard, "always": self.settings.guard_always, "state": self.guard_state},
             "happy_archive": self._happy_archive(),
             "happy_room": self.room,
             "happy_forecast": self.forecast,
