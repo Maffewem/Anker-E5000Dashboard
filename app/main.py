@@ -76,11 +76,15 @@ def _make_controller(app: FastAPI, store: ConnectionStore, storage: Storage) -> 
         mine += happy_windows(state.controller.settings.happy_hours, storage.tz, now)
         return mine + cheap_windows(status, offpeak, storage.tz, now)
 
+    def sessions(now):
+        return state.octopus.sessions(now) if supplier() == "octopus" else []
+
     return Controller(
         state.collectors["battery"],
         load=lambda: {"settings": store.load_section("control"), "state": store.load_section("control_state")},
         save_state=lambda state: store.save_section("control_state", state),
         windows=windows,
+        sessions=sessions,
         last_full=storage.last_full,
         save_settings=lambda settings: store.save_section("control", settings),
     )

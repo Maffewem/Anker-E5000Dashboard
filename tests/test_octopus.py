@@ -337,3 +337,14 @@ def test_profile_carries_the_octopus_standing_charge(storage):
     o = make(storage, FakeOctopus())
     o.sync(NOW)
     assert o.profile()["standing_p"] == 48.0
+
+
+def test_parse_saving_sessions():
+    from app.octopus import parse_sessions
+    data = {"savingSessions": {"events": [
+        {"id": 2, "startAt": "2026-11-26T17:30:00Z", "endAt": "2026-11-26T18:30:00Z", "rewardPerKwhInOctoPoints": 1800},
+        {"id": 1, "startAt": "2026-11-20T17:30:00Z", "endAt": "2026-11-20T18:30:00Z", "rewardPerKwhInOctoPoints": 1800}],
+        "account": {"hasJoinedCampaign": True, "joinedEvents": [{"eventId": 2, "startAt": "2026-11-26T17:30:00Z", "endAt": "2026-11-26T18:30:00Z"}]}}}
+    out = parse_sessions(data)
+    assert [(e["id"], e["joined"]) for e in out] == [(1, False), (2, True)]
+    assert parse_sessions({}) == []

@@ -183,6 +183,7 @@ class ControlSettings:
     schedules: tuple[Schedule, ...] = ()  # your own windows; they win over cheap hours
     pace_charge: bool = False  # spread a charge over its window instead of charging flat out and then sitting full
     pace_margin_min: int = DEFAULT_PACE_MARGIN  # a paced charge aims to be done this long before the window ends
+    guard_sessions: bool = False  # run the grid guard automatically during Saving Sessions you joined (Octopus)
     guard_always: bool = False  # run the grid guard all the time, not only when switched on by hand
     guard_bias_w: int = DEFAULT_GUARD_BIAS  # aim to export this much, so the import reading never goes above 0
     guard_extra_w: int = DEFAULT_GUARD_EXTRA  # most the output may sit above what the home is using right now (smoothing)
@@ -225,7 +226,7 @@ class ControlSettings:
                                charge_happy=bool(self.charge_happy),
                                auto_balance=bool(self.auto_balance), balance_days=int(self.balance_days), happy_hours=happy, schedules=schedules,
                                pace_charge=bool(self.pace_charge), pace_margin_min=int(self.pace_margin_min),
-                               guard_always=bool(self.guard_always), guard_bias_w=int(self.guard_bias_w),
+                               guard_sessions=bool(self.guard_sessions), guard_always=bool(self.guard_always), guard_bias_w=int(self.guard_bias_w),
                                guard_extra_w=int(self.guard_extra_w), guard_window_min=int(self.guard_window_min))
 
 
@@ -621,12 +622,14 @@ class Controller:
     def __init__(self, collector, load: Callable[[], dict], save_state: Callable[[dict], None],
                  windows: Callable[[datetime], list[Window]],
                  last_full: Callable[[], float | None] = lambda: None,
+                 sessions: Callable[[datetime], list[dict]] = lambda now: [],
                  save_settings: Callable[[dict], None] | None = None) -> None:
         self._save_settings = save_settings
         self.collector = collector
         self._load = load  # -> {"settings": {...}, "state": {...}}
         self._save_state = save_state
         self._windows = windows
+        self._sessions = sessions  # Octopus Saving Sessions: {"start", "end", "joined", ...}
         self._history_full = last_full  # unix time the battery was last seen full, from the recorded history
         stored = load()
         self.settings = ControlSettings.from_dict(stored.get("settings"))
@@ -642,6 +645,7 @@ class Controller:
         self.guard: dict | None = state.get("guard") or None  # {"until": iso}: grid guard switched on by hand
         self._guard_need: deque = deque()  # (monotonic time, W the battery had to cover) for the rolling average
         self._guard_was = False
+        self.guard_source: str | None = None  # "manual", "always" or "session" while the guard is on
         self.guard_state: dict | None = None  # what the guard is doing, for the card
         self.full_at: float | None = state.get("full_at")  # last time we saw it full, kept across restarts
         self.balancing = False
@@ -881,6 +885,7 @@ class Controller:
             await self._restore_limits()  # e.g. a retry after a failed write, or the mode was changed in the app
         quick = self._override_window(now)
         guard = None if quick else self._guard_window(now)
+        self.guard_source = None if not guard else "manual" if self.guard else "always" if self.settings.guard_always else "session"
         settings = replace(self.settings, enabled=True) if (quick or guard) and not self.settings.enabled else self.settings
         windows = ([quick] if quick else []) + self._windows(now)
         # The battery reserve (its discharge limit) is a floor no dashboard discharge goes under.
@@ -1049,6 +1054,12 @@ class Controller:
             self._note("Grid guard finished")
         if self.settings.guard_always:
             return Window(now, now + timedelta(days=1), "grid guard (always on)", "guard")
+        if self.settings.guard_sessions:
+            for e in self._sessions(now):
+                if e.get("joined"):
+                    a, b = datetime.fromisoformat(e["start"]), datetime.fromisoformat(e["end"])
+                    if a <= now < b:
+                        return Window(a, b, "grid guard (Saving Session)", "guard")
         return None
 
     def _guard_decide(self, snap: dict, window: Window, now: datetime) -> tuple[str, int, str]:
@@ -1311,7 +1322,9 @@ class Controller:
             "in_control": self.in_control,
             "saved_mode": OPERATING_MODES.get(self.saved_mode) if self.saved_mode is not None else None,
             "override": self.override,
-            "guard": {"manual": self.guard, "always": self.settings.guard_always, "state": self.guard_state},
+            "guard": {"manual": self.guard, "always": self.settings.guard_always, "state": self.guard_state,
+                      "source": self.guard_source if self.guard_state else None,
+                      "sessions_auto": self.settings.guard_sessions, "sessions": self._sessions(datetime.now(timezone.utc))},
             "happy_archive": self._happy_archive(),
             "happy_room": self.room,
             "happy_forecast": self.forecast,

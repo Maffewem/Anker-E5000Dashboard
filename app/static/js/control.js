@@ -57,6 +57,7 @@ function renderControl(c) {
     $("control-pace").checked = t.pace_charge;
     $("control-pace-margin").value = t.pace_margin_min;
     $("control-guard-always").checked = t.guard_always;
+    $("control-guard-sessions").checked = t.guard_sessions;
     $("control-guard-bias").value = t.guard_bias_w;
     $("control-guard-extra").value = t.guard_extra_w;
     $("control-guard-window").value = t.guard_window_min;
@@ -126,6 +127,14 @@ function renderGuard(c) {
   const on = !!g.manual || g.always;
   $("guard-off").hidden = !g.manual;
   $("guard-on").textContent = g.manual ? "Extend" : "Guard on";
+  const badge = $("guard-badge");
+  const active = g.state && g.source;
+  badge.hidden = !active;
+  if (active) badge.textContent = "Grid guard active" + ({ manual: " (manual)", always: " (always on)", session: " (Saving Session)" }[g.source] || "");
+  const sess = (g.sessions || []).slice(0, 4).map((e) =>
+    `${e.active ? "Running now" : new Date(e.start).toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" })}: ` +
+    `${clock(e.start)}-${clock(e.end)}${e.joined ? " (joined)" : " (not joined)"}`);
+  $("guard-sessions").textContent = sess.length ? "Saving Sessions: " + sess.join("; ") + "." : "";
   $("guard-state").textContent = on
     ? `Grid guard is on${g.manual ? ` until ${clock(g.manual.until)}` : " (always)"}. ` +
       (st && st.grid_w !== null ? `Home needs ${st.need_w} W, output ${st.output_w} W, grid ${st.grid_w > 0 ? "import" : "export"} ${Math.abs(st.grid_w)} W.${st.limited === "max" ? " At the battery's output limit." : ""}${st.limited === "reserve" ? " Battery at its reserve." : ""}` : "Waiting for readings.")
@@ -420,7 +429,7 @@ async function saveControl(changes = {}) {
       charge_happy: t.charge_happy, happy_hours: happyHours,
       auto_balance: t.auto_balance, balance_days: t.balance_days,
       pace_charge: t.pace_charge, pace_margin_min: t.pace_margin_min,
-      guard_always: t.guard_always, guard_bias_w: t.guard_bias_w, guard_extra_w: t.guard_extra_w, guard_window_min: t.guard_window_min,
+      guard_sessions: t.guard_sessions, guard_always: t.guard_always, guard_bias_w: t.guard_bias_w, guard_extra_w: t.guard_extra_w, guard_window_min: t.guard_window_min,
       charge_power_w: t.charge_power_w, charge_target_soc: t.charge_target_soc,
       schedules, ...changes,
     }));
@@ -526,7 +535,7 @@ $("control-form").addEventListener("submit", async (e) => {
     charge_happy: $("control-happy").checked,
     auto_balance: $("control-balance").checked, balance_days: Number($("control-balance-days").value) || 28,
     pace_charge: $("control-pace").checked, pace_margin_min: Number($("control-pace-margin").value) || 45,
-    guard_always: $("control-guard-always").checked, guard_bias_w: Number($("control-guard-bias").value) || 0,
+    guard_sessions: $("control-guard-sessions").checked, guard_always: $("control-guard-always").checked, guard_bias_w: Number($("control-guard-bias").value) || 0,
     guard_extra_w: Number($("control-guard-extra").value) || 0, guard_window_min: Number($("control-guard-window").value) || 5,
     charge_power_w: Number($("control-power").value) || 1500, charge_target_soc: Number($("control-target").value) || DEFAULT_TARGET,
   })) {
