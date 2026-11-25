@@ -139,7 +139,7 @@ function renderGuard(c) {
   $("guard-state").textContent = on
     ? `Grid guard is on${g.manual ? ` until ${clock(g.manual.until)}` : " (always)"}. ` +
       (st && st.grid_w !== null ? `Home needs ${st.need_w} W, output ${st.output_w} W, grid ${st.grid_w > 0 ? "import" : "export"} ${Math.abs(st.grid_w)} W.${st.limited === "max" ? " At the battery's output limit." : ""}${st.limited === "reserve" ? " Battery at its reserve." : ""}` : "Waiting for readings.")
-    : "Keeps the battery's output just above what the home is using, so the grid never reads import. Switch it on when a Saving Session is announced. It works even when control is off, and the battery's reserve is never breached.";
+    : "Keeps the battery's output just above what the home is using, so the grid never reads import. Switch it on during a demand-flexibility event such as an Octopus Saving Session, or whenever you want no grid import. It works even when control is off, and the battery's reserve is never breached.";
 }
 
 $("guard-on").addEventListener("click", async () => {
