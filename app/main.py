@@ -85,6 +85,7 @@ def _make_controller(app: FastAPI, store: ConnectionStore, storage: Storage) -> 
         save_state=lambda state: store.save_section("control_state", state),
         windows=windows,
         sessions=sessions,
+        sessions_error=lambda: state.octopus.sessions_error if supplier() == "octopus" else None,
         last_full=storage.last_full,
         save_settings=lambda settings: store.save_section("control", settings),
     )

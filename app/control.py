@@ -623,12 +623,14 @@ class Controller:
                  windows: Callable[[datetime], list[Window]],
                  last_full: Callable[[], float | None] = lambda: None,
                  sessions: Callable[[datetime], list[dict]] = lambda now: [],
+                 sessions_error: Callable[[], str | None] = lambda: None,
                  save_settings: Callable[[dict], None] | None = None) -> None:
         self._save_settings = save_settings
         self.collector = collector
         self._load = load  # -> {"settings": {...}, "state": {...}}
         self._save_state = save_state
         self._windows = windows
+        self._sessions_error = sessions_error  # why the Saving Sessions couldn't be read, if they couldn't
         self._sessions = sessions  # Octopus Saving Sessions: {"start", "end", "joined", ...}
         self._history_full = last_full  # unix time the battery was last seen full, from the recorded history
         stored = load()
@@ -1324,7 +1326,7 @@ class Controller:
             "override": self.override,
             "guard": {"manual": self.guard, "always": self.settings.guard_always, "state": self.guard_state,
                       "source": self.guard_source if self.guard_state else None,
-                      "sessions_auto": self.settings.guard_sessions, "sessions": self._sessions(datetime.now(timezone.utc))},
+                      "sessions_auto": self.settings.guard_sessions, "sessions_error": self._sessions_error(), "sessions": self._sessions(datetime.now(timezone.utc))},
             "happy_archive": self._happy_archive(),
             "happy_room": self.room,
             "happy_forecast": self.forecast,

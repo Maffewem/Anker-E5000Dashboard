@@ -177,7 +177,19 @@ class Client:
         return body.get("data") or {}
 
     def saving_sessions(self) -> list[dict]:
-        return parse_sessions(self._graphql(SESSIONS_QUERY, {"a": self.account}))
+        data = self._graphql(SESSIONS_QUERY, {"a": self.account})
+        log.info("Octopus: Saving Sessions raw response: %.1500s", json.dumps(data))
+        return parse_sessions(data)
+
+    def schema_hints(self) -> dict:
+        """Query fields whose names look related to Saving Sessions, with their arguments, for the log.
+        Used when the Saving Sessions read fails or comes back empty, to find the current query."""
+        data = self._graphql('{__type(name:"Query"){fields{name args{name type{name kind ofType{name kind ofType{name kind}}}}}}}')
+        hints = {}
+        for f in ((data.get("__type") or {}).get("fields") or []):
+            if re.search(r"session|flexib|campaign|octoplus|event", f["name"], re.I):
+                hints[f["name"]] = [a["name"] for a in f.get("args") or []]
+        return hints
 
     def dispatches(self) -> dict:
         """Planned and completed smart-charge slots, newest API first."""
@@ -382,6 +394,7 @@ class Octopus:
         self.dispatch_slots: dict = {"planned": [], "completed": []}
         self.saving_sessions: list[dict] = []
         self.sessions_error: str | None = None
+        self._sessions_hinted = False
         self.last_sync: float | None = None
         self.last_error: str | None = None
         self._agreements: list[Agreement] = []
@@ -525,9 +538,23 @@ class Octopus:
         try:
             self.saving_sessions = self.client.saving_sessions()
             self.sessions_error = None
+            if not self.saving_sessions:
+                log.info("Octopus: no Saving Sessions in the answer")
+                self._log_schema_hints()
         except Exception as err:  # prices still work without them
             self.sessions_error = str(err)
             log.warning("Octopus: couldn't read Saving Sessions: %s", err)
+            self._log_schema_hints()
+
+    def _log_schema_hints(self) -> None:
+        """Once per run, log which Octopus queries might hold Saving Sessions now (the API has changed before)."""
+        if self._sessions_hinted or not self.client:
+            return
+        self._sessions_hinted = True
+        try:
+            log.info("Octopus: queries that may hold Saving Sessions: %s", json.dumps(self.client.schema_hints()))
+        except Exception as err:
+            log.info("Octopus: couldn't list the API's queries: %s", err)
 
     def sessions(self, now: datetime | None = None) -> list[dict]:
         """Saving Sessions that haven't finished yet, with an 'active' flag."""
@@ -623,6 +650,7 @@ class Octopus:
             if a and b and b > now:
                 planned.append({"start": _iso(a), "end": _iso(b)})
         out["saving_sessions"] = self.sessions(now)
+        out["saving_sessions_error"] = self.sessions_error
         out["dispatches"] = sorted(planned, key=lambda d: d["start"])
         return out
 
