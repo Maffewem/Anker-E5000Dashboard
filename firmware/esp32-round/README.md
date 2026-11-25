@@ -75,3 +75,7 @@ When the dashboard is recent enough, the time-left line comes from the dashboard
 ## Charging indicator
 
 While the battery is charging (more than 20 W in), the Overview ring breathes slowly and a small blue bolt shows above the percentage. The ring keeps its level colour (red when low), so you can see both "low" and "recovering". It redraws about five times a second and only on the Overview page. Switch it off on the settings page ("Breathing ring and bolt while the battery is charging"). The settings preview shows the same effect.
+
+### Tap to wake from the night clock
+
+With the night clock on, touching the screen shows the normal pages for a set time (settings: "Tap-to-wake time", default 15 s, 3 to 300), then it returns to the clock. The first touch only wakes the display and shows the current page; it does not skip to the next one.
