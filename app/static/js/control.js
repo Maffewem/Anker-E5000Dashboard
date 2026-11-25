@@ -134,7 +134,8 @@ function renderGuard(c) {
   const sess = (g.sessions || []).slice(0, 4).map((e) =>
     `${e.active ? "Running now" : new Date(e.start).toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" })}: ` +
     `${clock(e.start)}-${clock(e.end)}${e.joined ? " (joined)" : " (not joined)"}`);
-  $("guard-sessions").textContent = sess.length ? "Saving Sessions: " + sess.join("; ") + "." : "";
+  $("guard-sessions").textContent = g.sessions_error ? `Couldn't read Saving Sessions from Octopus: ${g.sessions_error}`
+    : sess.length ? "Saving Sessions: " + sess.join("; ") + "." : "";
   $("guard-state").textContent = on
     ? `Grid guard is on${g.manual ? ` until ${clock(g.manual.until)}` : " (always)"}. ` +
       (st && st.grid_w !== null ? `Home needs ${st.need_w} W, output ${st.output_w} W, grid ${st.grid_w > 0 ? "import" : "export"} ${Math.abs(st.grid_w)} W.${st.limited === "max" ? " At the battery's output limit." : ""}${st.limited === "reserve" ? " Battery at its reserve." : ""}` : "Waiting for readings.")

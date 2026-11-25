@@ -348,3 +348,12 @@ def test_parse_saving_sessions():
     out = parse_sessions(data)
     assert [(e["id"], e["joined"]) for e in out] == [(1, False), (2, True)]
     assert parse_sessions({}) == []
+
+
+def test_session_read_failure_is_kept_and_reported(storage):
+    o = Octopus(storage, "sk_live_" + "a" * 12, "A-1234ABCD", fetch=lambda *a: {"errors": [{"message": "Cannot query field savingSessions"}]})
+    o.client._token = "t"
+    o.saving_sessions = [{"id": 1, "start": "2099-01-01T00:00:00Z", "end": "2099-01-01T01:00:00Z", "joined": True}]
+    o.refresh_sessions()
+    assert "savingSessions" in o.sessions_error
+    assert len(o.saving_sessions) == 1  # last good list kept
