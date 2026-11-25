@@ -43,12 +43,25 @@ function applySupplier() {
   $("tariff-edit-costs").hidden = oct;
   $("octopus-auto").hidden = !oct;
   $("tariff-title").textContent = oct ? "Octopus" : "Electricity prices";
-  $("cheap-hint").textContent = oct
-    ? "Uses your Octopus prices, or the off-peak hours in Edit costs. Schedules win when they overlap."
-    : "Uses the off-peak hours in Edit costs. Schedules win when they overlap.";
+  syncCheapHint();
   $("compare-region-default").textContent = oct ? "Your Octopus region" : "London (pick your region)";
   if (!oct) renderManualTariff();
   else if (octopus) renderOctopus(octopus);
+}
+
+// Says which hours the "Cheap hours" options on the Control tab are using, for any supplier:
+// Octopus's published prices when they're loaded, otherwise the off-peak hours typed in Edit costs.
+function syncCheapHint() {
+  if (!payback) return;
+  const t = payback.manual || payback.tariff || {};
+  const typed = t.peak_rate !== t.offpeak_rate && t.offpeak_start !== t.offpeak_end
+    ? `the off-peak hours in Edit costs (${t.offpeak_start}–${t.offpeak_end})` : null;
+  const live = isOctopus() && payback.source === "octopus" && octopus && octopus.prices && octopus.prices.length;
+  let src;
+  if (live) src = "Using the cheapest times in your Octopus prices" + (typed ? `, and ${typed} if they can't be read` : "") + ".";
+  else if (typed) src = `Using ${typed}` + (isOctopus() && octopus && octopus.configured ? " because Octopus prices aren't available right now" : "") + ".";
+  else src = "No cheap hours yet: your prices are one flat rate, so there's nothing to pick. Set an off-peak rate and hours in Edit prices (or add schedules above) and these options will use them.";
+  $("cheap-hint").textContent = `${src} Works with any supplier. Schedules win when they overlap.`;
 }
 
 // The Electricity prices card for suppliers without a price feed: what was typed in.
@@ -277,6 +290,7 @@ const WINDOW_LABEL = { charge: "Charge", avoid: "Use battery", export: "Export" 
 
 function renderOctopus(o) {
   octopus = o;
+  syncCheapHint();
   if (!isOctopus()) return renderManualTariff();
   $("tariff-manual").hidden = true;
   $("open-octopus").textContent = o.configured ? "Octopus settings" : "Connect Octopus";
