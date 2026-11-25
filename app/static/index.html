@@ -356,7 +356,7 @@
 
     <section class="card" id="tariff-card" data-collapsible>
       <div class="card-head">
-        <h2>Electricity prices</h2>
+        <h2 id="tariff-title">Octopus</h2>
         <button type="button" class="secondary edit" id="open-octopus">Connect Octopus</button>
         <button type="button" class="secondary edit" id="tariff-edit-costs" hidden>Edit prices</button>
       </div>
@@ -368,6 +368,33 @@
         <div class="chart-box short"><canvas id="price-chart" aria-label="Upcoming electricity prices"></canvas></div>
         <h3>Suggested battery times</h3>
         <ul class="windows" id="tariff-windows"></ul>
+      </div>
+      <div class="octopus-auto control-section" id="octopus-auto">
+        <h3>Octopus automation</h3>
+        <p class="hint">These use your Octopus account and the battery control below, and are saved with the cheap-hours settings.</p>
+        <label class="compare" id="control-dispatch-row"><input type="checkbox" id="control-dispatch"> On Intelligent Go, charge during any smart-charge slot Octopus adds (even a short one in the day) and don't discharge while it runs</label>
+        <label class="compare"><input type="checkbox" id="control-happy"> Octopus Happy Hours: charge at full power and don't discharge during the hours you add below</label>
+        <div id="happy-box">
+          <ul class="happy-list" id="happy-list"></ul>
+          <div class="happy-row">
+            <div><label for="happy-date">Date</label><input id="happy-date" type="date"></div>
+            <div><label for="happy-start">From</label><input id="happy-start" type="time" value="11:00"></div>
+            <div><label for="happy-end">To</label><input id="happy-end" type="time" value="12:00"></div>
+            <button type="button" id="happy-add" class="primary">Add</button>
+          </div>
+          <p class="hint">Octopus doesn't publish booked Happy Hours to customers, so enter the slot you booked. Charging stops at the level below. The charge before a booked slot stops short to leave room for it, and power used in a Happy Hour counts as free in the costs.</p>
+          <p class="hint" id="happy-archive" hidden></p>
+          <p class="hint" id="happy-status" hidden></p>
+          <p class="hint" id="happy-forecast" hidden></p>
+          <div class="hint" id="happy-suggest" hidden>
+            <span id="happy-suggest-text"></span>
+            <button type="button" id="happy-suggest-yes">Lower it</button>
+            <button type="button" id="happy-suggest-no">Keep it</button>
+          </div>
+        </div>
+        <p class="hint" id="guard-sessions"></p>
+        <label class="compare"><input type="checkbox" id="control-guard-sessions"> Switch the grid guard on automatically during Octopus Saving Sessions you have joined (read from your Octopus account; off by default)</label>
+        <div class="dialog-actions edit"><span class="setup-msg ok" id="octopus-saved"></span><button type="submit" form="control-form" class="primary">Save Octopus settings</button></div>
       </div>
     </section>
 
@@ -442,7 +469,6 @@
       </div>
       <div class="control-section" id="guard-row">
         <h3>Grid guard (Saving Sessions)</h3>
-        <p class="hint" id="guard-sessions"></p>
         <p class="hint" id="guard-state">Keeps the battery's output just above what the home is using, so the grid never reads import. Switch it on when a Saving Session is announced. It works even when control is off, and the battery's reserve is never breached.</p>
         <div class="compare-actions edit">
           <select id="guard-minutes" aria-label="How long">
@@ -516,32 +542,11 @@
         <p class="hint" id="cheap-hint">Uses your Octopus prices, or the off-peak hours in Edit costs. Schedules win when they overlap.</p>
         <label class="compare"><input type="checkbox" id="control-hold"> Don't discharge while electricity is cheap (the house uses grid power instead)</label>
         <label class="compare"><input type="checkbox" id="control-charge"> Also charge from the grid in the cheapest hours</label>
-        <label class="compare" id="control-dispatch-row"><input type="checkbox" id="control-dispatch"> On Intelligent Go, charge during any smart-charge slot Octopus adds (even a short one in the day) and don't discharge while it runs</label>
-        <label class="compare"><input type="checkbox" id="control-happy"> Octopus Happy Hours: charge at full power and don't discharge during the hours you add below</label>
-        <div id="happy-box">
-          <ul class="happy-list" id="happy-list"></ul>
-          <div class="happy-row">
-            <div><label for="happy-date">Date</label><input id="happy-date" type="date"></div>
-            <div><label for="happy-start">From</label><input id="happy-start" type="time" value="11:00"></div>
-            <div><label for="happy-end">To</label><input id="happy-end" type="time" value="12:00"></div>
-            <button type="button" id="happy-add" class="primary">Add</button>
-          </div>
-          <p class="hint">Octopus doesn't publish booked Happy Hours to customers, so enter the slot you booked. Charging stops at the level below. The charge before a booked slot stops short to leave room for it, and power used in a Happy Hour counts as free in the costs.</p>
-          <p class="hint" id="happy-archive" hidden></p>
-          <p class="hint" id="happy-status" hidden></p>
-          <p class="hint" id="happy-forecast" hidden></p>
-          <div class="hint" id="happy-suggest" hidden>
-            <span id="happy-suggest-text"></span>
-            <button type="button" id="happy-suggest-yes">Lower it</button>
-            <button type="button" id="happy-suggest-no">Keep it</button>
-          </div>
-        </div>
         <label class="compare"><input type="checkbox" id="control-pace"> Pace charging: spread each cheap-hours, schedule or smart-charge charge over its window instead of charging flat out, and use the cheapest half hours first when the rate varies. Happy Hours still charge at full power.</label>
         <div class="row" id="pace-box">
           <div><label for="control-pace-margin">Aim to finish early by (minutes)</label><input id="control-pace-margin" type="number" min="15" max="240" step="15" placeholder="45"></div>
         </div>
         <p class="hint" id="pace-status" hidden></p>
-        <label class="compare"><input type="checkbox" id="control-guard-sessions"> Switch the grid guard on automatically during Octopus Saving Sessions you have joined (read from your Octopus account; off by default)</label>
         <label class="compare"><input type="checkbox" id="control-guard-always"> Grid guard always on: keep the output just above the home's use all the time (uses stored energy, so normally only switch it on for a Saving Session above)</label>
         <div class="row" id="guard-box">
           <div><label for="control-guard-bias">Aim to export (W)</label><input id="control-guard-bias" type="number" min="0" max="300" step="5" placeholder="40"></div>

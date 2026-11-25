@@ -370,3 +370,8 @@ html.tabs .value { font-size: 24px; }
 html.tabs .chart-box { height: 220px; }
 
 #compare-result li.estimate .name { font-style: italic; }
+.octopus-auto { display: grid; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.octopus-auto .compare { margin-top: 0; align-items: flex-start; }
+.octopus-auto .compare input { margin-top: 3px; }
+.octopus-auto label[for] { font-size: 12px; color: var(--text-muted); display: block; margin-bottom: 4px; }
+.octopus-auto input[type=time], .octopus-auto input[type=date] { width: 100%; font: inherit; font-size: 16px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--page); color: var(--text-primary); box-sizing: border-box; }
