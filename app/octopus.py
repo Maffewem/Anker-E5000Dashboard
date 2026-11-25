@@ -176,6 +176,9 @@ class Client:
             raise OctopusError(f"Octopus said: {errors[0].get('message', errors[0])}")
         return body.get("data") or {}
 
+    def saving_sessions(self) -> list[dict]:
+        return parse_sessions(self._graphql(SESSIONS_QUERY, {"a": self.account}))
+
     def dispatches(self) -> dict:
         """Planned and completed smart-charge slots, newest API first."""
         acc = {"a": self.account}
@@ -343,6 +346,27 @@ def recommend(points: list[tuple[datetime, float]], charge_hours: float, efficie
 ECONOMY7_NIGHT = frozenset(range(1, 15))
 
 
+SESSIONS_QUERY = ("query($a:String!){savingSessions{events{id code startAt endAt rewardPerKwhInOctoPoints}"
+                  " account(accountNumber:$a){hasJoinedCampaign joinedEvents{eventId startAt endAt}}}}")
+
+
+def parse_sessions(data: dict) -> list[dict]:
+    """Saving Session events from the savingSessions query: {id, start, end, joined, reward}."""
+    block = (data or {}).get("savingSessions") or {}
+    account = block.get("account") or {}
+    joined = account.get("joinedEvents") or []
+    joined_ids = {j.get("eventId") for j in joined}
+    joined_spans = {(_parse_time(j.get("startAt")), _parse_time(j.get("endAt"))) for j in joined}
+    out = []
+    for e in block.get("events") or []:
+        a, b = _parse_time(e.get("startAt")), _parse_time(e.get("endAt"))
+        if not a or not b:
+            continue
+        out.append({"id": e.get("id"), "start": _iso(a), "end": _iso(b), "reward": e.get("rewardPerKwhInOctoPoints"),
+                    "joined": e.get("id") in joined_ids or (a, b) in joined_spans})
+    return sorted(out, key=lambda e: e["start"])
+
+
 class Octopus:
     """Keeps prices and dispatch slots in step with the account."""
 
@@ -356,6 +380,8 @@ class Octopus:
         self.info: dict = {}
         self.diagnostics: dict = {}
         self.dispatch_slots: dict = {"planned": [], "completed": []}
+        self.saving_sessions: list[dict] = []
+        self.sessions_error: str | None = None
         self.last_sync: float | None = None
         self.last_error: str | None = None
         self._agreements: list[Agreement] = []
@@ -402,6 +428,7 @@ class Octopus:
                     log.warning("Octopus: %s", dispatch_error)
             else:
                 self.dispatch_slots = {"planned": [], "completed": []}
+            self.refresh_sessions()
             current_price = self.upcoming(now)[0]
             self.diagnostics = {"host": self.client._host, "prices_stored": stored, "price_days": self.storage.rate_days(),
                                 "agreements": [{"tariff": a.tariff, "export": a.export,
@@ -490,6 +517,28 @@ class Octopus:
             out[ts] = night.get(ts, day.get(ts)) if slot in window else day.get(ts, night.get(ts))
         return out
 
+    def refresh_sessions(self) -> None:
+        """Re-read Saving Sessions (upcoming, running, and which ones you joined). Blocking.
+        On failure the last list is kept, so a hiccup never ends a session early."""
+        if not self.client:
+            return
+        try:
+            self.saving_sessions = self.client.saving_sessions()
+            self.sessions_error = None
+        except Exception as err:  # prices still work without them
+            self.sessions_error = str(err)
+            log.warning("Octopus: couldn't read Saving Sessions: %s", err)
+
+    def sessions(self, now: datetime | None = None) -> list[dict]:
+        """Saving Sessions that haven't finished yet, with an 'active' flag."""
+        now = now or datetime.now(timezone.utc)
+        out = []
+        for e in self.saving_sessions:
+            a, b = _parse_time(e["start"]), _parse_time(e["end"])
+            if a and b and b > now:
+                out.append({**e, "active": a <= now < b})
+        return out
+
     def refresh_dispatches(self) -> None:
         """Re-read only the Intelligent Go slots, between full syncs. Blocking.
 
@@ -573,6 +622,7 @@ class Octopus:
             a, b = _parse_time(d.get("start")), _parse_time(d.get("end"))
             if a and b and b > now:
                 planned.append({"start": _iso(a), "end": _iso(b)})
+        out["saving_sessions"] = self.sessions(now)
         out["dispatches"] = sorted(planned, key=lambda d: d["start"])
         return out
 

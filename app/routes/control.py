@@ -45,6 +45,7 @@ class ControlIn(BaseModel):
     balance_days: int = 28
     pace_charge: bool = False
     pace_margin_min: int = DEFAULT_PACE_MARGIN
+    guard_sessions: bool = False
     guard_always: bool = False
     guard_bias_w: int = DEFAULT_GUARD_BIAS
     guard_extra_w: int = DEFAULT_GUARD_EXTRA

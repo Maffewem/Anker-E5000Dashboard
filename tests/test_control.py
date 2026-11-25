@@ -960,3 +960,32 @@ def test_guard_follows_load_and_respects_reserve(monkeypatch):
     assert c.writes[-1] == ("battery_power_setpoint", 0)
     asyncio.run(ctl.tick(IN + timedelta(hours=2)))  # guard ended
     assert c.writes[-1] == ("operating_mode", 6)
+
+
+def _session_ctl(settings, joined=True):
+    c, store = FakeCollector(mode=6, soc=50), {}
+    c.snapshot.update(battery_w=200, grid_w=100, max_discharge_w=800)
+    ev = [{"start": (IN + timedelta(minutes=10)).isoformat(), "end": (IN + timedelta(minutes=70)).isoformat(), "joined": joined}]
+    store.setdefault("settings", settings)
+    ctl = Controller(c, load=lambda: dict(store), save_state=lambda s: store.__setitem__("state", s),
+                     windows=lambda now: [], sessions=lambda now: ev)
+    return c, ctl
+
+
+def test_guard_runs_in_joined_session_only_when_opted_in(monkeypatch):
+    monkeypatch.setenv("CONTROL_LIVE", "1")
+    c, ctl = _session_ctl({"guard_sessions": True})
+    asyncio.run(ctl.tick(IN))  # before the session
+    assert c.writes == [] and ctl.guard_source is None
+    asyncio.run(ctl.tick(IN + timedelta(minutes=20)))
+    assert ctl.guard_source == "session" and ctl.status()["guard"]["source"] == "session"
+    asyncio.run(ctl.tick(IN + timedelta(minutes=90)))  # session over
+    assert ctl.guard_source is None
+
+
+def test_guard_ignores_sessions_by_default_or_if_not_joined(monkeypatch):
+    monkeypatch.setenv("CONTROL_LIVE", "1")
+    for settings, joined in (({}, True), ({"guard_sessions": True}, False)):
+        c, ctl = _session_ctl(settings, joined)
+        asyncio.run(ctl.tick(IN + timedelta(minutes=20)))
+        assert c.writes == [] and ctl.guard_source is None
