@@ -41,7 +41,8 @@ function applySupplier() {
   }
   $("open-octopus").hidden = !oct;
   $("tariff-edit-costs").hidden = oct;
-  $("control-dispatch-row").hidden = !oct;
+  $("octopus-auto").hidden = !oct;
+  $("tariff-title").textContent = oct ? "Octopus" : "Electricity prices";
   $("cheap-hint").textContent = oct
     ? "Uses your Octopus prices, or the off-peak hours in Edit costs. Schedules win when they overlap."
     : "Uses the off-peak hours in Edit costs. Schedules win when they overlap.";

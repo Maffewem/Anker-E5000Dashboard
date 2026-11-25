@@ -49,7 +49,7 @@ function renderControl(c) {
   const t = c.settings;
   $("control-enabled").checked = t.enabled;
   $("control-enabled-text").textContent = t.enabled ? "On" : "Off";
-  if (!controlLoaded || (!controlDirty && !$("control-form").contains(document.activeElement))) {
+  if (!controlLoaded || (!controlDirty && !$("control-form").contains(document.activeElement) && !$("octopus-auto").contains(document.activeElement))) {
     $("control-hold").checked = t.hold_cheap;
     $("control-charge").checked = t.grid_charge;
     $("control-dispatch").checked = t.charge_dispatch;
@@ -515,7 +515,7 @@ $("schedule-form").addEventListener("submit", async (e) => {
 });
 
 // ----- cheap hours -----
-for (const ev of ["input", "change"]) $("control-form").addEventListener(ev, () => { controlDirty = true; $("control-saved").textContent = ""; });
+for (const ev of ["input", "change"]) for (const el of [$("control-form"), $("octopus-auto")]) el.addEventListener(ev, () => { controlDirty = true; $("control-saved").textContent = ""; $("octopus-saved").textContent = ""; });
 
 function syncControlInputs() {
   const charging = $("control-charge").checked || $("control-dispatch").checked;
@@ -541,6 +541,7 @@ $("control-form").addEventListener("submit", async (e) => {
     charge_power_w: Number($("control-power").value) || 1500, charge_target_soc: Number($("control-target").value) || DEFAULT_TARGET,
   })) {
     $("control-saved").textContent = "Saved";
+    $("octopus-saved").textContent = "Saved";
     document.activeElement?.blur();
   } else controlDirty = true;
 });
