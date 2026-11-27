@@ -42,7 +42,9 @@ function applySupplier() {
   $("open-octopus").hidden = !oct;
   $("tariff-edit-costs").hidden = oct;
   $("octopus-auto").hidden = !oct;
-  $("tariff-title").textContent = oct ? "Octopus" : "Electricity prices";
+  // The title holds the collapse toggle button; set its text, not the heading's, or the toggle is wiped
+  // and a collapsed card is left with no chevron and no way to open it again.
+  ($("tariff-title").querySelector(".collapse-toggle") || $("tariff-title")).lastChild.textContent = oct ? "Octopus" : "Electricity prices";
   syncCheapHint();
   $("compare-region-default").textContent = oct ? "Your Octopus region" : "London (pick your region)";
   if (!oct) renderManualTariff();
