@@ -414,8 +414,18 @@ function renderHappy() {
   }));
 }
 
+// Happy Hours are always one hour, so the end follows the start (23:00 -> 24:00 is not valid, so it ends 23:59).
+function happyEndFor(start) {
+  const m = /^(\d\d):(\d\d)$/.exec(start || "");
+  if (!m) return "";
+  const hh = +m[1] + 1;
+  return hh > 23 ? "23:59" : String(hh).padStart(2, "0") + ":" + m[2];
+}
+function syncHappyEnd() { $("happy-end").textContent = happyEndFor($("happy-start").value) || "--:--"; }
+$("happy-start").addEventListener("input", syncHappyEnd);
+syncHappyEnd();
 $("happy-add").addEventListener("click", () => {
-  const h = { date: $("happy-date").value, start: $("happy-start").value, end: $("happy-end").value };
+  const h = { date: $("happy-date").value, start: $("happy-start").value, end: happyEndFor($("happy-start").value) };
   if (!h.date || !h.start || !h.end) return;
   saveControl({ happy_hours: [...happyHours, h] });
 });
