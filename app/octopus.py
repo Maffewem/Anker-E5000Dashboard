@@ -61,6 +61,24 @@ class OctopusError(Exception):
     pass
 
 
+def _error_reason(err: urllib.error.HTTPError) -> str:
+    """The API's own explanation from an error response body (GraphQL errors or REST detail)."""
+    try:
+        text = err.read().decode("utf-8", "replace")
+    except Exception:
+        return ""
+    try:
+        body = json.loads(text)
+        errors = body.get("errors") if isinstance(body, dict) else None
+        if errors:
+            return "; ".join(str(e.get("message", e)) if isinstance(e, dict) else str(e) for e in errors[:3])[:400]
+        if isinstance(body, dict) and body.get("detail"):
+            return str(body["detail"])[:400]
+    except ValueError:
+        pass
+    return " ".join(text.split())[:300]
+
+
 def tariff_parts(code: str) -> dict | None:
     m = TARIFF_RE.match(code or "")
     return m.groupdict() if m else None
@@ -119,6 +137,9 @@ class Client:
                     raise OctopusError(f"Octopus has nothing at {path or 'that address'} (404).") from err
                 last = err
                 if err.code < 500:
+                    reason = _error_reason(err)
+                    if reason:
+                        raise OctopusError(f"Octopus rejected the request (HTTP {err.code}): {reason}") from err
                     break
             except (urllib.error.URLError, OSError, ValueError) as err:
                 last = err
@@ -177,7 +198,14 @@ class Client:
         return body.get("data") or {}
 
     def saving_sessions(self) -> list[dict]:
-        data = self._graphql(SESSIONS_QUERY, {"a": self.account})
+        # Events alone are what matter; the joined list is a separate query so that a change to it
+        # (Octopus has renamed these fields before) can't take the whole feature down.
+        data = self._graphql(EVENTS_QUERY)
+        try:
+            joined = self._graphql(JOINED_QUERY, {"a": self.account})
+            data.setdefault("savingSessions", {})["account"] = ((joined.get("savingSessions") or {}).get("account"))
+        except OctopusError as err:
+            log.warning("Octopus: couldn't read which Saving Sessions you joined: %s", err)
         log.info("Octopus: Saving Sessions raw response: %.1500s", json.dumps(data))
         return parse_sessions(data)
 
@@ -358,8 +386,9 @@ def recommend(points: list[tuple[datetime, float]], charge_hours: float, efficie
 ECONOMY7_NIGHT = frozenset(range(1, 15))
 
 
-SESSIONS_QUERY = ("query($a:String!){savingSessions{events{id code startAt endAt rewardPerKwhInOctoPoints}"
-                  " account(accountNumber:$a){hasJoinedCampaign joinedEvents{eventId startAt endAt}}}}")
+EVENTS_QUERY = "query{savingSessions{events{id code startAt endAt rewardPerKwhInOctoPoints}}}"
+JOINED_QUERY = ("query($a:String!){savingSessions{account(accountNumber:$a)"
+                "{hasJoinedCampaign joinedEvents{eventId startAt endAt}}}}")
 
 
 def parse_sessions(data: dict) -> list[dict]:

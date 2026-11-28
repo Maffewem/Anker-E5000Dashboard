@@ -357,3 +357,18 @@ def test_session_read_failure_is_kept_and_reported(storage):
     o.refresh_sessions()
     assert "savingSessions" in o.sessions_error
     assert len(o.saving_sessions) == 1  # last good list kept
+
+
+def test_400_error_includes_the_apis_reason():
+    import io, urllib.error
+    from app import octopus
+
+    def fetch(url, headers, body):
+        raise urllib.error.HTTPError(url, 400, "Bad Request", {}, io.BytesIO(b'{"errors":[{"message":"Cannot query field x"}]}'))
+
+    try:
+        octopus.Client("k", "A-1", fetch=fetch)._graphql("query{x}")
+    except octopus.OctopusError as err:
+        assert "Cannot query field x" in str(err)
+    else:
+        raise AssertionError("expected OctopusError")
